@@ -1,9 +1,21 @@
-.status-card {
-  max-width: 480px;
-  margin: 4rem auto;
-  padding: 2rem;
-  text-align: center;
+.app {
+  max-width: 680px;
+  margin: 3rem auto;
+  padding: 0 1rem;
   font-family: system-ui, sans-serif;
+  text-align: center;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+header span {
+  font-size: 0.85rem;
 }
 
 .ok {
@@ -14,8 +26,36 @@
   color: #ef4444;
 }
 
+.load-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.load-bar input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+}
+
 button {
-  margin-top: 1rem;
   padding: 0.5rem 1rem;
   cursor: pointer;
+}
+
+#yt-player {
+  margin: 0 auto;
+}
+
+.empty-state {
+  color: #888;
+}
+
+.unmute-banner {
+  display: block;
+  margin: 0.75rem auto 0;
+  background: #fbbf24;
+  color: #1f2937;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
 }
