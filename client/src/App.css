@@ -4,10 +4,12 @@
   padding: 0 1rem;
   font-family: system-ui, sans-serif;
   text-align: center;
+  box-sizing: border-box;
 }
 
 header {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: center;
   gap: 0.75rem;
@@ -44,8 +46,18 @@ button {
 
 #yt-player {
   margin: 0 auto;
-  width: 640px;
-  max-width: 100%;
+  width: 100%;
+  max-width: 640px;
+}
+
+/* The YouTube API sets the iframe's width/height as HTML attributes (not
+   CSS), so it ignores the wrapper's responsive sizing unless overridden
+   here directly. */
+#yt-player iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  height: auto;
 }
 
 .empty-state {
@@ -104,6 +116,7 @@ button {
 
 .room-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
@@ -112,6 +125,8 @@ button {
 
 .user-list {
   display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
   gap: 0.4rem;
   justify-content: flex-start;
