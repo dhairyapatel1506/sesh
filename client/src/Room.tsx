@@ -13,12 +13,50 @@ type RoomState = {
 type User = { id: string; name: string };
 
 const NAME_STORAGE_KEY = "sesh:name";
+const CLIENT_ID_STORAGE_KEY = "sesh:clientId";
+
+// Persists for this tab's lifetime so the server can recognize "the same
+// person" across a reconnect (a dropped connection gets a new socket.id).
+function getClientId(): string {
+  let id = sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
+  }
+  return id;
+}
+
+// While two players are both "playing", the periodic resync below only
+// nudges the video if it's drifted more than this — small gaps aren't
+// worth interrupting playback over.
+const DRIFT_THRESHOLD_SECONDS = 1.5;
+const RESYNC_INTERVAL_MS = 5000;
+
+// YouTube IFrame API error codes: https://developers.google.com/youtube/iframe_api_reference#onError
+function describeYouTubeError(code: number): string {
+  switch (code) {
+    case 2:
+      return "That doesn't look like a valid YouTube video.";
+    case 5:
+      return "This video can't be played in an embedded player.";
+    case 100:
+      return "That video was removed or is private.";
+    case 101:
+    case 150:
+      return "The video's owner has disabled playback on other sites.";
+    default:
+      return "That video can't be played.";
+  }
+}
 
 function Room() {
   const { roomId = "" } = useParams();
+  const clientIdRef = useRef(getClientId());
 
   const [connected, setConnected] = useState(socket.connected);
   const [urlInput, setUrlInput] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [playerError, setPlayerError] = useState<string | null>(null);
   const [videoId, setVideoId] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [nickname, setNickname] = useState(() => sessionStorage.getItem(NAME_STORAGE_KEY) ?? "");
@@ -27,6 +65,7 @@ function Room() {
   const [linkCopied, setLinkCopied] = useState(false);
 
   const playerRef = useRef<YTPlayer | null>(null);
+  const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const pendingStateRef = useRef<RoomState | null>(null);
 
   // Applying a remote sync action fires a resulting onStateChange event on
@@ -57,7 +96,18 @@ function Room() {
     const currentState = playerRef.current.getPlayerState();
     const alreadyPlaying = currentState === PlayerState.PLAYING;
     const alreadyPaused = currentState === PlayerState.PAUSED;
-    if (state.isPlaying && alreadyPlaying) return;
+
+    if (state.isPlaying && alreadyPlaying) {
+      // Both sides agree it's playing, but positions can still drift apart
+      // over time (e.g. one tab's clock running slightly fast). Correct
+      // with a plain seek — no mute/pause cycle, since playback is already
+      // running correctly and doesn't need to be restarted.
+      const drift = Math.abs(playerRef.current.getCurrentTime() - state.time);
+      if (drift > DRIFT_THRESHOLD_SECONDS) {
+        applyRemote(() => playerRef.current!.seekTo(state.time, true));
+      }
+      return;
+    }
     if (!state.isPlaying && alreadyPaused) return;
 
     applyRemote(() => {
@@ -78,11 +128,18 @@ function Room() {
   // a fresh socket id after a reconnect has no room membership on the server.
   useEffect(() => {
     if (!nickname || !roomId) return;
-    const join = () => socket.emit("room:join", { roomId, name: nickname });
+    const join = () => socket.emit("room:join", { roomId, name: nickname, clientId: clientIdRef.current });
     join();
     socket.on("connect", join);
+
+    // Periodically pull the authoritative state so playback keeps converging
+    // even while nothing new happens (no play/pause/tab-refocus to trigger
+    // a one-off resync).
+    const interval = window.setInterval(() => socket.emit("resync:request"), RESYNC_INTERVAL_MS);
+
     return () => {
       socket.off("connect", join);
+      window.clearInterval(interval);
     };
   }, [nickname, roomId]);
 
@@ -105,8 +162,17 @@ function Room() {
     let cancelled = false;
 
     loadYouTubeApi().then((YT) => {
-      if (cancelled) return;
-      playerRef.current = new YT.Player("yt-player", {
+      if (cancelled || !playerContainerRef.current) return;
+      // The YouTube API replaces whatever element it's given with its own
+      // <iframe>, entirely outside React's knowledge. Handing it a plain
+      // child element (rather than our React-managed wrapper) keeps that
+      // swap isolated in a subtree React never diffs into — otherwise, the
+      // next time React needs to reposition a sibling near the wrapper, it
+      // does so relative to a DOM node YouTube already ripped out, which
+      // throws (and, with no error boundary, unmounts the whole app).
+      const target = document.createElement("div");
+      playerContainerRef.current.appendChild(target);
+      playerRef.current = new YT.Player(target, {
         videoId,
         width: "640",
         height: "390",
@@ -116,11 +182,16 @@ function Room() {
             if (!pending || pending.videoId !== videoId) return;
             syncPlayerToState(pending);
           },
+          onError: (event) => {
+            setPlayerError(describeYouTubeError(event.data));
+          },
           onStateChange: (event) => {
             if (!playerRef.current) return;
             if (event.data !== PlayerState.PLAYING && event.data !== PlayerState.PAUSED) {
               return;
             }
+            // Reaching PLAYING/PAUSED proves the video is actually working.
+            setPlayerError(null);
             // A hidden tab can't have received a real click.
             if (document.hidden) return;
             if (suppressUntilRef.current) return;
@@ -152,6 +223,7 @@ function Room() {
 
     const onVideoLoad = ({ videoId: id }: { videoId: string }) => {
       pendingStateRef.current = { videoId: id, isPlaying: false, time: 0 };
+      setPlayerError(null);
       if (playerRef.current) {
         applyRemote(() => playerRef.current!.cueVideoById(id));
       }
@@ -200,9 +272,11 @@ function Room() {
   const handleLoad = () => {
     const id = extractVideoId(urlInput);
     if (!id) {
-      alert("Couldn't find a YouTube video ID in that URL.");
+      setLoadError("Couldn't find a YouTube video ID in that link.");
       return;
     }
+    setLoadError(null);
+    setPlayerError(null);
     socket.emit("video:load", { videoId: id });
     // This is a real click, so the browser allows unmuted playback here —
     // no need to defensively mute future remote syncs on this tab.
@@ -262,7 +336,7 @@ function Room() {
         <h1>Sesh</h1>
         <span className="room-code">{roomId}</span>
         <span className={connected ? "ok" : "bad"}>
-          {connected ? "connected" : "disconnected"}
+          {connected ? "connected" : "reconnecting…"}
         </span>
       </header>
 
@@ -282,16 +356,21 @@ function Room() {
       <div className="load-bar">
         <input
           value={urlInput}
-          onChange={(e) => setUrlInput(e.target.value)}
+          onChange={(e) => {
+            setUrlInput(e.target.value);
+            if (loadError) setLoadError(null);
+          }}
           placeholder="Paste a YouTube link..."
           onKeyDown={(e) => e.key === "Enter" && handleLoad()}
         />
         <button onClick={handleLoad}>Load</button>
       </div>
+      {loadError && <p className="load-error">{loadError}</p>}
 
       {videoId ? (
         <>
-          <div id="yt-player" />
+          <div id="yt-player" ref={playerContainerRef} />
+          {playerError && <p className="load-error">{playerError} Try pasting a different link.</p>}
           {muted && (
             <button className="unmute-banner" onClick={handleUnmute}>
               🔇 Playing muted — click to unmute

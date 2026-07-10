@@ -32,9 +32,14 @@ type RoomState = {
   updatedAt: number;
 };
 
+type RoomUser = {
+  name: string;
+  socketId: string;
+};
+
 type Room = {
   state: RoomState;
-  users: Map<string, string>; // socket id -> name
+  users: Map<string, RoomUser>; // clientId -> user
 };
 
 const rooms = new Map<string, Room>();
@@ -68,28 +73,39 @@ function estimatedRoomState(room: Room): RoomState {
 }
 
 function userList(room: Room) {
-  return Array.from(room.users, ([id, name]) => ({ id, name }));
+  return Array.from(room.users, ([clientId, user]) => ({ id: clientId, name: user.name }));
 }
 
 io.on("connection", (socket) => {
   console.log(`client connected: ${socket.id}`);
 
-  socket.on("room:join", ({ roomId, name }: { roomId: string; name: string }) => {
-    socket.data.roomId = roomId;
-    socket.data.name = name;
-    socket.join(roomId);
+  socket.on(
+    "room:join",
+    ({ roomId, name, clientId }: { roomId: string; name: string; clientId: string }) => {
+      socket.data.roomId = roomId;
+      socket.data.clientId = clientId;
+      socket.join(roomId);
 
-    const room = getOrCreateRoom(roomId);
-    room.users.set(socket.id, name);
+      const room = getOrCreateRoom(roomId);
+      // Keyed by a stable per-tab clientId (not socket.id) so a reconnect
+      // (new socket.id) updates this user's existing entry instead of
+      // appearing as a duplicate until the old socket's disconnect fires.
+      room.users.set(clientId, { name, socketId: socket.id });
 
-    socket.emit("room:state", estimatedRoomState(room));
-    io.to(roomId).emit("room:users", userList(room));
-  });
+      socket.emit("room:state", estimatedRoomState(room));
+      io.to(roomId).emit("room:users", userList(room));
+    },
+  );
 
   socket.on("video:load", ({ videoId }: { videoId: string }) => {
     const room = currentRoom(socket);
     if (!room) return;
-    room.state = { videoId, isPlaying: false, time: 0, updatedAt: Date.now() };
+    // The loader's own click reliably starts playback right away (it's a
+    // real gesture, so autoplay isn't blocked). Mark the room as playing
+    // immediately rather than waiting for a separate video:play event —
+    // otherwise a resync landing in that gap sees a stale isPlaying:false
+    // and force-pauses the loader's own already-playing video back to 0.
+    room.state = { videoId, isPlaying: true, time: 0, updatedAt: Date.now() };
     socket.to(socket.data.roomId).emit("video:load", { videoId });
   });
 
@@ -116,10 +132,19 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`client disconnected: ${socket.id}`);
     const roomId = socket.data.roomId as string | undefined;
-    if (!roomId) return;
+    const clientId = socket.data.clientId as string | undefined;
+    if (!roomId || !clientId) return;
     const room = rooms.get(roomId);
     if (!room) return;
-    room.users.delete(socket.id);
+
+    // A dead connection can take a while to be detected server-side. If the
+    // tab already reconnected with a new socket before that detection fires,
+    // its entry has already been overwritten — don't delete the new one.
+    const entry = room.users.get(clientId);
+    if (entry && entry.socketId === socket.id) {
+      room.users.delete(clientId);
+    }
+
     if (room.users.size === 0) {
       rooms.delete(roomId);
     } else {

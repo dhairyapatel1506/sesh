@@ -20,7 +20,7 @@ export interface YTPlayer {
 
 interface YTNamespace {
   Player: new (
-    elementId: string,
+    element: string | HTMLElement,
     options: {
       videoId: string;
       width?: string | number;
@@ -28,6 +28,7 @@ interface YTNamespace {
       events?: {
         onReady?: () => void;
         onStateChange?: (event: { data: number }) => void;
+        onError?: (event: { data: number }) => void;
       };
     },
   ) => YTPlayer;

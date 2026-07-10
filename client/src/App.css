@@ -44,10 +44,18 @@ button {
 
 #yt-player {
   margin: 0 auto;
+  width: 640px;
+  max-width: 100%;
 }
 
 .empty-state {
   color: #888;
+}
+
+.load-error {
+  color: #ef4444;
+  font-size: 0.85rem;
+  margin: -0.75rem 0 1rem;
 }
 
 .unmute-banner {
