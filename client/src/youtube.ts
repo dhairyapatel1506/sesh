@@ -1,4 +1,5 @@
 export const PlayerState = {
+  UNSTARTED: -1,
   ENDED: 0,
   PLAYING: 1,
   PAUSED: 2,
@@ -9,8 +10,10 @@ export const PlayerState = {
 export interface YTPlayer {
   getCurrentTime(): number;
   getPlayerState(): number;
+  getIframe(): HTMLIFrameElement;
+  isMuted(): boolean;
   loadVideoById(videoId: string): void;
-  cueVideoById(videoId: string): void;
+  cueVideoById(videoId: string, startSeconds?: number): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   playVideo(): void;
   pauseVideo(): void;

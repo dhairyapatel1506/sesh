@@ -58,7 +58,6 @@ function Room() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [videoId, setVideoId] = useState<string | null>(null);
-  const [muted, setMuted] = useState(false);
   const [nickname, setNickname] = useState(() => sessionStorage.getItem(NAME_STORAGE_KEY) ?? "");
   const [nameInput, setNameInput] = useState("");
   const [users, setUsers] = useState<User[]>([]);
@@ -110,12 +109,25 @@ function Room() {
     }
     if (!state.isPlaying && alreadyPaused) return;
 
+    const neverPlayed =
+      currentState === PlayerState.UNSTARTED || currentState === PlayerState.CUED;
+
     applyRemote(() => {
+      if (!state.isPlaying && neverPlayed && state.videoId) {
+        // A video that's never actually played can render as a black frame
+        // if paused via a raw seek — it hasn't buffered that position and,
+        // being paused, won't fetch it on its own. cueVideoById is built for
+        // "show a frame at this position, don't play yet" and buffers it.
+        playerRef.current!.cueVideoById(state.videoId, state.time);
+        return;
+      }
+
       playerRef.current!.seekTo(state.time, true);
       if (state.isPlaying) {
         if (!autoplayGrantedRef.current) {
+          // Browsers block unmuted autoplay without a user gesture; start
+          // muted and let the user unmute via the player's own volume control.
           playerRef.current!.mute();
-          setMuted(true);
         }
         playerRef.current!.playVideo();
       } else {
@@ -178,6 +190,17 @@ function Room() {
         height: "390",
         events: {
           onReady: () => {
+            // The YouTube API sets width/height as HTML attributes, and in
+            // some cascades that beats our CSS. Sizing the real iframe node
+            // directly, once it exists, sidesteps any selector/specificity
+            // mismatch entirely.
+            const iframe = playerRef.current?.getIframe();
+            if (iframe) {
+              iframe.style.display = "block";
+              iframe.style.width = "100%";
+              iframe.style.height = "auto";
+              iframe.style.aspectRatio = "16 / 9";
+            }
             const pending = pendingStateRef.current;
             if (!pending || pending.videoId !== videoId) return;
             syncPlayerToState(pending);
@@ -192,6 +215,10 @@ function Room() {
             }
             // Reaching PLAYING/PAUSED proves the video is actually working.
             setPlayerError(null);
+            if ("mediaSession" in navigator) {
+              navigator.mediaSession.playbackState =
+                event.data === PlayerState.PLAYING ? "playing" : "paused";
+            }
             // A hidden tab can't have received a real click.
             if (document.hidden) return;
             if (suppressUntilRef.current) return;
@@ -269,6 +296,61 @@ function Room() {
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, []);
 
+  // Unmuting happens through the player's own volume control, which we get
+  // no event for — poll so we notice it and stop defensively muting future
+  // remote syncs on this tab (audible playback proves autoplay is allowed).
+  useEffect(() => {
+    if (!videoId) return;
+    const interval = window.setInterval(() => {
+      const player = playerRef.current;
+      if (!player) return;
+      if (!player.isMuted() && player.getPlayerState() === PlayerState.PLAYING) {
+        autoplayGrantedRef.current = true;
+      }
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [videoId]);
+
+  // Fetch the video's title (no API key needed) for lock-screen / notification
+  // media controls.
+  const [videoTitle, setVideoTitle] = useState<string | null>(null);
+  useEffect(() => {
+    if (!videoId) return;
+    setVideoTitle(null);
+    let cancelled = false;
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.title) setVideoTitle(data.title);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [videoId]);
+
+  // Registering a Media Session (metadata + play/pause handlers) is what
+  // convinces mobile Chrome to treat this tab as actively playing media and
+  // keep the audio running once the app is minimized, instead of suspending
+  // it like a silent background tab.
+  useEffect(() => {
+    if (!("mediaSession" in navigator) || !videoId) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: videoTitle ?? "Sesh",
+      artist: `Room ${roomId}`,
+      artwork: [
+        { src: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`, sizes: "480x360", type: "image/jpeg" },
+      ],
+    });
+    navigator.mediaSession.setActionHandler("play", () => playerRef.current?.playVideo());
+    navigator.mediaSession.setActionHandler("pause", () => playerRef.current?.pauseVideo());
+    return () => {
+      navigator.mediaSession.setActionHandler("play", null);
+      navigator.mediaSession.setActionHandler("pause", null);
+    };
+  }, [videoId, videoTitle, roomId]);
+
   const handleLoad = () => {
     const id = extractVideoId(urlInput);
     if (!id) {
@@ -285,12 +367,6 @@ function Room() {
       playerRef.current.loadVideoById(id);
     }
     setVideoId(id);
-  };
-
-  const handleUnmute = () => {
-    playerRef.current?.unMute();
-    autoplayGrantedRef.current = true;
-    setMuted(false);
   };
 
   const submitName = () => {
@@ -371,11 +447,6 @@ function Room() {
         <>
           <div id="yt-player" ref={playerContainerRef} />
           {playerError && <p className="load-error">{playerError} Try pasting a different link.</p>}
-          {muted && (
-            <button className="unmute-banner" onClick={handleUnmute}>
-              🔇 Playing muted — click to unmute
-            </button>
-          )}
         </>
       ) : (
         <p className="empty-state">Paste a YouTube link above to start a sesh.</p>
