@@ -76,6 +76,22 @@ button {
   margin: -0.75rem 0 1rem;
 }
 
+/* Only relevant on phones/tablets — desktop browsers don't background-pause,
+   and (hover: none, pointer: coarse) is the closest thing CSS has to
+   "touch device". */
+.pip-hint {
+  display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .pip-hint {
+    display: block;
+    color: #888;
+    font-size: 0.8rem;
+    margin-top: 0.75rem;
+  }
+}
+
 .room-code {
   font-family: monospace;
   font-size: 0.9rem;

@@ -447,6 +447,10 @@ function Room() {
         <>
           <div id="yt-player" ref={playerContainerRef} />
           {playerError && <p className="load-error">{playerError} Try pasting a different link.</p>}
+          <p className="pip-hint">
+            Tip: go fullscreen, then press home — the video pops out and keeps playing while you
+            use other apps.
+          </p>
         </>
       ) : (
         <p className="empty-state">Paste a YouTube link above to start a sesh.</p>
