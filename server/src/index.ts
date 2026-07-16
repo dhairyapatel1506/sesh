@@ -6,8 +6,18 @@ import { createServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Local dev keeps secrets in server/.env (gitignored); on Render they come
+// from the dashboard instead and no .env file exists.
+try {
+  process.loadEnvFile(path.join(__dirname, "../.env"));
+} catch {
+  // No .env file — fine.
+}
+
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
 const isProd = process.env.NODE_ENV === "production";
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 
 const app = express();
 
@@ -23,6 +33,130 @@ const io = new Server(httpServer, {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+type SearchResult = {
+  videoId: string;
+  title: string;
+  channel: string;
+  thumbnail: string;
+  duration: string;
+};
+
+// A search.list call costs 100 of the API's 10,000 free daily quota units
+// (~100 searches/day), so repeated queries are served from this cache.
+const searchCache = new Map<string, { results: SearchResult[]; fetchedAt: number }>();
+const SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const SEARCH_CACHE_MAX_ENTRIES = 500;
+
+// The API reports durations as ISO 8601, e.g. "PT1H2M3S".
+function formatDuration(iso: string): string {
+  const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return "";
+  const hours = match[1];
+  const minutes = match[2] ?? "0";
+  const seconds = (match[3] ?? "0").padStart(2, "0");
+  if (hours) return `${hours}:${minutes.padStart(2, "0")}:${seconds}`;
+  return `${minutes}:${seconds}`;
+}
+
+// Snippet titles come back with HTML entities still encoded.
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+type YouTubeSearchItem = {
+  id: { videoId: string };
+  snippet: {
+    title: string;
+    channelTitle: string;
+    thumbnails: { medium?: { url: string }; default?: { url: string } };
+  };
+};
+
+app.get("/api/search", async (req, res) => {
+  const query = String(req.query.q ?? "").trim();
+  if (!query) {
+    res.status(400).json({ error: "Type something to search for." });
+    return;
+  }
+  if (!YOUTUBE_API_KEY) {
+    res.status(503).json({ error: "Search isn't set up on this server — paste a YouTube link instead." });
+    return;
+  }
+
+  const cacheKey = query.toLowerCase();
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < SEARCH_CACHE_TTL_MS) {
+    res.json({ results: cached.results });
+    return;
+  }
+
+  try {
+    const searchUrl = new URL("https://www.googleapis.com/youtube/v3/search");
+    searchUrl.search = new URLSearchParams({
+      part: "snippet",
+      type: "video",
+      videoEmbeddable: "true",
+      maxResults: "8",
+      q: query,
+      key: YOUTUBE_API_KEY,
+    }).toString();
+    const searchRes = await fetch(searchUrl);
+    if (searchRes.status === 403) {
+      // Almost always quota exhaustion (resets midnight Pacific).
+      res.status(429).json({ error: "Daily search limit reached — paste a YouTube link instead." });
+      return;
+    }
+    if (!searchRes.ok) throw new Error(`search.list responded ${searchRes.status}`);
+    const searchData = (await searchRes.json()) as { items?: YouTubeSearchItem[] };
+    const items = (searchData.items ?? []).filter((item) => item.id?.videoId);
+
+    // One extra unit fetches durations for all results at once.
+    const durations = new Map<string, string>();
+    const ids = items.map((item) => item.id.videoId).join(",");
+    if (ids) {
+      const videosUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
+      videosUrl.search = new URLSearchParams({
+        part: "contentDetails",
+        id: ids,
+        key: YOUTUBE_API_KEY,
+      }).toString();
+      const videosRes = await fetch(videosUrl);
+      if (videosRes.ok) {
+        const videosData = (await videosRes.json()) as {
+          items?: { id: string; contentDetails: { duration: string } }[];
+        };
+        for (const video of videosData.items ?? []) {
+          durations.set(video.id, formatDuration(video.contentDetails.duration));
+        }
+      }
+    }
+
+    const results: SearchResult[] = items.map((item) => ({
+      videoId: item.id.videoId,
+      title: decodeEntities(item.snippet.title),
+      channel: decodeEntities(item.snippet.channelTitle),
+      thumbnail: item.snippet.thumbnails.medium?.url ?? item.snippet.thumbnails.default?.url ?? "",
+      duration: durations.get(item.id.videoId) ?? "",
+    }));
+
+    if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
+      const oldest = searchCache.keys().next().value;
+      if (oldest !== undefined) searchCache.delete(oldest);
+    }
+    searchCache.set(cacheKey, { results, fetchedAt: Date.now() });
+    res.json({ results });
+  } catch (err) {
+    console.error("search failed:", err);
+    res.status(502).json({ error: "YouTube search failed — try again in a moment." });
+  }
 });
 
 type RoomState = {

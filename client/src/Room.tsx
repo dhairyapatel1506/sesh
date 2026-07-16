@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { socket } from "./socket";
+import { API_BASE, socket } from "./socket";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import "./App.css";
 
@@ -11,6 +11,14 @@ type RoomState = {
 };
 
 type User = { id: string; name: string };
+
+type SearchResult = {
+  videoId: string;
+  title: string;
+  channel: string;
+  thumbnail: string;
+  duration: string;
+};
 
 const NAME_STORAGE_KEY = "sesh:name";
 const CLIENT_ID_STORAGE_KEY = "sesh:clientId";
@@ -62,6 +70,8 @@ function Room() {
   const [nameInput, setNameInput] = useState("");
   const [users, setUsers] = useState<User[]>([]);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const playerRef = useRef<YTPlayer | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -377,14 +387,11 @@ function Room() {
     };
   }, [videoId, videoTitle, roomId]);
 
-  const handleLoad = () => {
-    const id = extractVideoId(urlInput);
-    if (!id) {
-      setLoadError("Couldn't find a YouTube video ID in that link.");
-      return;
-    }
+  const loadVideo = (id: string) => {
     setLoadError(null);
     setPlayerError(null);
+    setSearchResults(null);
+    setUrlInput("");
     socket.emit("video:load", { videoId: id });
     // This is a real click, so the browser allows unmuted playback here —
     // no need to defensively mute future remote syncs on this tab.
@@ -393,6 +400,42 @@ function Room() {
       playerRef.current.loadVideoById(id);
     }
     setVideoId(id);
+  };
+
+  // One input serves both cases: a pasted YouTube link loads directly,
+  // anything else is treated as a search query.
+  const handleSubmit = async () => {
+    const input = urlInput.trim();
+    if (!input || searching) return;
+
+    const id = extractVideoId(input);
+    if (id) {
+      loadVideo(id);
+      return;
+    }
+
+    setSearching(true);
+    setLoadError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(input)}`);
+      const data: { results?: SearchResult[]; error?: string } = await res.json();
+      if (!res.ok || !data.results) {
+        setSearchResults(null);
+        setLoadError(data.error ?? "Search failed — try again in a moment.");
+        return;
+      }
+      if (data.results.length === 0) {
+        setSearchResults(null);
+        setLoadError("No videos found for that search.");
+        return;
+      }
+      setSearchResults(data.results);
+    } catch {
+      setSearchResults(null);
+      setLoadError("Search failed — check your connection.");
+    } finally {
+      setSearching(false);
+    }
   };
 
   const submitName = () => {
@@ -462,12 +505,36 @@ function Room() {
             setUrlInput(e.target.value);
             if (loadError) setLoadError(null);
           }}
-          placeholder="Paste a YouTube link..."
-          onKeyDown={(e) => e.key === "Enter" && handleLoad()}
+          placeholder="Search YouTube or paste a link..."
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleSubmit();
+            if (e.key === "Escape") setSearchResults(null);
+          }}
         />
-        <button onClick={handleLoad}>Load</button>
+        <button onClick={handleSubmit} disabled={searching}>
+          {searching ? "Searching..." : extractVideoId(urlInput) ? "Load" : "Search"}
+        </button>
       </div>
       {loadError && <p className="load-error">{loadError}</p>}
+
+      {searchResults && (
+        <ul className="search-results">
+          {searchResults.map((result) => (
+            <li key={result.videoId}>
+              <button className="search-result" onClick={() => loadVideo(result.videoId)}>
+                <img src={result.thumbnail} alt="" loading="lazy" />
+                <span className="search-result-info">
+                  <span className="search-result-title">{result.title}</span>
+                  <span className="search-result-meta">
+                    {result.channel}
+                    {result.duration && ` · ${result.duration}`}
+                  </span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {videoId ? (
         <>

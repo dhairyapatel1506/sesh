@@ -18,10 +18,9 @@ function Landing() {
   };
 
   return (
-    <div className="app">
-      <header>
-        <h1>Sesh</h1>
-      </header>
+    <div className="app landing">
+      <h1>Sesh</h1>
+      <p className="tagline">Watch YouTube with your friends, perfectly in sync.</p>
 
       <div className="landing-actions">
         <button onClick={handleCreate}>Create a room</button>

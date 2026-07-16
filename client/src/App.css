@@ -5,10 +5,9 @@
      percentage-width children (like #yt-player) with nothing real to size
      themselves against. */
   width: 100%;
-  max-width: 680px;
-  margin: 3rem auto;
-  padding: 0 1rem;
-  font-family: system-ui, sans-serif;
+  max-width: 720px;
+  margin: 2.5rem auto;
+  padding: 0 1.25rem;
   text-align: center;
   box-sizing: border-box;
 }
@@ -20,6 +19,12 @@ header {
   justify-content: center;
   gap: 0.75rem;
   margin-bottom: 1.5rem;
+}
+
+header h1 {
+  font-size: 2rem;
+  letter-spacing: -0.5px;
+  margin: 0;
 }
 
 header span {
@@ -34,6 +39,49 @@ header span {
   color: #ef4444;
 }
 
+input {
+  font: inherit;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.9rem;
+  min-width: 0;
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+input::placeholder {
+  color: var(--text);
+  opacity: 0.7;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.55rem 1.1rem;
+  cursor: pointer;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--accent);
+  /* --bg flips with the theme, so this stays high-contrast in both. */
+  color: var(--bg);
+  transition: filter 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .load-bar {
   display: flex;
   gap: 0.5rem;
@@ -42,12 +90,75 @@ header span {
 
 .load-bar input {
   flex: 1;
-  padding: 0.5rem 0.75rem;
 }
 
-button {
-  padding: 0.5rem 1rem;
-  cursor: pointer;
+.load-bar button {
+  white-space: nowrap;
+}
+
+.search-results {
+  list-style: none;
+  margin: -0.75rem 0 1.5rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.search-result {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.4rem;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: inherit;
+  font-weight: 400;
+  text-align: left;
+}
+
+.search-result:hover {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.search-result img {
+  width: 110px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--code-bg);
+}
+
+.search-result-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.search-result-title {
+  color: var(--text-h);
+  font-weight: 500;
+  font-size: 0.95rem;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.search-result-meta {
+  font-size: 0.8rem;
 }
 
 #yt-player {
@@ -64,10 +175,12 @@ button {
   width: 100%;
   aspect-ratio: 16 / 9;
   height: auto;
+  border-radius: 12px;
 }
 
 .empty-state {
-  color: #888;
+  color: var(--text);
+  opacity: 0.8;
 }
 
 .load-error {
@@ -86,19 +199,35 @@ button {
 @media (hover: none) and (pointer: coarse) {
   .pip-hint {
     display: block;
-    color: #888;
     font-size: 0.8rem;
     margin-top: 0.75rem;
+    opacity: 0.8;
   }
 }
 
 .room-code {
-  font-family: monospace;
+  font-family: var(--mono);
   font-size: 0.9rem;
   letter-spacing: 0.05em;
-  background: #eee;
+  color: var(--text-h);
+  background: var(--code-bg);
   padding: 0.15rem 0.5rem;
-  border-radius: 4px;
+  border-radius: 6px;
+}
+
+.landing {
+  margin-top: 14vh;
+}
+
+.landing h1 {
+  font-size: 3.5rem;
+  letter-spacing: -1.5px;
+  margin: 0;
+}
+
+.tagline {
+  margin: 1.1rem auto 2.5rem;
+  max-width: 26rem;
 }
 
 .landing-actions {
@@ -106,16 +235,16 @@ button {
   flex-direction: column;
   align-items: center;
   gap: 1rem;
-  margin-top: 1.5rem;
 }
 
-.landing-actions button {
+.landing-actions > button {
   font-size: 1rem;
+  padding: 0.7rem 1.6rem;
 }
 
 .landing-divider {
-  color: #888;
   font-size: 0.85rem;
+  opacity: 0.8;
 }
 
 .name-gate {
@@ -145,9 +274,10 @@ button {
 }
 
 .user-chip {
-  background: #e5e7eb;
-  color: #1f2937;
-  padding: 0.2rem 0.6rem;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 500;
+  padding: 0.2rem 0.65rem;
   border-radius: 999px;
   font-size: 0.8rem;
 }
@@ -155,4 +285,12 @@ button {
 .copy-link {
   white-space: nowrap;
   font-size: 0.85rem;
+  font-weight: 500;
+  background: transparent;
+  color: var(--accent);
+}
+
+.copy-link:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
 }
