@@ -123,6 +123,15 @@ io.on("connection", (socket) => {
     socket.to(socket.data.roomId).emit("video:pause", { time });
   });
 
+  // The video played to its end. Freeze the state there rather than letting
+  // the isPlaying extrapolation run past the video's duration forever. Not
+  // rebroadcast: every client's own player ends naturally on its own.
+  socket.on("video:ended", ({ time }: { time: number }) => {
+    const room = currentRoom(socket);
+    if (!room) return;
+    room.state = { ...room.state, isPlaying: false, time, updatedAt: Date.now() };
+  });
+
   socket.on("resync:request", () => {
     const room = currentRoom(socket);
     if (!room) return;

@@ -96,6 +96,20 @@ function Room() {
     const alreadyPlaying = currentState === PlayerState.PLAYING;
     const alreadyPaused = currentState === PlayerState.PAUSED;
 
+    // A finished video is a settled position, not something to "resume":
+    // if the room state points at/past the end too, leave the player alone —
+    // seekTo/playVideo on an ENDED player restarts it from 0, which turns a
+    // stale "still playing" room state into an endless replay loop. If the
+    // server does still think it's playing (its video:ended never arrived,
+    // e.g. every tab was hidden when the video finished), correct it here.
+    if (currentState === PlayerState.ENDED) {
+      const duration = playerRef.current.getDuration();
+      if (duration > 0 && state.time >= duration - 1) {
+        if (state.isPlaying) socket.emit("video:ended", { time: duration });
+        return;
+      }
+    }
+
     if (state.isPlaying && alreadyPlaying) {
       // Both sides agree it's playing, but positions can still drift apart
       // over time (e.g. one tab's clock running slightly fast). Correct
@@ -210,6 +224,18 @@ function Room() {
           },
           onStateChange: (event) => {
             if (!playerRef.current) return;
+            // A finished video must be reported, or the server keeps
+            // extrapolating "playing" time past the end forever and every
+            // resync tries to resume — which restarts an ended video from 0.
+            // No hidden/suppress guards here: ending isn't a user action, it
+            // happens on every client at once, and reporting it is idempotent.
+            if (event.data === PlayerState.ENDED) {
+              if ("mediaSession" in navigator) {
+                navigator.mediaSession.playbackState = "paused";
+              }
+              socket.emit("video:ended", { time: playerRef.current.getDuration() });
+              return;
+            }
             if (event.data !== PlayerState.PLAYING && event.data !== PlayerState.PAUSED) {
               return;
             }

@@ -9,6 +9,7 @@ export const PlayerState = {
 
 export interface YTPlayer {
   getCurrentTime(): number;
+  getDuration(): number;
   getPlayerState(): number;
   getIframe(): HTMLIFrameElement;
   isMuted(): boolean;
