@@ -18,6 +18,7 @@ export interface YTPlayer {
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   playVideo(): void;
   pauseVideo(): void;
+  setPlaybackRate(rate: number): void;
   mute(): void;
   unMute(): void;
 }

@@ -200,10 +200,18 @@ function currentRoom(socket: Socket): Room | undefined {
 // `time` is only ever a snapshot from the last play/pause action, not a
 // live clock. While playing, extrapolate how far the video has actually
 // progressed since that snapshot so late joiners land in the right spot.
-function estimatedRoomState(room: Room): RoomState {
-  if (!room.state.isPlaying) return room.state;
-  const elapsedSeconds = (Date.now() - room.state.updatedAt) / 1000;
-  return { ...room.state, time: room.state.time + elapsedSeconds };
+// `at` stamps when (in server-clock ms) `time` was accurate, so clients —
+// which sync their clocks to ours via clock:ping — can extrapolate the
+// remaining network latency out of it themselves.
+function estimatedRoomState(room: Room) {
+  const now = Date.now();
+  const { videoId, isPlaying, time, updatedAt } = room.state;
+  return {
+    videoId,
+    isPlaying,
+    time: isPlaying ? time + (now - updatedAt) / 1000 : time,
+    at: now,
+  };
 }
 
 function userList(room: Room) {
@@ -246,15 +254,24 @@ io.on("connection", (socket) => {
   socket.on("video:play", ({ time }: { time: number }) => {
     const room = currentRoom(socket);
     if (!room) return;
-    room.state = { ...room.state, isPlaying: true, time, updatedAt: Date.now() };
-    socket.to(socket.data.roomId).emit("video:play", { time });
+    const at = Date.now();
+    room.state = { ...room.state, isPlaying: true, time, updatedAt: at };
+    socket.to(socket.data.roomId).emit("video:play", { time, at });
   });
 
   socket.on("video:pause", ({ time }: { time: number }) => {
     const room = currentRoom(socket);
     if (!room) return;
-    room.state = { ...room.state, isPlaying: false, time, updatedAt: Date.now() };
-    socket.to(socket.data.roomId).emit("video:pause", { time });
+    const at = Date.now();
+    room.state = { ...room.state, isPlaying: false, time, updatedAt: at };
+    socket.to(socket.data.roomId).emit("video:pause", { time, at });
+  });
+
+  // NTP-style probe: the client measures round-trip time and uses it to
+  // estimate the offset between its clock and ours, which makes the `at`
+  // timestamps on playback state directly comparable to its local clock.
+  socket.on("clock:ping", (respond: (serverTime: number) => void) => {
+    if (typeof respond === "function") respond(Date.now());
   });
 
   // The video played to its end. Freeze the state there rather than letting
