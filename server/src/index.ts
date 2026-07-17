@@ -256,7 +256,10 @@ io.on("connection", (socket) => {
     if (!room) return;
     const at = Date.now();
     room.state = { ...room.state, isPlaying: true, time, updatedAt: at };
-    socket.to(socket.data.roomId).emit("video:play", { time, at });
+    // videoId rides along so a tab that missed a video:load (brief
+    // disconnect) notices it's playing the wrong video instead of applying
+    // this to whatever it still has loaded.
+    socket.to(socket.data.roomId).emit("video:play", { time, at, videoId: room.state.videoId });
   });
 
   socket.on("video:pause", ({ time }: { time: number }) => {
@@ -264,7 +267,7 @@ io.on("connection", (socket) => {
     if (!room) return;
     const at = Date.now();
     room.state = { ...room.state, isPlaying: false, time, updatedAt: at };
-    socket.to(socket.data.roomId).emit("video:pause", { time, at });
+    socket.to(socket.data.roomId).emit("video:pause", { time, at, videoId: room.state.videoId });
   });
 
   // NTP-style probe: the client measures round-trip time and uses it to

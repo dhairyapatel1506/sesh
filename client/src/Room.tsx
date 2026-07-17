@@ -219,6 +219,28 @@ function Room() {
     const alreadyPaused = currentState === PlayerState.PAUSED;
     const target = targetTime(state);
 
+    // The player is on a different video than this state describes — this
+    // tab missed a video:load (e.g. a brief disconnect while someone else
+    // loaded a new video). Switch to the right video at the right position
+    // before any play/pause/drift logic; everything below assumes the
+    // player and the state agree on which video they're talking about.
+    if (state.videoId && state.videoId !== videoIdRef.current) {
+      applyRemote(() => {
+        positionSampleRef.current = null;
+        if (state.isPlaying) {
+          playerRef.current!.loadVideoById(state.videoId!, target + playStartLagRef.current);
+          if (!autoplayGrantedRef.current) {
+            playerRef.current!.mute();
+          }
+          playRequestedAtRef.current = performance.now();
+        } else {
+          playerRef.current!.cueVideoById(state.videoId!, target);
+        }
+      });
+      setVideoId(state.videoId);
+      return;
+    }
+
     // A finished video is a settled position, not something to "resume":
     // if the room state points at/past the end too, leave the player alone —
     // seekTo/playVideo on an ENDED player restarts it from 0, which turns a
@@ -421,10 +443,14 @@ function Room() {
       pendingStateRef.current = state;
       lastStateRef.current = state;
       if (!state.videoId) return;
-      if (state.videoId !== videoId) {
-        setVideoId(state.videoId);
-      } else {
+      if (playerRef.current) {
+        // Handles a videoId mismatch itself (switches the player over), so
+        // the periodic resync self-heals a tab that diverged onto the wrong
+        // video — previously only React state was updated, which an
+        // already-created player never picks up.
         syncPlayerToState(state);
+      } else if (state.videoId !== videoId) {
+        setVideoId(state.videoId);
       }
     };
 
@@ -439,16 +465,21 @@ function Room() {
       setVideoId(id);
     };
 
-    const onVideoPlay = ({ time, at }: { time: number; at: number }) => {
-      if (!videoId) return;
-      const state: RoomState = { videoId, isPlaying: true, time, at };
+    // The server tells us which video the event is about; trusting it over
+    // our local state means a play on a video we never received still plays
+    // the right thing. (Fallback to local state tolerates an older server.)
+    const onVideoPlay = ({ time, at, videoId: id }: { time: number; at: number; videoId?: string | null }) => {
+      const eventVideoId = id ?? videoId;
+      if (!eventVideoId) return;
+      const state: RoomState = { videoId: eventVideoId, isPlaying: true, time, at };
       lastStateRef.current = state;
       syncPlayerToState(state);
     };
 
-    const onVideoPause = ({ time, at }: { time: number; at: number }) => {
-      if (!videoId) return;
-      const state: RoomState = { videoId, isPlaying: false, time, at };
+    const onVideoPause = ({ time, at, videoId: id }: { time: number; at: number; videoId?: string | null }) => {
+      const eventVideoId = id ?? videoId;
+      if (!eventVideoId) return;
+      const state: RoomState = { videoId: eventVideoId, isPlaying: false, time, at };
       lastStateRef.current = state;
       syncPlayerToState(state);
     };

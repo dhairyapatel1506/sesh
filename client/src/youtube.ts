@@ -13,7 +13,7 @@ export interface YTPlayer {
   getPlayerState(): number;
   getIframe(): HTMLIFrameElement;
   isMuted(): boolean;
-  loadVideoById(videoId: string): void;
+  loadVideoById(videoId: string, startSeconds?: number): void;
   cueVideoById(videoId: string, startSeconds?: number): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   playVideo(): void;
