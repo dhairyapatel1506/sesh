@@ -212,6 +212,121 @@ button:disabled {
   margin-top: 0.75rem;
 }
 
+.chat {
+  margin-top: 1.75rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.chat-messages {
+  max-height: 16rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.chat-empty {
+  text-align: center;
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin: 0.5rem 0;
+}
+
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+}
+
+.chat-msg.own {
+  align-items: flex-end;
+}
+
+.chat-name {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 0 0.25rem;
+}
+
+.chat-bubble {
+  background: var(--code-bg);
+  color: var(--text-h);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  padding: 0.4rem 0.75rem;
+  border-radius: 12px;
+  border-top-left-radius: 4px;
+  max-width: 85%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-msg.own .chat-bubble {
+  background: var(--accent-bg);
+  border-radius: 12px;
+  border-top-right-radius: 4px;
+}
+
+.chat-bar {
+  margin-bottom: 0;
+}
+
+/* Desktop: video left, chat right — no scrolling down to chat. Below the
+   breakpoint (phones/tablets) the default stacked layout applies, same as
+   the YouTube app's video-on-top-chat-below pattern. */
+@media (min-width: 900px) {
+  .app.room {
+    max-width: 1080px;
+  }
+
+  .room-main {
+    display: flex;
+    align-items: stretch;
+    gap: 1.25rem;
+  }
+
+  .room-video {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .room-video #yt-player {
+    max-width: none;
+  }
+
+  /* The chat is absolutely positioned inside this wrapper so the row's
+     height comes from the video alone — a long chat scrolls inside itself
+     instead of stretching the row taller than the player. The min-height
+     keeps the chat usable before any video is loaded. */
+  .room-chat {
+    position: relative;
+    width: 320px;
+    flex-shrink: 0;
+    min-height: 22rem;
+  }
+
+  .room-chat .chat {
+    position: absolute;
+    inset: 0;
+    margin-top: 0;
+    box-sizing: border-box;
+  }
+
+  .room-chat .chat-messages {
+    flex: 1;
+    max-height: none;
+    min-height: 0;
+  }
+}
+
 .room-code {
   font-family: var(--mono);
   font-size: 0.9rem;

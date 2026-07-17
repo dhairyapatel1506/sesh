@@ -171,10 +171,24 @@ type RoomUser = {
   socketId: string;
 };
 
+type ChatMessage = {
+  id: string;
+  senderId: string; // clientId — lets each tab recognize its own messages
+  name: string;
+  text: string;
+  at: number;
+};
+
 type Room = {
   state: RoomState;
   users: Map<string, RoomUser>; // clientId -> user
+  messages: ChatMessage[];
 };
+
+const CHAT_MAX_LENGTH = 500;
+// Chat is as ephemeral as the room itself (gone when the last person
+// leaves); the cap just keeps a long sesh from growing memory unbounded.
+const CHAT_HISTORY_LIMIT = 100;
 
 const rooms = new Map<string, Room>();
 
@@ -184,6 +198,7 @@ function getOrCreateRoom(roomId: string): Room {
     room = {
       state: { videoId: null, isPlaying: false, time: 0, updatedAt: Date.now() },
       users: new Map(),
+      messages: [],
     };
     rooms.set(roomId, room);
   }
@@ -235,6 +250,8 @@ io.on("connection", (socket) => {
       room.users.set(clientId, { name, socketId: socket.id });
 
       socket.emit("room:state", estimatedRoomState(room));
+      // Late joiners (and reconnects) get what was said before they arrived.
+      socket.emit("chat:history", room.messages);
       io.to(roomId).emit("room:users", userList(room));
     },
   );
@@ -284,6 +301,27 @@ io.on("connection", (socket) => {
     const room = currentRoom(socket);
     if (!room) return;
     room.state = { ...room.state, isPlaying: false, time, updatedAt: Date.now() };
+  });
+
+  socket.on("chat:message", ({ text }: { text: string }) => {
+    const room = currentRoom(socket);
+    const clientId = socket.data.clientId as string | undefined;
+    if (!room || !clientId) return;
+    const trimmed = String(text ?? "").trim().slice(0, CHAT_MAX_LENGTH);
+    if (!trimmed) return;
+    const message: ChatMessage = {
+      id: crypto.randomUUID(),
+      senderId: clientId,
+      name: room.users.get(clientId)?.name ?? "Someone",
+      text: trimmed,
+      at: Date.now(),
+    };
+    room.messages.push(message);
+    if (room.messages.length > CHAT_HISTORY_LIMIT) room.messages.shift();
+    // Broadcast to everyone including the sender — rendering only the
+    // server's echo keeps one source of truth and doubles as delivery
+    // confirmation.
+    io.to(socket.data.roomId).emit("chat:message", message);
   });
 
   socket.on("resync:request", () => {

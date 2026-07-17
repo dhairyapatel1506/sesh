@@ -23,6 +23,14 @@ type SearchResult = {
   duration: string;
 };
 
+type ChatMessage = {
+  id: string;
+  senderId: string;
+  name: string;
+  text: string;
+  at: number;
+};
+
 const NAME_STORAGE_KEY = "sesh:name";
 const CLIENT_ID_STORAGE_KEY = "sesh:clientId";
 
@@ -83,6 +91,8 @@ function Room() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
 
   const playerRef = useRef<YTPlayer | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -545,6 +555,34 @@ function Room() {
     return () => window.clearInterval(interval);
   }, [debugMode, videoId]);
 
+  // Chat: history replaces (it re-arrives on every rejoin, catching up on
+  // anything missed while disconnected), live messages append.
+  useEffect(() => {
+    const onHistory = (history: ChatMessage[]) => setMessages(history);
+    const onMessage = (message: ChatMessage) =>
+      setMessages((prev) => [...prev.slice(-99), message]);
+    socket.on("chat:history", onHistory);
+    socket.on("chat:message", onMessage);
+    return () => {
+      socket.off("chat:history", onHistory);
+      socket.off("chat:message", onMessage);
+    };
+  }, []);
+
+  // Keep the newest message in view.
+  const chatListRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = chatListRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
+  const sendChat = () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    socket.emit("chat:message", { text });
+    setChatInput("");
+  };
+
   // A backgrounded tab may get its video silently paused by the browser;
   // catch back up to the authoritative room state when it becomes visible.
   useEffect(() => {
@@ -707,7 +745,7 @@ function Room() {
   }
 
   return (
-    <div className="app">
+    <div className="app room">
       <header>
         <h1>Sesh</h1>
         <span className="room-code">{roomId}</span>
@@ -767,19 +805,57 @@ function Room() {
         </ul>
       )}
 
-      {videoId ? (
-        <>
-          <div id="yt-player" ref={playerContainerRef} />
-          {playerError && <p className="load-error">{playerError} Try pasting a different link.</p>}
-          <p className="pip-hint">
-            Tip: go fullscreen, then press home — the video pops out and keeps playing while you
-            use other apps.
-          </p>
-          {debugMode && <p className="debug-hud">{debugInfo}</p>}
-        </>
-      ) : (
-        <p className="empty-state">Paste a YouTube link above to start a sesh.</p>
-      )}
+      <div className="room-main">
+        <div className="room-video">
+          {videoId ? (
+            <>
+              <div id="yt-player" ref={playerContainerRef} />
+              {playerError && (
+                <p className="load-error">{playerError} Try pasting a different link.</p>
+              )}
+              <p className="pip-hint">
+                Tip: go fullscreen, then press home — the video pops out and keeps playing while
+                you use other apps.
+              </p>
+              {debugMode && <p className="debug-hud">{debugInfo}</p>}
+            </>
+          ) : (
+            <p className="empty-state">Paste a YouTube link above to start a sesh.</p>
+          )}
+        </div>
+
+        <div className="room-chat">
+          <div className="chat">
+            <div className="chat-messages" ref={chatListRef}>
+              {messages.length === 0 ? (
+                <p className="chat-empty">No messages yet — say hi 👋</p>
+              ) : (
+                messages.map((m) => {
+                  const own = m.senderId === clientIdRef.current;
+                  return (
+                    <div key={m.id} className={own ? "chat-msg own" : "chat-msg"}>
+                      {!own && <span className="chat-name">{m.name}</span>}
+                      <span className="chat-bubble" title={new Date(m.at).toLocaleTimeString()}>
+                        {m.text}
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="load-bar chat-bar">
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Send a message..."
+                maxLength={500}
+                onKeyDown={(e) => e.key === "Enter" && sendChat()}
+              />
+              <button onClick={sendChat}>Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
