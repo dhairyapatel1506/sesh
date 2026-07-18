@@ -1008,30 +1008,40 @@ function Room() {
       {loadError && <p className="load-error">{loadError}</p>}
 
       {searchResults && (
-        <ul className="search-results">
-          {searchResults.map((result) => (
-            <li key={result.videoId} className="search-result-row">
-              <button className="search-result" onClick={() => loadVideo(result.videoId)}>
-                <img src={result.thumbnail} alt="" loading="lazy" />
-                <span className="search-result-info">
-                  <span className="search-result-title">{result.title}</span>
-                  <span className="search-result-meta">
-                    {result.channel}
-                    {result.duration && ` · ${result.duration}`}
+        <div className="search-results">
+          <div className="search-results-head">
+            <span>
+              {searchResults.length} results — click to play, <strong>+</strong> to queue
+            </span>
+            <button className="search-results-close" onClick={() => setSearchResults(null)}>
+              ✕ Close
+            </button>
+          </div>
+          <ul className="search-results-list">
+            {searchResults.map((result) => (
+              <li key={result.videoId} className="search-result-row">
+                <button className="search-result" onClick={() => loadVideo(result.videoId)}>
+                  <img src={result.thumbnail} alt="" loading="lazy" />
+                  <span className="search-result-info">
+                    <span className="search-result-title">{result.title}</span>
+                    <span className="search-result-meta">
+                      {result.channel}
+                      {result.duration && ` · ${result.duration}`}
+                    </span>
                   </span>
-                </span>
-              </button>
-              <button
-                className="search-result-queue"
-                title="Add to queue"
-                aria-label={`Add ${result.title} to queue`}
-                onClick={() => void queueVideo(result.videoId, result.title)}
-              >
-                +
-              </button>
-            </li>
-          ))}
-        </ul>
+                </button>
+                <button
+                  className="search-result-queue"
+                  title="Add to queue"
+                  aria-label={`Add ${result.title} to queue`}
+                  onClick={() => void queueVideo(result.videoId, result.title)}
+                >
+                  +
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       <div className="room-main">
