@@ -12,18 +12,33 @@
   box-sizing: border-box;
 }
 
+/* baseline alignment would take the h1's baseline from its first inline-flex
+   item — the logo image's bottom edge — and hoist the whole brand above the
+   rest of the row; center alignment sidesteps that entirely. */
 header {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: center;
   gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
 
+/* In a room the header reads as a toolbar: brand left, room info right. */
+.app.room header {
+  justify-content: space-between;
+}
+
+.header-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 header h1 {
   font-size: 2rem;
   letter-spacing: -0.5px;
+  line-height: 1;
   margin: 0;
 }
 

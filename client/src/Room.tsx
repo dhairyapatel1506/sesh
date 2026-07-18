@@ -1026,10 +1026,12 @@ function Room() {
             Sesh
           </Link>
         </h1>
-        <span className="room-code">{roomId}</span>
-        <span className={connected ? "ok" : "bad"}>
-          {connected ? "connected" : "reconnecting…"}
-        </span>
+        <div className="header-meta">
+          <span className="room-code">{roomId}</span>
+          <span className={connected ? "ok" : "bad"}>
+            {connected ? "connected" : "reconnecting…"}
+          </span>
+        </div>
       </header>
 
       <div className="room-toolbar">
