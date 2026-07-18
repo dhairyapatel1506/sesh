@@ -45,6 +45,79 @@ function getClientId(): string {
   return id;
 }
 
+const CHAT_MUTE_STORAGE_KEY = "sesh:chatMuted";
+
+// Consecutive messages from the same person within this window render as one
+// group — name shown once, bubbles tucked together.
+const CHAT_GROUP_WINDOW_MS = 5 * 60_000;
+
+// A curated grid beats a full picker library: zero bundle weight, and the OS
+// emoji keyboard covers everything else.
+const EMOJI_CHOICES = [
+  "😂", "🤣", "😊", "😍", "🥰", "😎", "🤔", "🙄",
+  "😭", "😅", "🙃", "😮", "😴", "🥳", "😤", "🤯",
+  "❤️", "🔥", "💀", "💯", "👍", "👎", "👏", "🙌",
+  "🙏", "👀", "✨", "🎉", "🎶", "🍿", "🍕", "☕",
+];
+
+// A message that's nothing but a few emoji renders big and bubble-less.
+// Emoji_Component alone (digits, skin tones, flag letters) doesn't count —
+// at least one actual pictograph must be present.
+function isEmojiOnly(text: string): boolean {
+  const stripped = text.replace(/\s/g, "");
+  // \u200d (zero-width joiner) and \ufe0f (variation selector) are the
+  // invisible glue inside sequences like 👨‍👩‍👧 and ❤️.
+  if (!/^[\p{Extended_Pictographic}\p{Emoji_Component}\u200d\ufe0f]+$/u.test(stripped)) {
+    return false;
+  }
+  const pictographs = [...stripped.matchAll(/\p{Extended_Pictographic}/gu)].length;
+  return pictographs >= 1 && pictographs <= 4;
+}
+
+const BASE_TITLE = document.title;
+
+// Favicon with a red dot, for unread chat while the tab's in the background.
+// The badge is drawn once (favicon + overlaid dot on a canvas) and cached;
+// badge-off restores the original file. The `on` flag is module state so the
+// async image load can't apply a badge the UI has since turned off.
+let faviconBadgeOn = false;
+let faviconBadgeUrl: string | null = null;
+
+function setFaviconBadge(on: boolean) {
+  faviconBadgeOn = on;
+  const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (!link) return;
+  if (!on) {
+    link.type = "image/svg+xml";
+    link.href = "/favicon.svg";
+    return;
+  }
+  if (faviconBadgeUrl) {
+    link.type = "image/png";
+    link.href = faviconBadgeUrl;
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 1, 64, 61);
+    ctx.beginPath();
+    ctx.arc(49, 15, 14, 0, Math.PI * 2);
+    ctx.fillStyle = "#ef4444";
+    ctx.fill();
+    faviconBadgeUrl = canvas.toDataURL("image/png");
+    if (faviconBadgeOn) {
+      link.type = "image/png";
+      link.href = faviconBadgeUrl;
+    }
+  };
+  img.src = "/favicon.svg";
+}
+
 // Drift correction tiers while both sides are "playing": below the
 // tolerance nothing happens; up to the nudge ceiling we briefly run the
 // player fast/slow (pitch-preserved, barely perceptible) to glide back into
@@ -93,6 +166,15 @@ function Room() {
   const [searching, setSearching] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [chatMuted, setChatMuted] = useState(
+    () => localStorage.getItem(CHAT_MUTE_STORAGE_KEY) === "1",
+  );
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+  // Mirror for the socket handler, which is registered once and would
+  // otherwise close over a stale value.
+  const chatMutedRef = useRef(chatMuted);
 
   const playerRef = useRef<YTPlayer | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -555,12 +637,60 @@ function Room() {
     return () => window.clearInterval(interval);
   }, [debugMode, videoId]);
 
+  // A short synthesized two-tone ping — no audio file to ship, and the Web
+  // Audio API is precise enough that it sounds intentional rather than harsh.
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const playChatPing = () => {
+    try {
+      const ctx = (audioCtxRef.current ??= new AudioContext());
+      if (ctx.state === "suspended") void ctx.resume();
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, t);
+      osc.frequency.setValueAtTime(1174.66, t + 0.09); // A5 → D6
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.12, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.4);
+    } catch {
+      // No audio available (or blocked) — the tab-title badge still shows.
+    }
+  };
+
+  // Browsers keep an AudioContext suspended until a user gesture, and the
+  // ping fires while the tab is unfocused — so grab the first gesture to
+  // unlock audio ahead of time.
+  useEffect(() => {
+    const warm = () => {
+      try {
+        const ctx = (audioCtxRef.current ??= new AudioContext());
+        if (ctx.state === "suspended") void ctx.resume();
+      } catch {
+        // Same fallback as above.
+      }
+    };
+    window.addEventListener("pointerdown", warm, { once: true });
+    return () => window.removeEventListener("pointerdown", warm);
+  }, []);
+
   // Chat: history replaces (it re-arrives on every rejoin, catching up on
-  // anything missed while disconnected), live messages append.
+  // anything missed while disconnected), live messages append. History is
+  // silent on purpose — a reconnect replay isn't news.
   useEffect(() => {
     const onHistory = (history: ChatMessage[]) => setMessages(history);
-    const onMessage = (message: ChatMessage) =>
+    const onMessage = (message: ChatMessage) => {
       setMessages((prev) => [...prev.slice(-99), message]);
+      // Someone else's message while this tab isn't the one being looked at
+      // (other tab, other window): count it and ping.
+      if (message.senderId === clientIdRef.current || document.hasFocus()) return;
+      setUnreadCount((n) => n + 1);
+      if (!chatMutedRef.current) playChatPing();
+    };
     socket.on("chat:history", onHistory);
     socket.on("chat:message", onMessage);
     return () => {
@@ -568,6 +698,33 @@ function Room() {
       socket.off("chat:message", onMessage);
     };
   }, []);
+
+  // Coming back to the tab clears the unread state.
+  useEffect(() => {
+    const clear = () => setUnreadCount(0);
+    window.addEventListener("focus", clear);
+    return () => window.removeEventListener("focus", clear);
+  }, []);
+
+  // Surface unread messages on the tab itself: a count in the title and a
+  // red dot on the favicon.
+  useEffect(() => {
+    document.title = unreadCount > 0 ? `(${unreadCount}) ${BASE_TITLE}` : BASE_TITLE;
+    setFaviconBadge(unreadCount > 0);
+    return () => {
+      document.title = BASE_TITLE;
+      setFaviconBadge(false);
+    };
+  }, [unreadCount]);
+
+  const toggleChatMuted = () => {
+    setChatMuted((muted) => {
+      const next = !muted;
+      chatMutedRef.current = next;
+      localStorage.setItem(CHAT_MUTE_STORAGE_KEY, next ? "1" : "0");
+      return next;
+    });
+  };
 
   // Keep the newest message in view.
   const chatListRef = useRef<HTMLDivElement | null>(null);
@@ -581,6 +738,7 @@ function Room() {
     if (!text) return;
     socket.emit("chat:message", { text });
     setChatInput("");
+    setEmojiOpen(false);
   };
 
   // A backgrounded tab may get its video silently paused by the browser;
@@ -826,16 +984,40 @@ function Room() {
 
         <div className="room-chat">
           <div className="chat">
+            <div className="chat-head">
+              <span>Chat</span>
+              <button
+                className="chat-mute"
+                onClick={toggleChatMuted}
+                title={chatMuted ? "Unmute message sound" : "Mute message sound"}
+                aria-label={chatMuted ? "Unmute message sound" : "Mute message sound"}
+              >
+                {chatMuted ? "🔕" : "🔔"}
+              </button>
+            </div>
             <div className="chat-messages" ref={chatListRef}>
               {messages.length === 0 ? (
                 <p className="chat-empty">No messages yet — say hi 👋</p>
               ) : (
-                messages.map((m) => {
+                messages.map((m, i) => {
                   const own = m.senderId === clientIdRef.current;
+                  // Same sender, close in time → visually one continuous
+                  // group: name once, bubbles tucked together.
+                  const prev = messages[i - 1];
+                  const grouped =
+                    prev !== undefined &&
+                    prev.senderId === m.senderId &&
+                    m.at - prev.at < CHAT_GROUP_WINDOW_MS;
+                  const classes = ["chat-msg", own && "own", grouped && "grouped"]
+                    .filter(Boolean)
+                    .join(" ");
                   return (
-                    <div key={m.id} className={own ? "chat-msg own" : "chat-msg"}>
-                      {!own && <span className="chat-name">{m.name}</span>}
-                      <span className="chat-bubble" title={new Date(m.at).toLocaleTimeString()}>
+                    <div key={m.id} className={classes}>
+                      {!own && !grouped && <span className="chat-name">{m.name}</span>}
+                      <span
+                        className={isEmojiOnly(m.text) ? "chat-bubble emoji-only" : "chat-bubble"}
+                        title={new Date(m.at).toLocaleTimeString()}
+                      >
                         {m.text}
                       </span>
                     </div>
@@ -843,15 +1025,43 @@ function Room() {
                 })
               )}
             </div>
-            <div className="load-bar chat-bar">
-              <input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Send a message..."
-                maxLength={500}
-                onKeyDown={(e) => e.key === "Enter" && sendChat()}
-              />
-              <button onClick={sendChat}>Send</button>
+            <div className="chat-bar-wrap">
+              {emojiOpen && (
+                <div className="emoji-panel">
+                  {EMOJI_CHOICES.map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => {
+                        setChatInput((v) => v + emoji);
+                        chatInputRef.current?.focus();
+                      }}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="load-bar chat-bar">
+                <button
+                  className="emoji-toggle"
+                  onClick={() => setEmojiOpen((open) => !open)}
+                  aria-label="Emoji picker"
+                >
+                  😊
+                </button>
+                <input
+                  ref={chatInputRef}
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Send a message..."
+                  maxLength={500}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") sendChat();
+                    if (e.key === "Escape") setEmojiOpen(false);
+                  }}
+                />
+                <button onClick={sendChat}>Send</button>
+              </div>
             </div>
           </div>
         </div>

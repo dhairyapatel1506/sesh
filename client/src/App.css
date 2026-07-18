@@ -275,8 +275,96 @@ button:disabled {
   border-top-right-radius: 4px;
 }
 
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.chat-mute {
+  background: none;
+  border: none;
+  padding: 0.1rem 0.3rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.chat-mute:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+/* Continuation of the same sender's group: pull up against the previous
+   bubble (partially cancelling the flex gap) and drop the "speech tail"
+   corner — only the group's first bubble keeps it. */
+.chat-msg.grouped {
+  margin-top: -0.35rem;
+}
+
+.chat-msg.grouped .chat-bubble {
+  border-radius: 12px;
+}
+
+/* A message that's just an emoji or a few reads better as the emoji itself,
+   big and bubble-less — the usual chat-app treatment. */
+.chat-bubble.emoji-only,
+.chat-msg.own .chat-bubble.emoji-only {
+  background: none;
+  padding: 0 0.25rem;
+  font-size: 1.9rem;
+  line-height: 1.25;
+}
+
+.chat-bar-wrap {
+  position: relative;
+}
+
 .chat-bar {
   margin-bottom: 0;
+}
+
+.emoji-toggle {
+  background: transparent;
+  border-color: var(--border);
+  padding: 0.55rem 0.7rem;
+}
+
+.emoji-toggle:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.emoji-panel {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.1rem;
+  padding: 0.4rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.emoji-panel button {
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0.3rem 0;
+  border-radius: 8px;
+}
+
+.emoji-panel button:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
 }
 
 /* Desktop: video left, chat right — no scrolling down to chat. Below the
