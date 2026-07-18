@@ -95,12 +95,10 @@ function setFaviconBadge(on: boolean) {
   const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
   if (!link) return;
   if (!on) {
-    link.type = "image/svg+xml";
-    link.href = "/favicon.svg";
+    link.href = "/favicon.png";
     return;
   }
   if (faviconBadgeUrl) {
-    link.type = "image/png";
     link.href = faviconBadgeUrl;
     return;
   }
@@ -111,18 +109,17 @@ function setFaviconBadge(on: boolean) {
     canvas.height = 64;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(img, 0, 1, 64, 61);
+    ctx.drawImage(img, 0, 0, 64, 64);
     ctx.beginPath();
     ctx.arc(49, 15, 14, 0, Math.PI * 2);
     ctx.fillStyle = "#ef4444";
     ctx.fill();
     faviconBadgeUrl = canvas.toDataURL("image/png");
     if (faviconBadgeOn) {
-      link.type = "image/png";
       link.href = faviconBadgeUrl;
     }
   };
-  img.src = "/favicon.svg";
+  img.src = "/favicon.png";
 }
 
 // Drift correction tiers while both sides are "playing": below the
@@ -997,7 +994,10 @@ function Room() {
       <div className="app">
         <header>
           <h1>
-            <Link to="/">Sesh</Link>
+            <Link to="/">
+              <img src="/logo.png" alt="" className="logo-mark" />
+              Sesh
+            </Link>
           </h1>
         </header>
         <div className="name-gate">
@@ -1021,7 +1021,10 @@ function Room() {
     <div className="app room">
       <header>
         <h1>
-          <Link to="/">Sesh</Link>
+          <Link to="/">
+            <img src="/logo.png" alt="" className="logo-mark" />
+            Sesh
+          </Link>
         </h1>
         <span className="room-code">{roomId}</span>
         <span className={connected ? "ok" : "bad"}>

@@ -19,6 +19,7 @@ function Landing() {
 
   return (
     <div className="app landing">
+      <img src="/logo.png" alt="" className="landing-logo" />
       <h1>Sesh</h1>
       <p className="tagline">Watch YouTube with your friends, perfectly in sync.</p>
 

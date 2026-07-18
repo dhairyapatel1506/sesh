@@ -1,4 +1,8 @@
-# Sesh 🎬
+<p align="center">
+  <img src="client/public/logo.png" alt="Sesh logo" width="220" />
+</p>
+
+# Sesh
 
 **Watch YouTube with your friends, perfectly in sync.**
 

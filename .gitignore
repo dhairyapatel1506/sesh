@@ -6,3 +6,6 @@ dist-ssr
 .env.*
 .DS_Store
 *.local
+
+# WSL/NTFS download markers
+*:Zone.Identifier

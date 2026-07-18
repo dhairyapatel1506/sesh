@@ -29,12 +29,27 @@ header h1 {
 
 /* The wordmark links back to the landing page without looking like a link. */
 header h1 a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   color: inherit;
   text-decoration: none;
 }
 
 header h1 a:hover {
   color: var(--accent);
+}
+
+.logo-mark {
+  height: 1.4rem;
+  width: auto;
+}
+
+.landing-logo {
+  display: block;
+  height: 4.5rem;
+  width: auto;
+  margin: 0 auto 1.5rem;
 }
 
 header span {
