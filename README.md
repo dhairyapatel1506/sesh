@@ -39,6 +39,8 @@ Keeping two YouTube players in audible sync is harder than it looks — `getCurr
 
 5. **Play-start latency learning.** Each tab measures how long its player takes between "play requested" and "actually playing" and keeps an exponential moving average, then leads its seeks by that amount so playback starts already aligned.
 
+6. **Ready-barrier starts.** When the queue auto-advances, every tab silently pre-buffers the next video (played muted until proven buffered, then parked at 0) and reports ready; only when all tabs are ready — or a short timeout passes — does the server start everyone at the same instant. Without it, fast tabs would run ahead while slow ones buffer, then jump to catch up.
+
 Add `?debug` to any room URL to watch it all live: drift, clock offset, learned start lag, and current playback rate.
 
 ## Tech stack

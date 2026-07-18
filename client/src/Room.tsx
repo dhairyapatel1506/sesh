@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { API_BASE, socket } from "./socket";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import "./App.css";
@@ -223,6 +223,14 @@ function Room() {
   // Once this tab has genuinely gotten permission to play audio, the browser
   // remembers that for the rest of the page's lifetime.
   const autoplayGrantedRef = useRef(false);
+
+  // videoId of a server-initiated synchronized start this tab is pre-buffering
+  // (see video:prepare): the video plays muted until its first PLAYING event —
+  // proof it's buffered — then is paused back to 0 and reported video:ready.
+  // The server starts everyone together once every tab has reported in.
+  const prepareRef = useRef<string | null>(null);
+  // Whether to restore sound after the muted pre-buffer.
+  const prepareUnmuteRef = useRef(false);
 
   // Estimated difference between the server's clock and ours (server - local),
   // measured NTP-style: of several ping samples, the one with the lowest
@@ -501,6 +509,25 @@ function Room() {
               });
               return;
             }
+            // Pre-buffering for a synchronized start: the first PLAYING event
+            // proves the video is buffered. Park it at 0 and tell the server
+            // this tab is ready. Checked before the suppress window — buffering
+            // can outlast it, and this must never re-broadcast as a real play.
+            if (
+              event.data === PlayerState.PLAYING &&
+              prepareRef.current !== null &&
+              prepareRef.current === videoIdRef.current
+            ) {
+              prepareRef.current = null;
+              applyRemote(() => {
+                playerRef.current!.pauseVideo();
+                playerRef.current!.seekTo(0, true);
+                positionSampleRef.current = null;
+              });
+              if (prepareUnmuteRef.current) playerRef.current.unMute();
+              socket.emit("video:ready", { videoId: videoIdRef.current });
+              return;
+            }
             if (event.data !== PlayerState.PLAYING && event.data !== PlayerState.PAUSED) {
               return;
             }
@@ -550,6 +577,10 @@ function Room() {
       pendingStateRef.current = state;
       lastStateRef.current = state;
       if (!state.videoId) return;
+      // Mid-prepare the room state is "paused at 0" by design — syncing to it
+      // would pause the pre-buffer playback before its PLAYING event fires,
+      // and video:ready would never be sent.
+      if (prepareRef.current === state.videoId && !state.isPlaying) return;
       if (playerRef.current) {
         // Handles a videoId mismatch itself (switches the player over), so
         // the periodic resync self-heals a tab that diverged onto the wrong
@@ -562,6 +593,7 @@ function Room() {
     };
 
     const onVideoLoad = ({ videoId: id }: { videoId: string }) => {
+      prepareRef.current = null; // a user's pick overrides a prepare in flight
       const state: RoomState = { videoId: id, isPlaying: false, time: 0, at: serverNow() };
       pendingStateRef.current = state;
       lastStateRef.current = state;
@@ -572,10 +604,37 @@ function Room() {
       setVideoId(id);
     };
 
+    // Server-initiated synchronized start (queue auto-advance / play-now):
+    // buffer the video by playing it muted; its first PLAYING event (see
+    // onStateChange) pauses it back to 0 and reports video:ready. Playback
+    // then starts for the whole room at once via a normal video:play.
+    const onVideoPrepare = ({ videoId: id }: { videoId: string }) => {
+      const state: RoomState = { videoId: id, isPlaying: false, time: 0, at: serverNow() };
+      pendingStateRef.current = state;
+      lastStateRef.current = state;
+      setPlayerError(null);
+      if (playerRef.current) {
+        prepareRef.current = id;
+        prepareUnmuteRef.current = !playerRef.current.isMuted();
+        applyRemote(() => {
+          positionSampleRef.current = null;
+          playerRef.current!.mute();
+          playerRef.current!.loadVideoById(id, 0);
+        });
+      }
+      // No player yet (rare: joined mid-prepare) — the server's timeout keeps
+      // the room from waiting on this tab, and a resync catches it up.
+      setVideoId(id);
+    };
+
     // The server tells us which video the event is about; trusting it over
     // our local state means a play on a video we never received still plays
     // the right thing. (Fallback to local state tolerates an older server.)
     const onVideoPlay = ({ time, at, videoId: id }: { time: number; at: number; videoId?: string | null }) => {
+      // If this is the barrier opening while this tab's pre-buffer never got
+      // to PLAYING (slow — the timeout opened it), stop treating the eventual
+      // PLAYING as a prepare signal or it would pause the real playback.
+      prepareRef.current = null;
       const eventVideoId = id ?? videoId;
       if (!eventVideoId) return;
       const state: RoomState = { videoId: eventVideoId, isPlaying: true, time, at };
@@ -584,6 +643,7 @@ function Room() {
     };
 
     const onVideoPause = ({ time, at, videoId: id }: { time: number; at: number; videoId?: string | null }) => {
+      prepareRef.current = null;
       const eventVideoId = id ?? videoId;
       if (!eventVideoId) return;
       const state: RoomState = { videoId: eventVideoId, isPlaying: false, time, at };
@@ -595,6 +655,7 @@ function Room() {
 
     socket.on("room:state", onRoomState);
     socket.on("video:load", onVideoLoad);
+    socket.on("video:prepare", onVideoPrepare);
     socket.on("video:play", onVideoPlay);
     socket.on("video:pause", onVideoPause);
     socket.on("room:users", onUsers);
@@ -602,6 +663,7 @@ function Room() {
     return () => {
       socket.off("room:state", onRoomState);
       socket.off("video:load", onVideoLoad);
+      socket.off("video:prepare", onVideoPrepare);
       socket.off("video:play", onVideoPlay);
       socket.off("video:pause", onVideoPause);
       socket.off("room:users", onUsers);
@@ -834,6 +896,7 @@ function Room() {
   }, [videoId, videoTitle, roomId]);
 
   const loadVideo = (id: string) => {
+    prepareRef.current = null; // this pick overrides a prepare in flight
     setLoadError(null);
     setPlayerError(null);
     setSearchResults(null);
@@ -933,7 +996,9 @@ function Room() {
     return (
       <div className="app">
         <header>
-          <h1>Sesh</h1>
+          <h1>
+            <Link to="/">Sesh</Link>
+          </h1>
         </header>
         <div className="name-gate">
           <p>Enter a name to join room {roomId}:</p>
@@ -955,7 +1020,9 @@ function Room() {
   return (
     <div className="app room">
       <header>
-        <h1>Sesh</h1>
+        <h1>
+          <Link to="/">Sesh</Link>
+        </h1>
         <span className="room-code">{roomId}</span>
         <span className={connected ? "ok" : "bad"}>
           {connected ? "connected" : "reconnecting…"}

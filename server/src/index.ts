@@ -186,11 +186,21 @@ type QueueItem = {
   addedBy: string;
 };
 
+// A server-initiated video switch in flight: every tab is pre-buffering the
+// video paused, and playback begins once all of them report video:ready (or
+// the timeout fires, so one stuck/hidden tab can't hold the room hostage).
+type PendingStart = {
+  videoId: string;
+  waiting: Set<string>; // clientIds yet to report ready
+  timer: ReturnType<typeof setTimeout>;
+};
+
 type Room = {
   state: RoomState;
   users: Map<string, RoomUser>; // clientId -> user
   messages: ChatMessage[];
   queue: QueueItem[];
+  pendingStart: PendingStart | null;
 };
 
 const CHAT_MAX_LENGTH = 500;
@@ -199,6 +209,8 @@ const CHAT_MAX_LENGTH = 500;
 const CHAT_HISTORY_LIMIT = 100;
 const QUEUE_LIMIT = 50;
 const QUEUE_TITLE_MAX_LENGTH = 200;
+// How long a synchronized start waits for stragglers to finish buffering.
+const PREPARE_TIMEOUT_MS = 8000;
 
 const rooms = new Map<string, Room>();
 
@@ -210,6 +222,7 @@ function getOrCreateRoom(roomId: string): Room {
       users: new Map(),
       messages: [],
       queue: [],
+      pendingStart: null,
     };
     rooms.set(roomId, room);
   }
@@ -244,17 +257,39 @@ function userList(room: Room) {
   return Array.from(room.users, ([clientId, user]) => ({ id: clientId, name: user.name }));
 }
 
-// Server-initiated playback switch (auto-advance, play-from-queue). Unlike a
-// user's video:load — where the loader's own click plays their tab and the
-// event only goes to the others — nobody's player is on this video yet, so
-// everyone (io.to, not socket.to) gets the load and an explicit play. Their
-// players were just playing, so programmatic playback is allowed (and the
-// muted-autoplay fallback covers any tab where it isn't).
-function startVideoForRoom(roomId: string, room: Room, videoId: string) {
+function cancelPendingStart(room: Room) {
+  if (!room.pendingStart) return;
+  clearTimeout(room.pendingStart.timer);
+  room.pendingStart = null;
+}
+
+// The barrier opens: every tab (hopefully) has the video buffered and paused
+// at 0, so one broadcast starts them all at the same instant.
+function beginPendingStart(roomId: string, room: Room) {
+  const pending = room.pendingStart;
+  if (!pending) return;
+  cancelPendingStart(room);
   const at = Date.now();
-  room.state = { videoId, isPlaying: true, time: 0, updatedAt: at };
-  io.to(roomId).emit("video:load", { videoId });
-  io.to(roomId).emit("video:play", { time: 0, at, videoId });
+  room.state = { videoId: pending.videoId, isPlaying: true, time: 0, updatedAt: at };
+  io.to(roomId).emit("video:play", { time: 0, at, videoId: pending.videoId });
+}
+
+// Server-initiated playback switch (auto-advance, play-from-queue). Unlike a
+// user's video:load — where the loader's own click plays their tab right away
+// and everyone else chases it — nobody's player is on this video yet, so
+// there's a chance to start everyone together: tell all tabs to pre-buffer it
+// paused (video:prepare), collect their video:ready reports, and only then
+// broadcast the play. Without the barrier, each tab starts as soon as its own
+// buffering finishes — fast tabs run ahead while slow ones stall, then jump.
+function startVideoForRoom(roomId: string, room: Room, videoId: string) {
+  cancelPendingStart(room);
+  room.state = { videoId, isPlaying: false, time: 0, updatedAt: Date.now() };
+  room.pendingStart = {
+    videoId,
+    waiting: new Set(room.users.keys()),
+    timer: setTimeout(() => beginPendingStart(roomId, room), PREPARE_TIMEOUT_MS),
+  };
+  io.to(roomId).emit("video:prepare", { videoId });
 }
 
 io.on("connection", (socket) => {
@@ -284,6 +319,8 @@ io.on("connection", (socket) => {
   socket.on("video:load", ({ videoId }: { videoId: string }) => {
     const room = currentRoom(socket);
     if (!room) return;
+    // A user picking a video overrides any synchronized start in flight.
+    cancelPendingStart(room);
     // The loader's own click reliably starts playback right away (it's a
     // real gesture, so autoplay isn't blocked). Mark the room as playing
     // immediately rather than waiting for a separate video:play event —
@@ -296,6 +333,8 @@ io.on("connection", (socket) => {
   socket.on("video:play", ({ time }: { time: number }) => {
     const room = currentRoom(socket);
     if (!room) return;
+    // Someone hit play themselves mid-prepare — the barrier is moot.
+    cancelPendingStart(room);
     const at = Date.now();
     room.state = { ...room.state, isPlaying: true, time, updatedAt: at };
     // videoId rides along so a tab that missed a video:load (brief
@@ -310,6 +349,19 @@ io.on("connection", (socket) => {
     const at = Date.now();
     room.state = { ...room.state, isPlaying: false, time, updatedAt: at };
     socket.to(socket.data.roomId).emit("video:pause", { time, at, videoId: room.state.videoId });
+  });
+
+  // A tab finished pre-buffering a synchronized start. When the last one
+  // reports in, the barrier opens early instead of waiting out the timeout.
+  socket.on("video:ready", ({ videoId }: { videoId: string }) => {
+    const room = currentRoom(socket);
+    const clientId = socket.data.clientId as string | undefined;
+    if (!room || !clientId || !room.pendingStart) return;
+    if (room.pendingStart.videoId !== videoId) return;
+    room.pendingStart.waiting.delete(clientId);
+    if (room.pendingStart.waiting.size === 0) {
+      beginPendingStart(socket.data.roomId, room);
+    }
   });
 
   // NTP-style probe: the client measures round-trip time and uses it to
@@ -423,7 +475,13 @@ io.on("connection", (socket) => {
       room.users.delete(clientId);
     }
 
+    // Don't let a synchronized start wait out its timeout on someone who left.
+    if (room.pendingStart?.waiting.delete(clientId) && room.pendingStart.waiting.size === 0) {
+      beginPendingStart(roomId, room);
+    }
+
     if (room.users.size === 0) {
+      cancelPendingStart(room);
       rooms.delete(roomId);
     } else {
       io.to(roomId).emit("room:users", userList(room));
