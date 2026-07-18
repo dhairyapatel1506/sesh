@@ -179,16 +179,26 @@ type ChatMessage = {
   at: number;
 };
 
+type QueueItem = {
+  id: string;
+  videoId: string;
+  title: string | null; // the adding client resolves this (search/oembed)
+  addedBy: string;
+};
+
 type Room = {
   state: RoomState;
   users: Map<string, RoomUser>; // clientId -> user
   messages: ChatMessage[];
+  queue: QueueItem[];
 };
 
 const CHAT_MAX_LENGTH = 500;
 // Chat is as ephemeral as the room itself (gone when the last person
 // leaves); the cap just keeps a long sesh from growing memory unbounded.
 const CHAT_HISTORY_LIMIT = 100;
+const QUEUE_LIMIT = 50;
+const QUEUE_TITLE_MAX_LENGTH = 200;
 
 const rooms = new Map<string, Room>();
 
@@ -199,6 +209,7 @@ function getOrCreateRoom(roomId: string): Room {
       state: { videoId: null, isPlaying: false, time: 0, updatedAt: Date.now() },
       users: new Map(),
       messages: [],
+      queue: [],
     };
     rooms.set(roomId, room);
   }
@@ -233,6 +244,19 @@ function userList(room: Room) {
   return Array.from(room.users, ([clientId, user]) => ({ id: clientId, name: user.name }));
 }
 
+// Server-initiated playback switch (auto-advance, play-from-queue). Unlike a
+// user's video:load — where the loader's own click plays their tab and the
+// event only goes to the others — nobody's player is on this video yet, so
+// everyone (io.to, not socket.to) gets the load and an explicit play. Their
+// players were just playing, so programmatic playback is allowed (and the
+// muted-autoplay fallback covers any tab where it isn't).
+function startVideoForRoom(roomId: string, room: Room, videoId: string) {
+  const at = Date.now();
+  room.state = { videoId, isPlaying: true, time: 0, updatedAt: at };
+  io.to(roomId).emit("video:load", { videoId });
+  io.to(roomId).emit("video:play", { time: 0, at, videoId });
+}
+
 io.on("connection", (socket) => {
   console.log(`client connected: ${socket.id}`);
 
@@ -252,6 +276,7 @@ io.on("connection", (socket) => {
       socket.emit("room:state", estimatedRoomState(room));
       // Late joiners (and reconnects) get what was said before they arrived.
       socket.emit("chat:history", room.messages);
+      socket.emit("queue:state", room.queue);
       io.to(roomId).emit("room:users", userList(room));
     },
   );
@@ -294,13 +319,65 @@ io.on("connection", (socket) => {
     if (typeof respond === "function") respond(Date.now());
   });
 
-  // The video played to its end. Freeze the state there rather than letting
-  // the isPlaying extrapolation run past the video's duration forever. Not
-  // rebroadcast: every client's own player ends naturally on its own.
-  socket.on("video:ended", ({ time }: { time: number }) => {
+  // The video played to its end: advance to the next queued video, or freeze
+  // the state at the end rather than letting the isPlaying extrapolation run
+  // past the video's duration forever. Every client reports the end — the
+  // videoId guard makes the advance idempotent: the first report switches the
+  // room to the next video, so the rest no longer match and are dropped.
+  socket.on("video:ended", ({ time, videoId }: { time: number; videoId?: string | null }) => {
     const room = currentRoom(socket);
     if (!room) return;
+    if (videoId !== room.state.videoId) return;
+    const next = room.queue.shift();
+    if (next) {
+      io.to(socket.data.roomId).emit("queue:state", room.queue);
+      startVideoForRoom(socket.data.roomId, room, next.videoId);
+      return;
+    }
     room.state = { ...room.state, isPlaying: false, time, updatedAt: Date.now() };
+  });
+
+  socket.on("queue:add", ({ videoId, title }: { videoId: string; title?: string | null }) => {
+    const room = currentRoom(socket);
+    const clientId = socket.data.clientId as string | undefined;
+    if (!room || !clientId) return;
+    if (typeof videoId !== "string" || !videoId) return;
+    // Queueing onto an idle room means "play it" (the client normally makes
+    // that call itself so the click's autoplay permission isn't wasted, but
+    // cover the race where the room went idle in between).
+    if (!room.state.videoId) {
+      startVideoForRoom(socket.data.roomId, room, videoId);
+      return;
+    }
+    if (room.queue.length >= QUEUE_LIMIT) return;
+    room.queue.push({
+      id: crypto.randomUUID(),
+      videoId,
+      title: typeof title === "string" && title ? title.slice(0, QUEUE_TITLE_MAX_LENGTH) : null,
+      addedBy: room.users.get(clientId)?.name ?? "Someone",
+    });
+    io.to(socket.data.roomId).emit("queue:state", room.queue);
+  });
+
+  socket.on("queue:remove", ({ id }: { id: string }) => {
+    const room = currentRoom(socket);
+    if (!room) return;
+    const index = room.queue.findIndex((item) => item.id === id);
+    if (index === -1) return;
+    room.queue.splice(index, 1);
+    io.to(socket.data.roomId).emit("queue:state", room.queue);
+  });
+
+  // Jump the whole room to a queued video right now (doubles as "skip" when
+  // used on the first item). The item leaves the queue either way.
+  socket.on("queue:play", ({ id }: { id: string }) => {
+    const room = currentRoom(socket);
+    if (!room) return;
+    const index = room.queue.findIndex((item) => item.id === id);
+    if (index === -1) return;
+    const [item] = room.queue.splice(index, 1);
+    io.to(socket.data.roomId).emit("queue:state", room.queue);
+    startVideoForRoom(socket.data.roomId, room, item.videoId);
   });
 
   socket.on("chat:message", ({ text }: { text: string }) => {

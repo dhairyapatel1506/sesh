@@ -31,6 +31,13 @@ type ChatMessage = {
   at: number;
 };
 
+type QueueItem = {
+  id: string;
+  videoId: string;
+  title: string | null;
+  addedBy: string;
+};
+
 const NAME_STORAGE_KEY = "sesh:name";
 const CLIENT_ID_STORAGE_KEY = "sesh:clientId";
 
@@ -166,6 +173,7 @@ function Room() {
   const [searching, setSearching] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatMuted, setChatMuted] = useState(
     () => localStorage.getItem(CHAT_MUTE_STORAGE_KEY) === "1",
@@ -342,7 +350,9 @@ function Room() {
     if (currentState === PlayerState.ENDED) {
       const duration = playerRef.current.getDuration();
       if (duration > 0 && target >= duration - 1) {
-        if (state.isPlaying) socket.emit("video:ended", { time: duration });
+        if (state.isPlaying) {
+          socket.emit("video:ended", { time: duration, videoId: videoIdRef.current });
+        }
         return;
       }
     }
@@ -483,7 +493,12 @@ function Room() {
               if ("mediaSession" in navigator) {
                 navigator.mediaSession.playbackState = "paused";
               }
-              socket.emit("video:ended", { time: playerRef.current.getDuration() });
+              // videoId lets the server treat the room's many end reports as
+              // one: the first advances the queue, the rest no longer match.
+              socket.emit("video:ended", {
+                time: playerRef.current.getDuration(),
+                videoId: videoIdRef.current,
+              });
               return;
             }
             if (event.data !== PlayerState.PLAYING && event.data !== PlayerState.PAUSED) {
@@ -726,6 +741,16 @@ function Room() {
     });
   };
 
+  // The queue always arrives whole — it's small (≤50) and replacing it
+  // wholesale sidesteps every add/remove/reorder ordering question.
+  useEffect(() => {
+    const onQueue = (q: QueueItem[]) => setQueue(q);
+    socket.on("queue:state", onQueue);
+    return () => {
+      socket.off("queue:state", onQueue);
+    };
+  }, []);
+
   // Keep the newest message in view.
   const chatListRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -827,6 +852,31 @@ function Room() {
       selfLoadRef.current = id;
     }
     setVideoId(id);
+  };
+
+  // Add a video to the shared queue. If nothing's playing (or the current
+  // video already finished, so no video:ended will ever fire again to drain
+  // the queue), queueing means "play it" — and going through loadVideo spends
+  // this click's autoplay permission on actually starting playback.
+  const queueVideo = async (id: string, title: string | null) => {
+    if (!videoId || playerRef.current?.getPlayerState() === PlayerState.ENDED) {
+      loadVideo(id);
+      return;
+    }
+    let resolved = title;
+    if (!resolved) {
+      // Pasted links arrive without a title; oembed resolves it keyless.
+      try {
+        const watchUrl = `https://www.youtube.com/watch?v=${id}`;
+        const res = await fetch(
+          `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`,
+        );
+        if (res.ok) resolved = ((await res.json()) as { title?: string }).title ?? null;
+      } catch {
+        // Queue it untitled.
+      }
+    }
+    socket.emit("queue:add", { videoId: id, title: resolved });
   };
 
   // One input serves both cases: a pasted YouTube link loads directly,
@@ -939,15 +989,28 @@ function Room() {
           }}
         />
         <button onClick={handleSubmit} disabled={searching}>
-          {searching ? "Searching..." : extractVideoId(urlInput) ? "Load" : "Search"}
+          {searching ? "Searching..." : extractVideoId(urlInput) ? "Play" : "Search"}
         </button>
+        {extractVideoId(urlInput) && videoId && (
+          <button
+            className="queue-link"
+            onClick={() => {
+              const id = extractVideoId(urlInput)!;
+              setUrlInput("");
+              setLoadError(null);
+              void queueVideo(id, null);
+            }}
+          >
+            Queue
+          </button>
+        )}
       </div>
       {loadError && <p className="load-error">{loadError}</p>}
 
       {searchResults && (
         <ul className="search-results">
           {searchResults.map((result) => (
-            <li key={result.videoId}>
+            <li key={result.videoId} className="search-result-row">
               <button className="search-result" onClick={() => loadVideo(result.videoId)}>
                 <img src={result.thumbnail} alt="" loading="lazy" />
                 <span className="search-result-info">
@@ -957,6 +1020,14 @@ function Room() {
                     {result.duration && ` · ${result.duration}`}
                   </span>
                 </span>
+              </button>
+              <button
+                className="search-result-queue"
+                title="Add to queue"
+                aria-label={`Add ${result.title} to queue`}
+                onClick={() => void queueVideo(result.videoId, result.title)}
+              >
+                +
               </button>
             </li>
           ))}
@@ -979,6 +1050,47 @@ function Room() {
             </>
           ) : (
             <p className="empty-state">Paste a YouTube link above to start a sesh.</p>
+          )}
+
+          {queue.length > 0 && (
+            <div className="queue">
+              <div className="queue-head">
+                Up next <span className="queue-count">{queue.length}</span>
+              </div>
+              <ul className="queue-list">
+                {queue.map((item, index) => (
+                  <li key={item.id} className="queue-item">
+                    <img
+                      src={`https://i.ytimg.com/vi/${item.videoId}/default.jpg`}
+                      alt=""
+                      loading="lazy"
+                    />
+                    <span className="queue-info">
+                      <span className="queue-title">{item.title ?? "YouTube video"}</span>
+                      <span className="queue-meta">
+                        #{index + 1} · added by {item.addedBy}
+                      </span>
+                    </span>
+                    <button
+                      className="queue-action"
+                      title="Play now"
+                      aria-label="Play now"
+                      onClick={() => socket.emit("queue:play", { id: item.id })}
+                    >
+                      ▶
+                    </button>
+                    <button
+                      className="queue-action"
+                      title="Remove from queue"
+                      aria-label="Remove from queue"
+                      onClick={() => socket.emit("queue:remove", { id: item.id })}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
 

@@ -12,6 +12,7 @@ Create a room, share the code, and everyone's player stays locked together — p
 
 - 🔗 **Instant rooms** — create a room, share the link or 6-character code, done
 - 🔍 **Built-in YouTube search** — search by title or just paste any YouTube link
+- ⏭️ **Shared queue** — everyone sees the same "Up next" list; add videos from search (**+**) or a pasted link, auto-play when the current one ends, play-now or remove anytime
 - ⚡ **Tight sync** — playback stays within tens of milliseconds across viewers
 - 💬 **Room chat** — side-by-side with the video on desktop, stacked below on mobile; as ephemeral as the room itself (history lives only while someone's in the room)
   - Consecutive messages from the same person group together, like any chat app
@@ -87,12 +88,12 @@ The repo includes a [`render.yaml`](render.yaml) blueprint — one web service t
 sesh/
 ├── client/          # React + Vite frontend
 │   └── src/
-│       ├── Room.tsx     # player, sync engine, search + chat UI
+│       ├── Room.tsx     # player, sync engine, search + queue + chat UI
 │       ├── Landing.tsx  # create/join screen
 │       ├── youtube.ts   # IFrame API loader + typings
 │       └── socket.ts    # Socket.IO client
 ├── server/          # Express + Socket.IO backend
 │   └── src/
-│       └── index.ts     # rooms, sync relay, chat, search proxy
+│       └── index.ts     # rooms, sync relay, queue, chat, search proxy
 └── render.yaml      # Render deploy blueprint
 ```
