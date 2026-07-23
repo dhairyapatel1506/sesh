@@ -35,6 +35,33 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+// Live traffic, straight from the process that already sees it all. Guarded
+// by STATS_TOKEN (set it in the Render dashboard; without it the endpoint
+// stays off). Counters are in-memory and reset on every deploy — same
+// lifetime as the rooms themselves.
+const serverStartedAt = Date.now();
+let pageViews = 0;
+
+app.get("/api/stats", (req, res) => {
+  const token = process.env.STATS_TOKEN;
+  if (!token) return res.status(503).json({ error: "stats disabled — set STATS_TOKEN" });
+  if (req.query.token !== token) return res.status(403).json({ error: "bad token" });
+  res.json({
+    now: Date.now(),
+    serverStartedAt,
+    pageViewsSinceBoot: pageViews,
+    connectedSockets: io.engine.clientsCount,
+    rooms: [...rooms.entries()].map(([roomId, room]) => ({
+      roomId,
+      upForMs: Date.now() - room.createdAt,
+      users: [...room.users.values()].map((u) => u.name),
+      videoId: room.state.videoId,
+      isPlaying: room.state.isPlaying,
+      queued: room.queue.length,
+    })),
+  });
+});
+
 type SearchResult = {
   videoId: string;
   title: string;
@@ -201,6 +228,7 @@ type Room = {
   messages: ChatMessage[];
   queue: QueueItem[];
   pendingStart: PendingStart | null;
+  createdAt: number; // when the room came into existence — drives the uptime display
 };
 
 const CHAT_MAX_LENGTH = 500;
@@ -223,6 +251,7 @@ function getOrCreateRoom(roomId: string): Room {
       messages: [],
       queue: [],
       pendingStart: null,
+      createdAt: Date.now(),
     };
     rooms.set(roomId, room);
   }
@@ -250,6 +279,7 @@ function estimatedRoomState(room: Room) {
     isPlaying,
     time: isPlaying ? time + (now - updatedAt) / 1000 : time,
     at: now,
+    createdAt: room.createdAt,
   };
 }
 
@@ -446,6 +476,18 @@ io.on("connection", (socket) => {
     startVideoForRoom(socket.data.roomId, room, item.videoId);
   });
 
+  // "I'm typing" is a stateless relay: the sender pings while composing
+  // (client-throttled), everyone else shows the indicator briefly and lets
+  // it expire — no "stopped typing" event needed.
+  socket.on("chat:typing", () => {
+    const room = currentRoom(socket);
+    const clientId = socket.data.clientId as string | undefined;
+    if (!room || !clientId) return;
+    const user = room.users.get(clientId);
+    if (!user) return;
+    socket.to(socket.data.roomId).emit("chat:typing", { clientId, name: user.name });
+  });
+
   socket.on("chat:message", ({ text }: { text: string }) => {
     const room = currentRoom(socket);
     const clientId = socket.data.clientId as string | undefined;
@@ -507,6 +549,9 @@ if (isProd) {
   const clientDist = path.join(__dirname, "../../client/dist");
   app.use(express.static(clientDist));
   app.get("*", (_req, res) => {
+    // Anything reaching here is a page navigation (assets were served
+    // above) — that's the page-view count for /api/stats.
+    pageViews++;
     res.sendFile(path.join(clientDist, "index.html"));
   });
 }

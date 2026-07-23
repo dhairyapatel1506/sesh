@@ -6,6 +6,7 @@ export type RoomState = {
   isPlaying: boolean;
   time: number;
   at: number; // server-clock ms at which `time` was accurate
+  createdAt?: number; // when the room came into existence (uptime display)
 };
 
 export type ChatMessage = {

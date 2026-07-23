@@ -544,14 +544,55 @@ button:disabled {
   left: 0;
   right: 0;
   z-index: 5;
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 0.1rem;
   padding: 0.4rem;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: var(--shadow);
+}
+
+.emoji-search {
+  width: 100%;
+  margin-bottom: 0.4rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: inherit;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.1rem;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.typing-line {
+  margin: 0 0 0.25rem;
+  padding: 0 0.25rem;
+  font-size: 0.78rem;
+  color: var(--muted, #888);
+}
+
+.typing-dots::after {
+  content: "";
+  animation: typing-dots 1.2s steps(4, end) infinite;
+}
+
+@keyframes typing-dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+}
+
+.room-uptime {
+  font-size: 0.78rem;
+  color: var(--muted, #888);
+  white-space: nowrap;
 }
 
 .emoji-panel button {

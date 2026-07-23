@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
 import { io, type Socket } from "socket.io-client";
 import { Mpv, probeAudioOutput } from "./mpv.js";
+import { applyShortcodes } from "./emoji.js";
 import { fetchTitle } from "./youtube.js";
 import type { ChatMessage, QueueItem, RoomState, RoomUser } from "./types.js";
 
@@ -22,6 +23,8 @@ export type UiState = {
   // denied join looks like an empty-but-working room.
   joined: boolean;
   joinDenied: string | null;
+  roomCreatedAt: number | null;
+  typers: string[]; // names currently typing (expire on their own)
   users: RoomUser[];
   messages: ChatMessage[];
   queue: QueueItem[];
@@ -46,6 +49,8 @@ export class Session extends EventEmitter {
     connected: false,
     joined: false,
     joinDenied: null,
+    roomCreatedAt: null,
+    typers: [],
     users: [],
     messages: [],
     queue: [],
@@ -81,6 +86,10 @@ export class Session extends EventEmitter {
   // periodic room resync reloads it; the counters stop us retrying forever.
   private loadFailures = new Map<string, number>();
   private stallTicks = 0;
+  // "X is typing" bookkeeping: senders ping while composing, entries expire
+  // 3s after the last ping — no "stopped typing" event exists.
+  private typersMap = new Map<string, { name: string; until: number }>();
+  private lastTypingSent = 0;
 
   constructor(opts: SessionOptions) {
     super();
@@ -177,6 +186,11 @@ export class Session extends EventEmitter {
     });
 
     this.socket.on("room:users", (users: RoomUser[]) => this.update({ users }));
+    this.socket.on("chat:typing", ({ clientId, name }: { clientId: string; name: string }) => {
+      if (clientId === this.clientId) return;
+      this.typersMap.set(clientId, { name, until: Date.now() + 3000 });
+      this.refreshTypers();
+    });
     this.socket.on("chat:history", (messages: ChatMessage[]) => this.update({ messages }));
     this.socket.on("chat:message", (message: ChatMessage) =>
       this.update({ messages: [...this.state.messages.slice(-99), message] }),
@@ -187,6 +201,9 @@ export class Session extends EventEmitter {
       // The server only sends room state to members — receiving it IS the
       // join confirmation.
       if (!this.state.joined) this.update({ joined: true, joinDenied: null });
+      if (state.createdAt && this.state.roomCreatedAt !== state.createdAt) {
+        this.update({ roomCreatedAt: state.createdAt });
+      }
       this.lastState = state;
       // Mid-prepare, the room legitimately sits paused at 0 on the new video;
       // "correcting" to that would pause the pre-buffer and stall the barrier.
@@ -262,6 +279,7 @@ export class Session extends EventEmitter {
     // The tight sync loop, plus UI position updates, on one cadence.
     this.loops.push(setInterval(() => void this.driftCheck(), LOCAL_DRIFT_CHECK_MS));
     this.loops.push(setInterval(() => this.socket.emit("resync:request"), RESYNC_INTERVAL_MS));
+    this.loops.push(setInterval(() => this.refreshTypers(), 1000));
 
     // Only now — with mpv up and every handler wired — join the network.
     this.socket.connect();
@@ -496,8 +514,24 @@ export class Session extends EventEmitter {
 
   // ---- user actions ----
 
+  private refreshTypers() {
+    const now = Date.now();
+    for (const [id, t] of this.typersMap) if (t.until <= now) this.typersMap.delete(id);
+    const names = [...this.typersMap.values()].map((t) => t.name);
+    if (names.join(",") !== this.state.typers.join(",")) this.update({ typers: names });
+  }
+
+  // Called by the UI on every chat keystroke; throttled here so the wire
+  // sees at most one ping per 1.5s.
+  notifyTyping() {
+    const now = Date.now();
+    if (now - this.lastTypingSent < 1500) return;
+    this.lastTypingSent = now;
+    this.socket.emit("chat:typing");
+  }
+
   sendChat(text: string) {
-    this.socket.emit("chat:message", { text });
+    this.socket.emit("chat:message", { text: applyShortcodes(text) });
   }
 
   async play() {

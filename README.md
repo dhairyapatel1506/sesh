@@ -20,9 +20,11 @@ Create a room, share the code, and everyone's player stays locked together — p
 - ⚡ **Tight sync** — playback stays within tens of milliseconds across viewers
 - 💬 **Room chat** — side-by-side with the video on desktop, stacked below on mobile; as ephemeral as the room itself (history lives only while someone's in the room)
   - Consecutive messages from the same person group together, like any chat app
+  - "…is typing" indicators, live as people compose
   - Away in another tab? The tab title shows an unread count, the favicon gets a red dot, and a soft ping sounds (mutable via the 🔔 toggle)
-  - Emoji picker built in — and emoji-only messages render big
+  - Searchable emoji picker built in, plus `:shortcodes:` (`:fire:` → 🔥) — and emoji-only messages render big
 - 👥 **Presence** — see who's in the room with you; names are first-come-first-served per room (no impersonating whoever's already there), picked fresh every visit — no accounts, nothing stored
+- ⏱️ **Room uptime** — every room shows how long it's been going
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
 - 🌗 **Automatic dark mode** — follows your system theme
 - 💻 **Terminal client** — join the same rooms from a terminal, audio-only ([see below](#terminal-client))
@@ -125,11 +127,13 @@ sesh                        # create a room
 sesh <ROOM-CODE>            # join one
 ```
 
-Type to chat; `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
+Type to chat (`:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, typing indicators included); `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, `/emoji`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
 
 ## Deploying
 
 The repo includes a [`render.yaml`](render.yaml) blueprint — one web service that builds both workspaces and serves the client's static build from Express. Set `YOUTUBE_API_KEY` in the dashboard (it's marked `sync: false` so it never lives in the repo).
+
+Optionally set a `STATS_TOKEN` env var to enable `GET /api/stats?token=…` — live connected sockets, active rooms (users, uptime, what's playing), and page views since the last deploy. Without the env var the endpoint stays off.
 
 ## Project structure
 

@@ -1,11 +1,14 @@
 import React, { useEffect, useReducer, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import type { Session } from "./session.js";
+import { searchEmojis, type Emoji } from "./emoji.js";
 import { extractVideoId, fetchTitle, formatTime, parseTime, search } from "./youtube.js";
 import type { SearchResult } from "./types.js";
 
+const CHAT_VISIBLE = 10;
+
 const HELP = [
-  ["<text>", "send a chat message"],
+  ["<text>", "send a chat message (:name: inserts emoji)"],
   ["/search <query>", "search YouTube"],
   ["/pick <n>", "play search result n for everyone"],
   ["/queue <n>", "add search result n to the queue"],
@@ -15,10 +18,23 @@ const HELP = [
   ["/skip", "jump to the next queued track"],
   ["/remove <n>", "remove queue item n"],
   ["/vol <0-130>", "local volume (only affects you)"],
+  ["/emoji [query]", "browse/search emoji + their :names:"],
+  ["PgUp / PgDn", "scroll chat history"],
   ["/help  /quit", "toggle this help / leave"],
 ] as const;
 
-function InputLine({ onSubmit }: { onSubmit: (line: string) => void }) {
+// "up 2h 14m" — coarse on purpose; nobody needs the seconds after an hour.
+function formatUptime(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function InputLine({ onSubmit, onType }: { onSubmit: (line: string) => void; onType: (line: string) => void }) {
   const [line, setLine] = useState("");
   useInput((input, key) => {
     if (key.return) {
@@ -28,13 +44,21 @@ function InputLine({ onSubmit }: { onSubmit: (line: string) => void }) {
       return;
     }
     if (key.backspace || key.delete) {
-      setLine((prev) => prev.slice(0, -1));
+      setLine((prev) => {
+        const next = prev.slice(0, -1);
+        onType(next);
+        return next;
+      });
       return;
     }
     if (key.ctrl || key.meta || key.escape || key.upArrow || key.downArrow || key.leftArrow || key.rightArrow || key.tab) {
       return;
     }
-    setLine((prev) => prev + input);
+    setLine((prev) => {
+      const next = prev + input;
+      onType(next);
+      return next;
+    });
   });
   return (
     <Box>
@@ -59,7 +83,11 @@ export function App({
   const { exit } = useApp();
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [emojiResults, setEmojiResults] = useState<Emoji[] | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [chatScroll, setChatScroll] = useState(0);
+  const [dotFrame, setDotFrame] = useState(0);
+  const [clock, setClock] = useState(Date.now());
 
   useEffect(() => {
     session.on("update", rerender);
@@ -68,15 +96,36 @@ export function App({
     };
   }, [session]);
 
-  // Escape clears whatever panel is taking up space.
+  const s = session.state;
+
+  // Terminal "animation" is just re-rendering on a timer: cycle the typing
+  // dots while anyone's typing, tick the uptime clock once a second.
+  useEffect(() => {
+    if (s.typers.length === 0) return;
+    const t = setInterval(() => setDotFrame((f) => (f + 1) % 3), 400);
+    return () => clearInterval(t);
+  }, [s.typers.length > 0]);
+  useEffect(() => {
+    if (!s.roomCreatedAt) return;
+    const t = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [s.roomCreatedAt]);
+
+  // Escape clears whatever panel is taking up space; PgUp/PgDn walk the
+  // chat history (a windowed slice anchored to the newest message).
   useInput((_input, key) => {
     if (key.escape) {
       setShowHelp(false);
       setResults(null);
+      setEmojiResults(null);
+    }
+    if (key.pageUp) {
+      setChatScroll((o) => Math.min(o + 5, Math.max(0, s.messages.length - CHAT_VISIBLE)));
+    }
+    if (key.pageDown) {
+      setChatScroll((o) => Math.max(0, o - 5));
     }
   });
-
-  const s = session.state;
 
   const handle = (line: string) => {
     // Nothing typed at the prompt is allowed to take down the whole TUI.
@@ -166,6 +215,12 @@ export function App({
         void session.setVolume(volume);
         break;
       }
+      case "emoji": {
+        const found = searchEmojis(arg);
+        if (!found.length) return session.setStatus(`no emoji match "${arg}"`);
+        setEmojiResults(found.slice(0, 24));
+        break;
+      }
       case "help":
         setShowHelp((v) => !v);
         break;
@@ -212,6 +267,7 @@ export function App({
           </Text>
           <Text color="gray"> · room </Text>
           <Text bold>{roomId}</Text>
+          {s.roomCreatedAt && <Text color="gray"> · up {formatUptime(clock - s.roomCreatedAt)}</Text>}
         </Text>
         <Text color={s.connected ? "green" : "yellow"}>{s.connected ? "connected" : "connecting…"}</Text>
       </Box>
@@ -253,6 +309,25 @@ export function App({
         </Box>
       )}
 
+      {/* Emoji browser */}
+      {emojiResults && (
+        <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+          <Text color="yellow" bold>
+            emoji · type :name: in a message · Esc closes
+          </Text>
+          {Array.from({ length: Math.ceil(emojiResults.length / 4) }, (_, row) => (
+            <Text key={row}>
+              {emojiResults.slice(row * 4, row * 4 + 4).map((e) => (
+                <Text key={e.char}>
+                  {e.char}
+                  <Text color="gray"> :{e.names[0]}:{" ".repeat(Math.max(1, 16 - e.names[0].length))}</Text>
+                </Text>
+              ))}
+            </Text>
+          ))}
+        </Box>
+      )}
+
       {/* Queue + chat */}
       <Box>
         <Box borderStyle="round" borderColor="blue" paddingX={1} flexDirection="column" width="40%">
@@ -273,15 +348,32 @@ export function App({
         <Box borderStyle="round" borderColor="green" paddingX={1} flexDirection="column" flexGrow={1}>
           <Text color="green" bold>
             chat
+            {(() => {
+              // Windowed slice anchored to the newest message; PgUp walks back.
+              const total = s.messages.length;
+              const scroll = Math.min(chatScroll, Math.max(0, total - CHAT_VISIBLE));
+              if (scroll > 0) return <Text color="yellow"> · viewing history ({scroll} newer below — PgDn)</Text>;
+              if (total > CHAT_VISIBLE) return <Text color="gray"> · PgUp for history</Text>;
+              return null;
+            })()}
           </Text>
-          {s.messages.slice(-10).map((m) => (
-            <Text key={m.id} wrap="truncate">
+          {(() => {
+            const total = s.messages.length;
+            const scroll = Math.min(chatScroll, Math.max(0, total - CHAT_VISIBLE));
+            return s.messages.slice(Math.max(0, total - CHAT_VISIBLE - scroll), total - scroll || undefined);
+          })().map((m) => (
+            <Text key={m.id}>
               <Text color={m.senderId === session.clientId ? "green" : "cyan"} bold>
                 {m.name}:
               </Text>{" "}
               {m.text}
             </Text>
           ))}
+          {s.typers.length > 0 && (
+            <Text color="gray" italic>
+              {s.typers.join(", ")} typing{".".repeat(dotFrame + 1)}
+            </Text>
+          )}
         </Box>
       </Box>
 
@@ -304,7 +396,13 @@ export function App({
         </Box>
       )}
 
-      <InputLine onSubmit={handle} />
+      <InputLine
+        onSubmit={handle}
+        onType={(line) => {
+          // Only real chat text counts as "typing" — commands don't.
+          if (line && !line.startsWith("/")) session.notifyTyping();
+        }}
+      />
       <Text color="gray">
         type to chat · /help for commands · ctrl+c to leave · share: {serverUrl.replace(/^https?:\/\//, "")}/room/{roomId}
       </Text>

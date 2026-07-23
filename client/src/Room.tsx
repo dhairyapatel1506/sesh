@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { API_BASE, socket } from "./socket";
+import { applyShortcodes, searchEmojis } from "./emoji";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import "./App.css";
 
@@ -58,14 +59,19 @@ const CHAT_MUTE_STORAGE_KEY = "sesh:chatMuted";
 // group — name shown once, bubbles tucked together.
 const CHAT_GROUP_WINDOW_MS = 5 * 60_000;
 
-// A curated grid beats a full picker library: zero bundle weight, and the OS
-// emoji keyboard covers everything else.
-const EMOJI_CHOICES = [
-  "😂", "🤣", "😊", "😍", "🥰", "😎", "🤔", "🙄",
-  "😭", "😅", "🙃", "😮", "😴", "🥳", "😤", "🤯",
-  "❤️", "🔥", "💀", "💯", "👍", "👎", "👏", "🙌",
-  "🙏", "👀", "✨", "🎉", "🎶", "🍿", "🍕", "☕",
-];
+// The emoji set lives in emoji.ts — searchable by name, and :shortcodes:
+// in outgoing messages are expanded on send.
+
+// "up 2h 14m" — coarse on purpose; nobody needs the seconds after an hour.
+function formatUptime(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
 
 // A message that's nothing but a few emoji renders big and bubble-less.
 // Emoji_Component alone (digits, skin tones, flag letters) doesn't count —
@@ -166,6 +172,11 @@ function Room() {
   const [nameInput, setNameInput] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [joined, setJoined] = useState(false);
+  const [roomCreatedAt, setRoomCreatedAt] = useState<number | null>(null);
+  const [uptimeTick, setUptimeTick] = useState(Date.now());
+  const [typers, setTypers] = useState<{ clientId: string; name: string; until: number }[]>([]);
+  const [emojiQuery, setEmojiQuery] = useState("");
+  const lastTypingSentRef = useRef(0);
   const [users, setUsers] = useState<User[]>([]);
   const [linkCopied, setLinkCopied] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
@@ -406,20 +417,44 @@ function Room() {
   // server's room:state reply (its answer to a successful join). Without
   // this, a to-be-denied join flashes the room for a split second.
   useEffect(() => {
-    const onConfirmed = () => setJoined(true);
+    const onConfirmed = (state: { createdAt?: number }) => {
+      setJoined(true);
+      if (state?.createdAt) setRoomCreatedAt(state.createdAt);
+    };
     const onDenied = ({ reason }: { reason: string }) => {
       sessionStorage.removeItem(NAME_STORAGE_KEY);
       setNickname("");
       setJoined(false);
       setNameError(reason);
     };
+    // "X is typing" pings: remember each briefly and let them expire — a
+    // sender that stops typing simply stops pinging.
+    const onTyping = ({ clientId, name }: { clientId: string; name: string }) => {
+      setTypers((prev) => [
+        ...prev.filter((t) => t.clientId !== clientId),
+        { clientId, name, until: Date.now() + 3000 },
+      ]);
+    };
     socket.on("room:state", onConfirmed);
     socket.on("room:join-denied", onDenied);
+    socket.on("chat:typing", onTyping);
+    const prune = window.setInterval(() => {
+      setTypers((prev) => (prev.some((t) => t.until <= Date.now()) ? prev.filter((t) => t.until > Date.now()) : prev));
+    }, 1000);
     return () => {
       socket.off("room:state", onConfirmed);
       socket.off("room:join-denied", onDenied);
+      socket.off("chat:typing", onTyping);
+      window.clearInterval(prune);
     };
   }, []);
+
+  // One-second heartbeat for the room-uptime display.
+  useEffect(() => {
+    if (!roomCreatedAt) return;
+    const t = window.setInterval(() => setUptimeTick(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [roomCreatedAt]);
 
   // Join the room once a nickname is known, and rejoin on every (re)connect —
   // a fresh socket id after a reconnect has no room membership on the server.
@@ -839,7 +874,7 @@ function Room() {
   }, [messages]);
 
   const sendChat = () => {
-    const text = chatInput.trim();
+    const text = applyShortcodes(chatInput.trim());
     if (!text) return;
     socket.emit("chat:message", { text });
     setChatInput("");
@@ -1057,6 +1092,7 @@ function Room() {
         </h1>
         <div className="header-meta">
           <span className="room-code">{roomId}</span>
+          {roomCreatedAt && <span className="room-uptime">up {formatUptime(uptimeTick - roomCreatedAt)}</span>}
           <span className={connected ? "ok" : "bad"}>
             {connected ? "connected" : "reconnecting…"}
           </span>
@@ -1248,20 +1284,36 @@ function Room() {
                 })
               )}
             </div>
+            {typers.length > 0 && (
+              <p className="typing-line">
+                {typers.map((t) => t.name).join(", ")} {typers.length === 1 ? "is" : "are"} typing
+                <span className="typing-dots" />
+              </p>
+            )}
             <div className="chat-bar-wrap">
               {emojiOpen && (
                 <div className="emoji-panel">
-                  {EMOJI_CHOICES.map((emoji) => (
-                    <button
-                      key={emoji}
-                      onClick={() => {
-                        setChatInput((v) => v + emoji);
-                        chatInputRef.current?.focus();
-                      }}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
+                  <input
+                    className="emoji-search"
+                    value={emojiQuery}
+                    onChange={(e) => setEmojiQuery(e.target.value)}
+                    placeholder="Search emoji…"
+                    autoFocus
+                  />
+                  <div className="emoji-grid">
+                    {searchEmojis(emojiQuery).map((e) => (
+                      <button
+                        key={e.char}
+                        title={`:${e.names[0]}:`}
+                        onClick={() => {
+                          setChatInput((v) => v + e.char);
+                          chatInputRef.current?.focus();
+                        }}
+                      >
+                        {e.char}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               <div className="load-bar chat-bar">
@@ -1275,7 +1327,15 @@ function Room() {
                 <input
                   ref={chatInputRef}
                   value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
+                  onChange={(e) => {
+                    setChatInput(e.target.value);
+                    // Composing → ping "typing" at most every 1.5s; receivers
+                    // expire it 3s after the last ping.
+                    if (e.target.value && Date.now() - lastTypingSentRef.current > 1500) {
+                      lastTypingSentRef.current = Date.now();
+                      socket.emit("chat:typing");
+                    }
+                  }}
                   placeholder="Send a message..."
                   maxLength={500}
                   onKeyDown={(e) => {
