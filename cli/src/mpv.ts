@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createConnection, type Socket } from "node:net";
 import { EventEmitter } from "node:events";
 import os from "node:os";
@@ -10,6 +10,25 @@ import path from "node:path";
 type MpvResponse = { request_id?: number; error?: string; data?: unknown; event?: string };
 
 export class MpvError extends Error {}
+
+// Plays 0.2s of silence through the real audio output — no network involved.
+// Distinguishes "this video is broken" from "this machine's audio is broken"
+// (WSLg's audio relay wedging is a repeat offender).
+export function probeAudioOutput(): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(
+      "mpv",
+      [
+        "--no-video",
+        "--volume=0",
+        ...(process.env.SESH_MPV_ARGS ? process.env.SESH_MPV_ARGS.split(/\s+/) : []),
+        "av://lavfi:sine=frequency=440:duration=0.2",
+      ],
+      { timeout: 10000 },
+      (err) => resolve(!err),
+    );
+  });
+}
 
 export class Mpv extends EventEmitter {
   private proc: ChildProcess;

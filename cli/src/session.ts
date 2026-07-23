@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
 import { io, type Socket } from "socket.io-client";
-import { Mpv } from "./mpv.js";
+import { Mpv, probeAudioOutput } from "./mpv.js";
 import { fetchTitle } from "./youtube.js";
 import type { ChatMessage, QueueItem, RoomState, RoomUser } from "./types.js";
 
@@ -292,10 +292,23 @@ export class Session extends EventEmitter {
     this.currentVideo = null;
     this.update({ isPlaying: false });
     if (failures >= 3) {
-      this.setStatus("this video won't play here — /skip it? (is yt-dlp up to date?)", { sticky: true });
+      void this.diagnoseGiveUp();
     } else {
       this.setStatus(`playback failed — retrying (${failures}/3)`);
     }
+  }
+
+  // Three strikes — figure out WHICH problem this machine has before
+  // pointing the user somewhere useless.
+  private async diagnoseGiveUp() {
+    this.setStatus("playback keeps failing — diagnosing…", { sticky: true });
+    const audioOk = await probeAudioOutput();
+    this.setStatus(
+      audioOk
+        ? "this video won't play here — /skip it? (is yt-dlp up to date?)"
+        : "your audio output is broken (WSLg hiccup) — PowerShell: wsl --shutdown, reopen terminal, relaunch sesh",
+      { sticky: true },
+    );
   }
 
   // Bring mpv in line with an authoritative snapshot. Hard corrections only —
