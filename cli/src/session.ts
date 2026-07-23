@@ -60,6 +60,11 @@ export class Session extends EventEmitter {
   private lastState: RoomState | null = null;
   private currentVideo: string | null = null; // what mpv has loaded
   private prepare: string | null = null; // videoId pre-buffering for a barrier start
+  // A locally initiated play-now that is still buffering, not yet announced.
+  // The periodic resync merely restates the room's past — it must not stomp
+  // an in-flight pick. Real remote actions (video:load/play/pause/prepare)
+  // DO cancel it: fresh human intent wins.
+  private pendingLocal: string | null = null;
   private clockOffset = 0;
   private rateResetTimer: ReturnType<typeof setTimeout> | undefined;
   private statusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -78,6 +83,10 @@ export class Session extends EventEmitter {
     // flushes them on connect, which is exactly right for someone typing
     // during a slow startup.
     this.socket = io(opts.serverUrl, { autoConnect: false, transports: ["websocket", "polling"] });
+  }
+
+  private dbg(...args: unknown[]) {
+    if (process.env.SESH_DEBUG) console.error("[dbg]", ...args);
   }
 
   private update(patch: Partial<UiState>) {
@@ -155,11 +164,19 @@ export class Session extends EventEmitter {
       // Mid-prepare, the room legitimately sits paused at 0 on the new video;
       // "correcting" to that would pause the pre-buffer and stall the barrier.
       if (this.prepare && this.prepare === state.videoId && !state.isPlaying) return;
+      // A resync describing the pre-announcement past must not cancel a
+      // local pick that's still buffering.
+      if (this.pendingLocal && state.videoId !== this.pendingLocal) {
+        this.dbg("resync skipped: pendingLocal", this.pendingLocal);
+        return;
+      }
+      this.dbg("resync applying", state.videoId, state.isPlaying);
       void this.applyState(state);
     });
 
     this.socket.on("video:load", ({ videoId }: { videoId: string }) => {
       this.prepare = null;
+      this.pendingLocal = null;
       this.lastState = { videoId, isPlaying: true, time: 0, at: this.serverNow() };
       void this.applyState(this.lastState);
     });
@@ -168,6 +185,7 @@ export class Session extends EventEmitter {
       "video:play",
       ({ time, at, videoId }: { time: number; at: number; videoId?: string | null }) => {
         this.prepare = null;
+        this.pendingLocal = null;
         this.lastState = {
           videoId: videoId ?? this.currentVideo,
           isPlaying: true,
@@ -182,6 +200,7 @@ export class Session extends EventEmitter {
       "video:pause",
       ({ time, at, videoId }: { time: number; at: number; videoId?: string | null }) => {
         this.prepare = null;
+        this.pendingLocal = null;
         this.lastState = {
           videoId: videoId ?? this.currentVideo,
           isPlaying: false,
@@ -196,6 +215,7 @@ export class Session extends EventEmitter {
     // wait for the barrier's video:play.
     this.socket.on("video:prepare", ({ videoId }: { videoId: string }) => {
       this.prepare = videoId;
+      this.pendingLocal = null;
       this.lastState = { videoId, isPlaying: false, time: 0, at: this.serverNow() };
       void (async () => {
         try {
@@ -286,6 +306,7 @@ export class Session extends EventEmitter {
   // but give up per-video after 3 attempts instead of hammering forever.
   private noteLoadFailure() {
     const video = this.currentVideo;
+    this.dbg("noteLoadFailure", video);
     if (!video) return;
     const failures = (this.loadFailures.get(video) ?? 0) + 1;
     this.loadFailures.set(video, failures);
@@ -474,6 +495,7 @@ export class Session extends EventEmitter {
   async playNow(videoId: string, title?: string | null) {
     if (!this.mpv) return this.setStatus("player still starting\u2026");
     this.prepare = null;
+    this.pendingLocal = videoId;
     this.currentVideo = videoId;
     if (title) this.titleCache.set(videoId, title);
     this.update({ videoId, title: this.titleCache.get(videoId) ?? null, isPlaying: false, position: 0 });
@@ -482,11 +504,18 @@ export class Session extends EventEmitter {
     try {
       await this.mpv.load(videoId, { paused: true });
       await this.waitForLoad(videoId);
-    } catch {
+    } catch (err) {
+      this.dbg("playNow load failed:", videoId, (err as Error).message);
+      if (this.pendingLocal === videoId) this.pendingLocal = null;
       this.noteLoadFailure();
       return;
     }
-    if (this.currentVideo !== videoId) return; // someone else took over while buffering
+    if (this.pendingLocal !== videoId || this.currentVideo !== videoId) {
+      this.dbg("playNow superseded:", videoId, "pendingLocal:", this.pendingLocal, "currentVideo:", this.currentVideo);
+      return;
+    }
+    this.pendingLocal = null;
+    this.dbg("playNow announcing", videoId);
     this.setStatus(null);
     this.lastState = { videoId, isPlaying: true, time: 0, at: this.serverNow() };
     this.socket.emit("video:load", { videoId });
