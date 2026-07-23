@@ -147,10 +147,7 @@ export class Session extends EventEmitter {
     void mpv.observe("eof-reached").catch(() => {});
     mpv.on("property-change", (msg: { name?: string; data?: unknown }) => {
       if (msg.name !== "eof-reached" || msg.data !== true) return;
-      this.socket.emit("video:ended", {
-        time: this.state.duration ?? this.lastState?.time ?? 0,
-        videoId: this.currentVideo,
-      });
+      void this.onEofReached();
     });
 
     this.socket.on("connect", async () => {
@@ -322,6 +319,25 @@ export class Session extends EventEmitter {
   // A load died (bad stream, stale yt-dlp, network). Forget what's loaded so
   // the next room:state resync reloads it — self-healing on a 5s cadence —
   // but give up per-video after 3 attempts instead of hammering forever.
+  // eof-reached is not proof the song finished: a starved stream (IP
+  // throttling) can "reach EOF" at 0:00 the moment its data dries up.
+  // Reporting that as video:ended pauses the ROOM at 0:00 for everyone,
+  // with no retry — a silent dead end. Only a position at (or near) the
+  // duration counts as a real ending; anything else is a failed load.
+  private async onEofReached() {
+    const video = this.currentVideo;
+    const mpv = this.mpv;
+    if (!video || !mpv) return;
+    const [position, duration] = await Promise.all([mpv.getTime(), mpv.getDuration()]);
+    const playedThrough = position !== null && duration !== null && duration - position < 3;
+    this.dbg("eof-reached", video, "pos", position, "dur", duration, "genuine", playedThrough);
+    if (playedThrough) {
+      this.socket.emit("video:ended", { time: duration, videoId: video });
+    } else {
+      this.noteLoadFailure("timeout");
+    }
+  }
+
   private lastFailureKind: "error" | "timeout" = "error";
 
   private noteLoadFailure(kind: "error" | "timeout" = "error") {
@@ -413,6 +429,7 @@ export class Session extends EventEmitter {
 
     if (!state || !state.isPlaying || this.prepare || state.videoId !== this.currentVideo) {
       this.stallTicks = 0;
+      if (this.state.driftMs !== null) this.update({ driftMs: null }); // stale "syncing…" otherwise outlives playback
       return;
     }
     if (position === null) {
@@ -429,16 +446,18 @@ export class Session extends EventEmitter {
     const target = this.targetTime(state);
     const drift = target - position; // positive = we're behind
     const gap = Math.abs(drift);
-    this.update({ driftMs: Math.round(drift * 1000) });
 
     // Alone in the room there's nobody to sync WITH — correcting against the
     // server's echo of our own actions just causes audible jumps (the clock
     // offset estimate is never perfect). Coast; corrections resume the
-    // moment a second listener joins.
+    // moment a second listener joins. No drift display either: "syncing…"
+    // against your own echo is noise.
     if (this.state.users.length <= 1) {
+      if (this.state.driftMs !== null) this.update({ driftMs: null });
       await this.resetSpeed().catch(() => {});
       return;
     }
+    this.update({ driftMs: Math.round(drift * 1000) });
 
     try {
       if (gap < DRIFT_TOLERANCE_SECONDS) {
