@@ -107,6 +107,18 @@ sesh <ROOM-CODE>            # join one
 
 Type to chat; `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
 
+### Windows-native (no WSL audio)
+
+The CLI also runs on plain Windows — mpv talks straight to WASAPI, which sidesteps WSL's occasionally flaky audio relay entirely. mpv's IPC rides a named pipe instead of a unix socket; the client handles both.
+
+```powershell
+winget install shinchiro.mpv yt-dlp.yt-dlp.nightly DenoLand.Deno
+# with Node installed, run the built CLI (a WSL checkout works via \\wsl.localhost):
+node <path-to-repo>\cli\dist\index.js <ROOM-CODE>
+```
+
+Wrap that last line in a `sesh.cmd` somewhere on your PATH and it feels identical to the Linux install.
+
 ## Deploying
 
 The repo includes a [`render.yaml`](render.yaml) blueprint — one web service that builds both workspaces and serves the client's static build from Express. Set `YOUTUBE_API_KEY` in the dashboard (it's marked `sync: false` so it never lives in the repo).

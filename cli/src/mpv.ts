@@ -65,8 +65,13 @@ export class Mpv extends EventEmitter {
 
   static async spawn(): Promise<Mpv> {
     // pid alone isn't unique enough — one process can host several sessions
-    // (tests do), and each needs its own mpv.
-    const socketPath = path.join(os.tmpdir(), `sesh-mpv-${process.pid}-${Mpv.spawnCount++}.sock`);
+    // (tests do), and each needs its own mpv. On Windows, mpv's JSON IPC
+    // rides a named pipe instead of a unix socket — same protocol, and
+    // node's net module connects to both with the same API.
+    const socketPath =
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\sesh-mpv-${process.pid}-${Mpv.spawnCount++}`
+        : path.join(os.tmpdir(), `sesh-mpv-${process.pid}-${Mpv.spawnCount++}.sock`);
     const proc = spawn(
       "mpv",
       [
@@ -89,7 +94,15 @@ export class Mpv extends EventEmitter {
     );
 
     const spawnError = new Promise<never>((_, reject) => {
-      proc.on("error", () => reject(new MpvError("mpv isn't installed (try: sudo apt install mpv yt-dlp)")));
+      proc.on("error", () =>
+        reject(
+          new MpvError(
+            process.platform === "win32"
+              ? "mpv isn't installed (try: winget install mpv.net or scoop install mpv)"
+              : "mpv isn't installed (try: sudo apt install mpv yt-dlp)",
+          ),
+        ),
+      );
       proc.on("exit", (code) => reject(new MpvError(`mpv exited immediately (code ${code})`)));
     });
 
