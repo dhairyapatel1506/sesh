@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, render, Text, useInput } from "ink";
@@ -6,23 +7,53 @@ import { Session } from "./session.js";
 import { App } from "./ui.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-// WSL's audio relay (WSLg) wedges often enough that sesh refuses to run
-// there rather than fail mysteriously. On Windows, run it from
-// PowerShell/Windows Terminal — mpv talks straight to WASAPI. Native Linux
-// is unaffected. (Automated tests import Session directly and skip this.)
-const isWsl =
-  process.platform === "linux" &&
-  (os.release().toLowerCase().includes("microsoft") || !!process.env.WSL_DISTRO_NAME);
-if (isWsl && !process.env.SESH_ALLOW_WSL) {
-  console.error(
-    "sesh doesn't run under WSL — its audio relay is too unreliable.\n" +
-      "Run it from PowerShell / Windows Terminal instead (see README → Terminal client → Windows).\n" +
-      "(Developers: set SESH_ALLOW_WSL=1 to override.)",
+const DEFAULT_SERVER = "https://sesh.dhairya.cloud";
+
+// WSL's audio relay (WSLg) wedges often enough that sesh won't play there.
+// Instead of failing mysteriously, hand the session off to the Windows-native
+// install (mpv → WASAPI): open a new Windows Terminal tab running the same
+// command. Native Linux is unaffected; automated tests import Session
+// directly and never reach this.
+function isWsl(): boolean {
+  return (
+    process.platform === "linux" &&
+    (os.release().toLowerCase().includes("microsoft") || !!process.env.WSL_DISTRO_NAME)
   );
-  process.exit(1);
 }
 
-const DEFAULT_SERVER = "https://sesh.dhairya.cloud";
+function windowsHas(command: string): boolean {
+  try {
+    execFileSync("where.exe", [command], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function handOffToWindows(args: string[]): never {
+  if (!windowsHas("sesh")) {
+    console.error(
+      "sesh can't play audio reliably under WSL, and no Windows-side install was found to hand off to.\n" +
+        "Install it in PowerShell (see README → Terminal client → Windows), then `sesh` here will open it there.\n" +
+        "(Developers: set SESH_ALLOW_WSL=1 to force running in WSL.)",
+    );
+    process.exit(1);
+  }
+  const quoted = args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
+  // `|| pause` keeps the window around if sesh fails, so errors stay readable.
+  const winCmd = `sesh ${quoted} || pause`;
+  // cwd must be a Windows-visible path or every interop spawn whines about
+  // UNC working directories.
+  const opts = { cwd: "/mnt/c", detached: true, stdio: "ignore" as const };
+  if (windowsHas("wt")) {
+    spawn("wt.exe", ["new-tab", "--title", "Sesh", "cmd", "/c", winCmd], opts).unref();
+    console.log("sesh doesn't play audio reliably under WSL — opened it in a new Windows Terminal tab instead.");
+  } else {
+    spawn("cmd.exe", ["/c", "start", "Sesh", "cmd", "/c", winCmd], opts).unref();
+    console.log("sesh doesn't play audio reliably under WSL — opened it in a Windows console instead.");
+  }
+  process.exit(0);
+}
 
 // Same alphabet as the web landing (client/src/roomId.ts) — rooms are created
 // implicitly server-side on first join, so "creating" one is just joining a
@@ -122,6 +153,17 @@ function Root({ roomId, server, initialName }: { roomId: string; server: string;
 }
 
 const { roomId, name, server } = parseArgs(process.argv.slice(2));
+
+if (isWsl() && !process.env.SESH_ALLOW_WSL) {
+  // Reconstruct clean args (the generated room code included, so the tab
+  // that opens joins the room this invocation named).
+  handOffToWindows([
+    roomId,
+    ...(name ? ["--name", name] : []),
+    ...(server !== DEFAULT_SERVER ? ["--server", server] : []),
+  ]);
+}
+
 const config = loadConfig();
 
 const instance = render(<Root roomId={roomId} server={server} initialName={name ?? config.name ?? null} />);

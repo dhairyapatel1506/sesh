@@ -89,7 +89,7 @@ The free quota allows ~100 searches/day; repeated queries are served from an in-
 
 The `cli/` workspace is a full Sesh client for the terminal — same rooms, same sync, no browser. It plays the audio track through [mpv](https://mpv.io) (which resolves YouTube streams via yt-dlp) and renders a TUI with chat, the shared queue, search, and live sync stats. A terminal user and browser users can share a room; neither side can tell the difference.
 
-> **Note:** sesh runs on Windows (natively) and Linux — but it **refuses to run under WSL**, whose audio relay is too unreliable. On a Windows machine, install and run it from PowerShell.
+> **Note:** sesh runs on Windows (natively) and Linux. It won't play **under WSL** (whose audio relay is too unreliable) — running `sesh` there hands the session off to the Windows-native install, opening it in a new Windows Terminal tab. That needs the Windows install below to exist.
 
 ### Windows
 
