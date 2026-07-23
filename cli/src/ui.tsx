@@ -68,6 +68,14 @@ export function App({
     };
   }, [session]);
 
+  // Escape clears whatever panel is taking up space.
+  useInput((_input, key) => {
+    if (key.escape) {
+      setShowHelp(false);
+      setResults(null);
+    }
+  });
+
   const s = session.state;
 
   const handle = (line: string) => {
@@ -80,6 +88,8 @@ export function App({
   };
 
   const dispatch = (line: string) => {
+    // Help is a reference card, not a fixture — any next input dismisses it.
+    if (!/^\/help\b/i.test(line)) setShowHelp(false);
     if (!line.startsWith("/")) {
       session.sendChat(line);
       return;

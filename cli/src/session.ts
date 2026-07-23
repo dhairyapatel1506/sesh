@@ -370,6 +370,15 @@ export class Session extends EventEmitter {
     const gap = Math.abs(drift);
     this.update({ driftMs: Math.round(drift * 1000) });
 
+    // Alone in the room there's nobody to sync WITH — correcting against the
+    // server's echo of our own actions just causes audible jumps (the clock
+    // offset estimate is never perfect). Coast; corrections resume the
+    // moment a second listener joins.
+    if (this.state.users.length <= 1) {
+      await this.resetSpeed().catch(() => {});
+      return;
+    }
+
     try {
       if (gap < DRIFT_TOLERANCE_SECONDS) {
         await this.resetSpeed();
@@ -433,18 +442,34 @@ export class Session extends EventEmitter {
     }
   }
 
-  // Play immediately for everyone (the web client's "play now" path).
+  // Play for everyone (the web client's "play now" path) \u2014 but buffer FIRST,
+  // announce after. The web client must start on the click (autoplay
+  // permission); mpv has no such constraint, so nothing is announced until
+  // playback can actually begin at 0:00. Stream resolution takes seconds,
+  // and announcing up front meant joining your own video 3-6s late.
   async playNow(videoId: string, title?: string | null) {
     if (!this.mpv) return this.setStatus("player still starting\u2026");
     this.prepare = null;
     this.currentVideo = videoId;
     if (title) this.titleCache.set(videoId, title);
-    this.lastState = { videoId, isPlaying: true, time: 0, at: this.serverNow() };
-    this.update({ videoId, title: this.titleCache.get(videoId) ?? null, isPlaying: true, position: 0 });
+    this.update({ videoId, title: this.titleCache.get(videoId) ?? null, isPlaying: false, position: 0 });
     void this.resolveTitle(videoId);
+    this.setStatus("loading\u2026");
+    try {
+      await this.mpv.load(videoId, { paused: true });
+      await this.waitForLoad(videoId);
+    } catch {
+      this.noteLoadFailure();
+      return;
+    }
+    if (this.currentVideo !== videoId) return; // someone else took over while buffering
+    this.setStatus(null);
+    this.lastState = { videoId, isPlaying: true, time: 0, at: this.serverNow() };
     this.socket.emit("video:load", { videoId });
     try {
-      await this.mpv.load(videoId, { paused: false });
+      await this.mpv.seek(0);
+      await this.mpv.setPause(false);
+      this.update({ isPlaying: true });
     } catch {
       this.setStatus("couldn't start playback");
     }
