@@ -47,6 +47,10 @@ export class Mpv extends EventEmitter {
         // Audio-only stream keeps startup fast and bandwidth tiny.
         "--ytdl-format=bestaudio/best",
         "--cache=yes",
+        // On EOF, pause at the end instead of unloading the file — an
+        // unloaded player wedges every subsequent seek/play until a reload.
+        // End-of-video is detected via the eof-reached property instead.
+        "--keep-open=yes",
         // Escape hatch for odd audio setups (e.g. SESH_MPV_ARGS="--ao=pulse").
         ...(process.env.SESH_MPV_ARGS ? process.env.SESH_MPV_ARGS.split(/\s+/) : []),
       ],
@@ -143,6 +147,14 @@ export class Mpv extends EventEmitter {
 
   async stop(): Promise<void> {
     await this.command("stop");
+  }
+
+  private nextObserveId = 1;
+
+  // Watch an mpv property; changes arrive as "property-change" events
+  // carrying { name, data }.
+  async observe(name: string): Promise<void> {
+    await this.command("observe_property", this.nextObserveId++, name);
   }
 
   async setPause(paused: boolean): Promise<void> {

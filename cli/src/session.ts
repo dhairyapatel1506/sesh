@@ -117,11 +117,15 @@ export class Session extends EventEmitter {
     // Reasons other than eof: "stop" fires on every replacing loadfile,
     // "error" when yt-dlp can't resolve the video.
     mpv.on("end-file", (msg: { reason?: string }) => {
-      if (msg.reason === "error") {
-        this.noteLoadFailure();
-        return;
-      }
-      if (msg.reason !== "eof") return;
+      if (msg.reason === "error") this.noteLoadFailure();
+    });
+
+    // With --keep-open the file stays loaded at EOF and end-file never
+    // fires for a natural end — eof-reached flipping true is the signal.
+    // (Every client reports it; the server's videoId guard dedupes.)
+    void mpv.observe("eof-reached").catch(() => {});
+    mpv.on("property-change", (msg: { name?: string; data?: unknown }) => {
+      if (msg.name !== "eof-reached" || msg.data !== true) return;
       this.socket.emit("video:ended", {
         time: this.state.duration ?? this.lastState?.time ?? 0,
         videoId: this.currentVideo,
@@ -433,10 +437,17 @@ export class Session extends EventEmitter {
   async seekTo(time: number) {
     if (!this.mpv || !this.currentVideo) return;
     try {
-      await this.mpv.seek(time);
+      // A seek past the end means "near the end", not "break the player".
+      let target = Math.max(0, time);
+      const duration = await this.mpv.getDuration();
+      if (duration !== null && target > duration - 0.25) {
+        target = Math.max(0, duration - 0.25);
+        this.setStatus(`that's past the end — seeking to ${Math.floor(target)}s`);
+      }
+      await this.mpv.seek(target);
       const isPlaying = this.lastState?.isPlaying ?? false;
-      this.lastState = { videoId: this.currentVideo, isPlaying, time, at: this.serverNow() };
-      this.socket.emit(isPlaying ? "video:play" : "video:pause", { time });
+      this.lastState = { videoId: this.currentVideo, isPlaying, time: target, at: this.serverNow() };
+      this.socket.emit(isPlaying ? "video:play" : "video:pause", { time: target });
     } catch {
       this.setStatus("player not responding");
     }
