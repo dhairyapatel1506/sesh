@@ -161,6 +161,12 @@ export class Session extends EventEmitter {
     });
     this.socket.on("disconnect", () => this.update({ connected: false }));
 
+    // Someone else already holds this name in the room — the UI drops back
+    // to the name prompt and builds a fresh session with the new pick.
+    this.socket.on("room:join-denied", ({ reason }: { reason: string }) => {
+      this.emit("join-denied", reason);
+    });
+
     this.socket.on("room:users", (users: RoomUser[]) => this.update({ users }));
     this.socket.on("chat:history", (messages: ChatMessage[]) => this.update({ messages }));
     this.socket.on("chat:message", (message: ChatMessage) =>

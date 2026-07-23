@@ -164,6 +164,7 @@ function Room() {
   const [videoId, setVideoId] = useState<string | null>(null);
   const [nickname, setNickname] = useState(() => sessionStorage.getItem(NAME_STORAGE_KEY) ?? "");
   const [nameInput, setNameInput] = useState("");
+  const [nameError, setNameError] = useState<string | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [linkCopied, setLinkCopied] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
@@ -399,6 +400,20 @@ function Room() {
       }
     });
   };
+
+  // The server rejects a name another client already holds in this room —
+  // fall back to the name gate with the reason shown.
+  useEffect(() => {
+    const onDenied = ({ reason }: { reason: string }) => {
+      sessionStorage.removeItem(NAME_STORAGE_KEY);
+      setNickname("");
+      setNameError(reason);
+    };
+    socket.on("room:join-denied", onDenied);
+    return () => {
+      socket.off("room:join-denied", onDenied);
+    };
+  }, []);
 
   // Join the room once a nickname is known, and rejoin on every (re)connect —
   // a fresh socket id after a reconnect has no room membership on the server.
@@ -978,6 +993,7 @@ function Room() {
   const submitName = () => {
     const trimmed = nameInput.trim();
     if (!trimmed) return;
+    setNameError(null);
     sessionStorage.setItem(NAME_STORAGE_KEY, trimmed);
     setNickname(trimmed);
   };
@@ -1002,6 +1018,7 @@ function Room() {
         </header>
         <div className="name-gate">
           <p>Enter a name to join room {roomId}:</p>
+          {nameError && <p className="load-error">{nameError}</p>}
           <div className="load-bar">
             <input
               value={nameInput}

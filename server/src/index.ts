@@ -298,15 +298,29 @@ io.on("connection", (socket) => {
   socket.on(
     "room:join",
     ({ roomId, name, clientId }: { roomId: string; name: string; clientId: string }) => {
+      const room = getOrCreateRoom(roomId);
+      // Until real accounts exist, a name IS a person within a room — a
+      // second client can't take one that's in use. Same clientId is fine:
+      // that's the same user rejoining/reconnecting, not a collision.
+      const wanted = (typeof name === "string" ? name : "").trim();
+      const taken = [...room.users.entries()].some(
+        ([id, user]) => id !== clientId && user.name.toLowerCase() === wanted.toLowerCase(),
+      );
+      if (taken) {
+        socket.emit("room:join-denied", {
+          reason: `"${wanted}" is already taken in this room — pick another name`,
+        });
+        return;
+      }
+
       socket.data.roomId = roomId;
       socket.data.clientId = clientId;
       socket.join(roomId);
 
-      const room = getOrCreateRoom(roomId);
       // Keyed by a stable per-tab clientId (not socket.id) so a reconnect
       // (new socket.id) updates this user's existing entry instead of
       // appearing as a duplicate until the old socket's disconnect fires.
-      room.users.set(clientId, { name, socketId: socket.id });
+      room.users.set(clientId, { name: wanted, socketId: socket.id });
 
       socket.emit("room:state", estimatedRoomState(room));
       // Late joiners (and reconnects) get what was said before they arrived.

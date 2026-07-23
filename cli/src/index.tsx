@@ -5,7 +5,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, render, Text, useInput } from "ink";
 import { Session } from "./session.js";
 import { App } from "./ui.js";
-import { loadConfig, saveConfig } from "./config.js";
 
 const DEFAULT_SERVER = "https://sesh.dhairya.cloud";
 
@@ -99,7 +98,7 @@ function parseArgs(argv: string[]) {
   return { roomId: roomId.toUpperCase(), name, server: server.replace(/\/$/, "") };
 }
 
-function NamePrompt({ onDone }: { onDone: (name: string) => void }) {
+function NamePrompt({ error, onDone }: { error: string | null; onDone: (name: string) => void }) {
   const [value, setValue] = useState("");
   useInput((input, key) => {
     if (key.return) {
@@ -113,20 +112,24 @@ function NamePrompt({ onDone }: { onDone: (name: string) => void }) {
     }
   });
   return (
-    <Box borderStyle="round" borderColor="magenta" paddingX={1}>
-      <Text>
-        <Text color="magenta" bold>
-          What should we call you?{" "}
+    <Box flexDirection="column">
+      {error && <Text color="red">{error}</Text>}
+      <Box borderStyle="round" borderColor="magenta" paddingX={1}>
+        <Text>
+          <Text color="magenta" bold>
+            What should we call you?{" "}
+          </Text>
+          {value}
+          <Text color="gray">▏</Text>
         </Text>
-        {value}
-        <Text color="gray">▏</Text>
-      </Text>
+      </Box>
     </Box>
   );
 }
 
 function Root({ roomId, server, initialName }: { roomId: string; server: string; initialName: string | null }) {
   const [name, setName] = useState(initialName);
+  const [nameError, setNameError] = useState<string | null>(null);
   const session = useMemo(() => {
     if (!name) return null;
     const s = new Session({ serverUrl: server, roomId, name });
@@ -139,15 +142,23 @@ function Root({ roomId, server, initialName }: { roomId: string; server: string;
     return () => session?.destroy();
   }, [session]);
 
+  // Name already in use in this room — back to the prompt with the reason.
+  // (Names are deliberately never saved: no accounts yet, so every run is a
+  // fresh choice.)
+  useEffect(() => {
+    if (!session) return;
+    const onDenied = (reason: string) => {
+      setNameError(reason);
+      setName(null);
+    };
+    session.on("join-denied", onDenied);
+    return () => {
+      session.off("join-denied", onDenied);
+    };
+  }, [session]);
+
   if (!name) {
-    return (
-      <NamePrompt
-        onDone={(picked) => {
-          saveConfig({ ...loadConfig(), name: picked });
-          setName(picked);
-        }}
-      />
-    );
+    return <NamePrompt error={nameError} onDone={(picked) => setName(picked)} />;
   }
   return <App session={session!} roomId={roomId} serverUrl={server} />;
 }
@@ -164,8 +175,6 @@ if (isWsl() && !process.env.SESH_ALLOW_WSL) {
   ]);
 }
 
-const config = loadConfig();
-
-const instance = render(<Root roomId={roomId} server={server} initialName={name ?? config.name ?? null} />);
+const instance = render(<Root roomId={roomId} server={server} initialName={name} />);
 await instance.waitUntilExit();
 process.exit(0);

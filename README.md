@@ -22,7 +22,7 @@ Create a room, share the code, and everyone's player stays locked together — p
   - Consecutive messages from the same person group together, like any chat app
   - Away in another tab? The tab title shows an unread count, the favicon gets a red dot, and a soft ping sounds (mutable via the 🔔 toggle)
   - Emoji picker built in — and emoji-only messages render big
-- 👥 **Presence** — see who's in the room with you
+- 👥 **Presence** — see who's in the room with you; names are first-come-first-served per room (no impersonating whoever's already there), picked fresh every visit — no accounts, nothing stored
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
 - 🌗 **Automatic dark mode** — follows your system theme
 - 💻 **Terminal client** — join the same rooms from a terminal, audio-only ([see below](#terminal-client))
