@@ -90,10 +90,19 @@ The free quota allows ~100 searches/day; repeated queries are served from an in-
 The `cli/` workspace is a full Sesh client for the terminal — same rooms, same sync, no browser. It plays the audio track through [mpv](https://mpv.io) (which resolves YouTube streams via yt-dlp) and renders a TUI with chat, the shared queue, search, and live sync stats. A terminal user and browser users can share a room; neither side can tell the difference.
 
 ```bash
-sudo apt install mpv yt-dlp     # the playback engine
+# Playback engine — three pieces, all required:
+sudo apt install mpv
+# apt's yt-dlp is perpetually stale and YouTube breaks old versions — install the latest directly:
+curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp && chmod +x ~/.local/bin/yt-dlp
+# yt-dlp needs a JS runtime (deno) to solve YouTube's throttling challenges:
+curl -fsSL https://deno.land/install.sh | sh
+
+# The client itself:
 npm install && npm run build --workspace cli
-node cli/dist/index.js new              # create a room
-node cli/dist/index.js <ROOM-CODE>      # join one
+npm link --workspace cli    # puts `sesh` on your PATH
+
+sesh                        # create a room
+sesh <ROOM-CODE>            # join one
 ```
 
 Type to chat; `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.

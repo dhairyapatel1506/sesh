@@ -23,11 +23,11 @@ function usage(): never {
   console.log(`sesh — watch2gether from your terminal (audio mode)
 
 usage:
-  sesh new                                     # create a room
+  sesh                                         # create a room
   sesh <ROOM-CODE> [--name <you>] [--server <url>]
 
 examples:
-  sesh new
+  sesh
   sesh F3K9QX
   sesh F3K9QX --name dhairya
   sesh F3K9QX --server http://localhost:3001   # local dev server`);
@@ -46,8 +46,8 @@ function parseArgs(argv: string[]) {
     else if (!arg.startsWith("-") && !roomId) roomId = arg;
     else usage();
   }
-  if (!roomId) usage();
-  if (roomId.toLowerCase() === "new") roomId = generateRoomId();
+  // No room code (or the explicit "new") means "start a fresh room".
+  if (!roomId || roomId.toLowerCase() === "new") roomId = generateRoomId();
   return { roomId: roomId.toUpperCase(), name, server: server.replace(/\/$/, "") };
 }
 
