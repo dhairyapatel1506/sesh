@@ -93,7 +93,7 @@ The `cli/` workspace is a full Sesh client for the terminal — same rooms, same
 
 ### Windows
 
-mpv plays straight through WASAPI; mpv's IPC rides a named pipe instead of a unix socket, and the client handles both. Needs [Node.js](https://nodejs.org) ≥ 20.
+mpv plays straight through WASAPI; mpv's IPC rides a named pipe instead of a unix socket, and the client handles both. Needs [Node.js](https://nodejs.org) ≥ 20 and git (`winget install Git.Git`) — or grab the repo as a ZIP from GitHub instead.
 
 ```powershell
 # Playback engine — three pieces, all required (deno solves YouTube's throttling challenges):
