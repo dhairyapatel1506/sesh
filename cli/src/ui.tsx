@@ -187,6 +187,16 @@ export function App({
     );
   }
 
+  // Never render the room before the server confirms membership — a
+  // rejected join must look rejected, not like an empty room.
+  if (!s.joined) {
+    return (
+      <Box borderStyle="round" borderColor="magenta" paddingX={1}>
+        <Text color="gray">{s.connected ? `joining room ${roomId}…` : "connecting…"}</Text>
+      </Box>
+    );
+  }
+
   const drift =
     s.driftMs === null ? "" : Math.abs(s.driftMs) < 60 ? ` · synced (${s.driftMs}ms)` : ` · syncing…`;
 

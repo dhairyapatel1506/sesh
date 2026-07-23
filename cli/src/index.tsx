@@ -143,17 +143,22 @@ function Root({ roomId, server, initialName }: { roomId: string; server: string;
   }, [session]);
 
   // Name already in use in this room — back to the prompt with the reason.
-  // (Names are deliberately never saved: no accounts yet, so every run is a
-  // fresh choice.)
+  // Watched via state on every update (not a one-shot event), so the reset
+  // can't be missed regardless of when the denial arrives. (Names are
+  // deliberately never saved: no accounts yet, so every run is a fresh
+  // choice.)
   useEffect(() => {
     if (!session) return;
-    const onDenied = (reason: string) => {
-      setNameError(reason);
-      setName(null);
+    const check = () => {
+      if (session.state.joinDenied) {
+        setNameError(session.state.joinDenied);
+        setName(null);
+      }
     };
-    session.on("join-denied", onDenied);
+    session.on("update", check);
+    check(); // a denial may have landed before this effect ran
     return () => {
-      session.off("join-denied", onDenied);
+      session.off("update", check);
     };
   }, [session]);
 

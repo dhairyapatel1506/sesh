@@ -17,6 +17,11 @@ const LOCAL_DRIFT_CHECK_MS = 750;
 
 export type UiState = {
   connected: boolean;
+  // Membership is confirmed by the server (its room:state reply to our
+  // join), not assumed — the UI must not render the room before this, or a
+  // denied join looks like an empty-but-working room.
+  joined: boolean;
+  joinDenied: string | null;
   users: RoomUser[];
   messages: ChatMessage[];
   queue: QueueItem[];
@@ -39,6 +44,8 @@ export type SessionOptions = {
 export class Session extends EventEmitter {
   readonly state: UiState = {
     connected: false,
+    joined: false,
+    joinDenied: null,
     users: [],
     messages: [],
     queue: [],
@@ -161,9 +168,11 @@ export class Session extends EventEmitter {
     });
     this.socket.on("disconnect", () => this.update({ connected: false }));
 
-    // Someone else already holds this name in the room — the UI drops back
-    // to the name prompt and builds a fresh session with the new pick.
+    // Someone else already holds this name in the room. Carried in state
+    // (not just a one-shot event) so the UI can't miss it however the
+    // timing falls — it drops back to the name prompt with the reason.
     this.socket.on("room:join-denied", ({ reason }: { reason: string }) => {
+      this.update({ joinDenied: reason, joined: false });
       this.emit("join-denied", reason);
     });
 
@@ -175,6 +184,9 @@ export class Session extends EventEmitter {
     this.socket.on("queue:state", (queue: QueueItem[]) => this.update({ queue }));
 
     this.socket.on("room:state", (state: RoomState) => {
+      // The server only sends room state to members — receiving it IS the
+      // join confirmation.
+      if (!this.state.joined) this.update({ joined: true, joinDenied: null });
       this.lastState = state;
       // Mid-prepare, the room legitimately sits paused at 0 on the new video;
       // "correcting" to that would pause the pre-buffer and stall the barrier.

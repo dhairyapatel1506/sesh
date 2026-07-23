@@ -165,6 +165,7 @@ function Room() {
   const [nickname, setNickname] = useState(() => sessionStorage.getItem(NAME_STORAGE_KEY) ?? "");
   const [nameInput, setNameInput] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
+  const [joined, setJoined] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [linkCopied, setLinkCopied] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
@@ -401,16 +402,21 @@ function Room() {
     });
   };
 
-  // The server rejects a name another client already holds in this room —
-  // fall back to the name gate with the reason shown.
+  // Joins are confirmed, not assumed: the room UI renders only after the
+  // server's room:state reply (its answer to a successful join). Without
+  // this, a to-be-denied join flashes the room for a split second.
   useEffect(() => {
+    const onConfirmed = () => setJoined(true);
     const onDenied = ({ reason }: { reason: string }) => {
       sessionStorage.removeItem(NAME_STORAGE_KEY);
       setNickname("");
+      setJoined(false);
       setNameError(reason);
     };
+    socket.on("room:state", onConfirmed);
     socket.on("room:join-denied", onDenied);
     return () => {
+      socket.off("room:state", onConfirmed);
       socket.off("room:join-denied", onDenied);
     };
   }, []);
@@ -1005,7 +1011,10 @@ function Room() {
     });
   };
 
-  if (!nickname) {
+  if (!nickname || !joined) {
+    // A name is submitted but membership isn't confirmed yet — stay on the
+    // gate ("Joining…") rather than flashing a room the server may refuse.
+    const joining = Boolean(nickname);
     return (
       <div className="app">
         <header>
@@ -1025,9 +1034,12 @@ function Room() {
               onChange={(e) => setNameInput(e.target.value)}
               placeholder="Your name"
               onKeyDown={(e) => e.key === "Enter" && submitName()}
+              disabled={joining}
               autoFocus
             />
-            <button onClick={submitName}>Join</button>
+            <button onClick={submitName} disabled={joining}>
+              {joining ? "Joining…" : "Join"}
+            </button>
           </div>
         </div>
       </div>
