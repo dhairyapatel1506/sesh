@@ -16,6 +16,22 @@ function audioEnv(): NodeJS.ProcessEnv {
   return { ...process.env, PULSE_SERVER: "unix:/mnt/wslg/PulseServer" };
 }
 
+// On Windows the mpv installer (winget's shinchiro build) doesn't add
+// itself to PATH — resolve the binary from its known install locations
+// before falling back to plain PATH lookup.
+function mpvBinary(): string {
+  if (process.platform !== "win32") return "mpv";
+  const onPath = (process.env.PATH ?? "")
+    .split(";")
+    .some((dir) => dir && existsSync(path.join(dir, "mpv.exe")));
+  if (onPath) return "mpv";
+  const candidates = [
+    path.join(process.env.ProgramFiles ?? "C:\\Program Files", "MPV Player", "mpv.exe"),
+    path.join(process.env.LOCALAPPDATA ?? "", "Programs", "mpv", "mpv.exe"),
+  ];
+  return candidates.find((c) => existsSync(c)) ?? "mpv";
+}
+
 // mpv is controlled over its JSON IPC socket: newline-delimited JSON both
 // ways. Requests carry a request_id that the matching response echoes back;
 // everything else that arrives is an event broadcast.
@@ -29,7 +45,7 @@ export class MpvError extends Error {}
 export function probeAudioOutput(): Promise<boolean> {
   return new Promise((resolve) => {
     execFile(
-      "mpv",
+      mpvBinary(),
       [
         "--no-video",
         "--volume=0",
@@ -73,7 +89,7 @@ export class Mpv extends EventEmitter {
         ? `\\\\.\\pipe\\sesh-mpv-${process.pid}-${Mpv.spawnCount++}`
         : path.join(os.tmpdir(), `sesh-mpv-${process.pid}-${Mpv.spawnCount++}.sock`);
     const proc = spawn(
-      "mpv",
+      mpvBinary(),
       [
         "--no-video",
         "--idle=yes",
@@ -98,7 +114,7 @@ export class Mpv extends EventEmitter {
         reject(
           new MpvError(
             process.platform === "win32"
-              ? "mpv isn't installed (try: winget install mpv.net or scoop install mpv)"
+              ? "mpv isn't installed (try: winget install shinchiro.mpv)"
               : "mpv isn't installed (try: sudo apt install mpv yt-dlp)",
           ),
         ),
