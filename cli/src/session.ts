@@ -286,10 +286,15 @@ export class Session extends EventEmitter {
     const mpv = this.mpv;
     if (!mpv) return Promise.reject(new Error("mpv not ready"));
     return new Promise((resolve, reject) => {
+      // When YouTube drip-throttles an IP, extraction + the initial container
+      // probe can take tens of seconds while playback still works once
+      // started. Failing fast here triggers retries, and every retry is
+      // another yt-dlp extraction — which deepens the throttle. Be patient.
       const timeout = setTimeout(() => {
         cleanup();
         reject(new Error("load timed out"));
-      }, 15000);
+      }, 40000);
+      const slowNotice = setTimeout(() => this.setStatus("still loading — stream is slow…"), 8000);
       const onLoaded = () => {
         cleanup();
         resolve();
@@ -300,6 +305,7 @@ export class Session extends EventEmitter {
       };
       const cleanup = () => {
         clearTimeout(timeout);
+        clearTimeout(slowNotice);
         mpv.off("file-loaded", onLoaded);
         mpv.off("gone", onGone);
       };
@@ -316,10 +322,13 @@ export class Session extends EventEmitter {
   // A load died (bad stream, stale yt-dlp, network). Forget what's loaded so
   // the next room:state resync reloads it — self-healing on a 5s cadence —
   // but give up per-video after 3 attempts instead of hammering forever.
-  private noteLoadFailure() {
+  private lastFailureKind: "error" | "timeout" = "error";
+
+  private noteLoadFailure(kind: "error" | "timeout" = "error") {
     const video = this.currentVideo;
-    this.dbg("noteLoadFailure", video);
+    this.dbg("noteLoadFailure", video, kind);
     if (!video) return;
+    this.lastFailureKind = kind;
     const failures = (this.loadFailures.get(video) ?? 0) + 1;
     this.loadFailures.set(video, failures);
     this.currentVideo = null;
@@ -337,9 +346,11 @@ export class Session extends EventEmitter {
     this.setStatus("playback keeps failing — diagnosing…", { sticky: true });
     const audioOk = await probeAudioOutput();
     this.setStatus(
-      audioOk
-        ? "this video won't play here — /skip it? (is yt-dlp up to date?)"
-        : "your audio output is broken (WSLg hiccup) — PowerShell: wsl --shutdown, reopen terminal, relaunch sesh",
+      !audioOk
+        ? "your audio output is broken (WSLg hiccup) — PowerShell: wsl --shutdown, reopen terminal, relaunch sesh"
+        : this.lastFailureKind === "timeout"
+          ? "loads keep timing out — YouTube may be throttling this network; wait a while, then retry"
+          : "this video won't play here — /skip it? (is yt-dlp up to date?)",
       { sticky: true },
     );
   }
@@ -519,7 +530,7 @@ export class Session extends EventEmitter {
     } catch (err) {
       this.dbg("playNow load failed:", videoId, (err as Error).message);
       if (this.pendingLocal === videoId) this.pendingLocal = null;
-      this.noteLoadFailure();
+      this.noteLoadFailure((err as Error).message === "load timed out" ? "timeout" : "error");
       return;
     }
     if (this.pendingLocal !== videoId || this.currentVideo !== videoId) {
