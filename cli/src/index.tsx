@@ -7,13 +7,27 @@ import { loadConfig, saveConfig } from "./config.js";
 
 const DEFAULT_SERVER = "https://sesh.dhairya.cloud";
 
+// Same alphabet as the web landing (client/src/roomId.ts) — rooms are created
+// implicitly server-side on first join, so "creating" one is just joining a
+// fresh code.
+const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function generateRoomId(length = 6): string {
+  let id = "";
+  for (let i = 0; i < length; i++) {
+    id += ROOM_ALPHABET[Math.floor(Math.random() * ROOM_ALPHABET.length)];
+  }
+  return id;
+}
+
 function usage(): never {
   console.log(`sesh — watch2gether from your terminal (audio mode)
 
 usage:
+  sesh new                                     # create a room
   sesh <ROOM-CODE> [--name <you>] [--server <url>]
 
 examples:
+  sesh new
   sesh F3K9QX
   sesh F3K9QX --name dhairya
   sesh F3K9QX --server http://localhost:3001   # local dev server`);
@@ -33,6 +47,7 @@ function parseArgs(argv: string[]) {
     else usage();
   }
   if (!roomId) usage();
+  if (roomId.toLowerCase() === "new") roomId = generateRoomId();
   return { roomId: roomId.toUpperCase(), name, server: server.replace(/\/$/, "") };
 }
 

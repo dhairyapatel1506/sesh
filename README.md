@@ -92,7 +92,8 @@ The `cli/` workspace is a full Sesh client for the terminal — same rooms, same
 ```bash
 sudo apt install mpv yt-dlp     # the playback engine
 npm install && npm run build --workspace cli
-node cli/dist/index.js <ROOM-CODE> --name you
+node cli/dist/index.js new              # create a room
+node cli/dist/index.js <ROOM-CODE>      # join one
 ```
 
 Type to chat; `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.

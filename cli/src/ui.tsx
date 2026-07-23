@@ -274,7 +274,9 @@ export function App({
       )}
 
       <InputLine onSubmit={handle} />
-      <Text color="gray">type to chat · /help for commands · ctrl+c to leave</Text>
+      <Text color="gray">
+        type to chat · /help for commands · ctrl+c to leave · share: {serverUrl.replace(/^https?:\/\//, "")}/room/{roomId}
+      </Text>
     </Box>
   );
 }
