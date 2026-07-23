@@ -71,6 +71,15 @@ export function App({
   const s = session.state;
 
   const handle = (line: string) => {
+    // Nothing typed at the prompt is allowed to take down the whole TUI.
+    try {
+      dispatch(line);
+    } catch (err) {
+      session.setStatus(`error: ${(err as Error).message}`);
+    }
+  };
+
+  const dispatch = (line: string) => {
     if (!line.startsWith("/")) {
       session.sendChat(line);
       return;
@@ -182,7 +191,7 @@ export function App({
           <Text color="gray"> · room </Text>
           <Text bold>{roomId}</Text>
         </Text>
-        <Text color={s.connected ? "green" : "yellow"}>{s.connected ? "connected" : "reconnecting…"}</Text>
+        <Text color={s.connected ? "green" : "yellow"}>{s.connected ? "connected" : "connecting…"}</Text>
       </Box>
 
       {/* Now playing */}
