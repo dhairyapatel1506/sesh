@@ -196,7 +196,9 @@ export function App({
       <Box justifyContent="space-between">
         <Text>
           <Text color="magenta" bold>
-            ⏺ Sesh
+            {/* Wide glyphs render flush against the next char in many
+                terminals — the double space reads as one. */}
+            ⏺  Sesh
           </Text>
           <Text color="gray"> · room </Text>
           <Text bold>{roomId}</Text>
@@ -209,7 +211,7 @@ export function App({
         {s.videoId ? (
           <>
             <Text bold>
-              {s.isPlaying ? "▶ " : "⏸ "}
+              {s.isPlaying ? "▶  " : "⏸  "}
               {s.title ?? s.videoId}
             </Text>
             <Text color="gray">
