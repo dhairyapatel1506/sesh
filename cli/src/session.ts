@@ -123,6 +123,18 @@ export class Session extends EventEmitter {
 
     mpv.on("gone", () => this.update({ fatal: "mpv died — restart the client" }));
 
+    // Catch a dead audio output at launch (WSLg's relay wedges routinely on
+    // some machines) instead of three failed songs from now. Async — a
+    // wedged device takes ~10s to time out and shouldn't delay joining.
+    void probeAudioOutput().then((ok) => {
+      if (!ok) {
+        this.setStatus(
+          "audio output is broken (WSLg hiccup) — PowerShell: wsl --shutdown, reopen terminal, relaunch sesh",
+          { sticky: true },
+        );
+      }
+    });
+
     // Reasons other than eof: "stop" fires on every replacing loadfile,
     // "error" when yt-dlp can't resolve the video.
     mpv.on("end-file", (msg: { reason?: string }) => {
