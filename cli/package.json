@@ -1,0 +1,24 @@
+{
+  "name": "sesh-cli",
+  "version": "0.1.0",
+  "description": "Terminal client for Sesh — synced YouTube listening rooms from your terminal",
+  "type": "module",
+  "bin": {
+    "sesh": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.tsx"
+  },
+  "dependencies": {
+    "ink": "^6.0.0",
+    "react": "^19.0.0",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

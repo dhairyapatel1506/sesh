@@ -25,6 +25,7 @@ Create a room, share the code, and everyone's player stays locked together — p
 - 👥 **Presence** — see who's in the room with you
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
 - 🌗 **Automatic dark mode** — follows your system theme
+- 💻 **Terminal client** — join the same rooms from a terminal, audio-only ([see below](#terminal-client))
 
 ## How the sync works
 
@@ -84,6 +85,18 @@ YOUTUBE_API_KEY=your-key-here
 
 The free quota allows ~100 searches/day; repeated queries are served from an in-memory cache.
 
+## Terminal client
+
+The `cli/` workspace is a full Sesh client for the terminal — same rooms, same sync, no browser. It plays the audio track through [mpv](https://mpv.io) (which resolves YouTube streams via yt-dlp) and renders a TUI with chat, the shared queue, search, and live sync stats. A terminal user and browser users can share a room; neither side can tell the difference.
+
+```bash
+sudo apt install mpv yt-dlp     # the playback engine
+npm install && npm run build --workspace cli
+node cli/dist/index.js <ROOM-CODE> --name you
+```
+
+Type to chat; `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
+
 ## Deploying
 
 The repo includes a [`render.yaml`](render.yaml) blueprint — one web service that builds both workspaces and serves the client's static build from Express. Set `YOUTUBE_API_KEY` in the dashboard (it's marked `sync: false` so it never lives in the repo).
@@ -101,5 +114,10 @@ sesh/
 ├── server/          # Express + Socket.IO backend
 │   └── src/
 │       └── index.ts     # rooms, sync relay, queue, chat, search proxy
+├── cli/             # terminal client (Ink TUI + mpv audio engine)
+│   └── src/
+│       ├── session.ts   # socket + sync engine port
+│       ├── mpv.ts       # mpv JSON IPC wrapper
+│       └── ui.tsx       # panes: now playing, queue, chat, search
 └── render.yaml      # Render deploy blueprint
 ```
