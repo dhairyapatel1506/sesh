@@ -43,9 +43,12 @@ const serverStartedAt = Date.now();
 let pageViews = 0;
 
 app.get("/api/stats", (req, res) => {
-  const token = process.env.STATS_TOKEN;
+  // Pasted env values grow invisible whitespace (and sometimes quotes) —
+  // compare the meaningful characters, not the paste accidents.
+  const clean = (v: unknown) => String(v ?? "").trim().replace(/^["']|["']$/g, "");
+  const token = clean(process.env.STATS_TOKEN);
   if (!token) return res.status(503).json({ error: "stats disabled — set STATS_TOKEN" });
-  if (req.query.token !== token) return res.status(403).json({ error: "bad token" });
+  if (clean(req.query.token) !== token) return res.status(403).json({ error: "bad token" });
   res.json({
     now: Date.now(),
     serverStartedAt,
