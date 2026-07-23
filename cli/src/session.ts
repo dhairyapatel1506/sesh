@@ -65,6 +65,10 @@ export class Session extends EventEmitter {
   private statusTimer: ReturnType<typeof setTimeout> | undefined;
   private loops: ReturnType<typeof setInterval>[] = [];
   private titleCache = new Map<string, string>();
+  // Playback self-healing: a dead/stalled load clears currentVideo so the
+  // periodic room resync reloads it; the counters stop us retrying forever.
+  private loadFailures = new Map<string, number>();
+  private stallTicks = 0;
 
   constructor(opts: SessionOptions) {
     super();
@@ -81,10 +85,10 @@ export class Session extends EventEmitter {
     this.emit("update");
   }
 
-  setStatus(text: string | null) {
+  setStatus(text: string | null, opts?: { sticky?: boolean }) {
     clearTimeout(this.statusTimer);
     this.update({ status: text });
-    if (text) {
+    if (text && !opts?.sticky) {
       this.statusTimer = setTimeout(() => this.update({ status: null }), 4000);
     }
   }
@@ -113,7 +117,10 @@ export class Session extends EventEmitter {
     // Reasons other than eof: "stop" fires on every replacing loadfile,
     // "error" when yt-dlp can't resolve the video.
     mpv.on("end-file", (msg: { reason?: string }) => {
-      if (msg.reason === "error") this.setStatus("playback failed for this video (yt-dlp up to date?)");
+      if (msg.reason === "error") {
+        this.noteLoadFailure();
+        return;
+      }
       if (msg.reason !== "eof") return;
       this.socket.emit("video:ended", {
         time: this.state.duration ?? this.lastState?.time ?? 0,
@@ -270,6 +277,23 @@ export class Session extends EventEmitter {
     if (this.mpv) await this.mpv.setSpeed(1).catch(() => {});
   }
 
+  // A load died (bad stream, stale yt-dlp, network). Forget what's loaded so
+  // the next room:state resync reloads it — self-healing on a 5s cadence —
+  // but give up per-video after 3 attempts instead of hammering forever.
+  private noteLoadFailure() {
+    const video = this.currentVideo;
+    if (!video) return;
+    const failures = (this.loadFailures.get(video) ?? 0) + 1;
+    this.loadFailures.set(video, failures);
+    this.currentVideo = null;
+    this.update({ isPlaying: false });
+    if (failures >= 3) {
+      this.setStatus("this video won't play here — /skip it? (is yt-dlp up to date?)", { sticky: true });
+    } else {
+      this.setStatus(`playback failed — retrying (${failures}/3)`);
+    }
+  }
+
   // Bring mpv in line with an authoritative snapshot. Hard corrections only —
   // the drift loop handles fine alignment while playing.
   private async applyState(state: RoomState): Promise<void> {
@@ -279,6 +303,7 @@ export class Session extends EventEmitter {
       if (!state.videoId) return;
 
       if (state.videoId !== this.currentVideo) {
+        if ((this.loadFailures.get(state.videoId) ?? 0) >= 3) return;
         // Load (or heal onto) the right video, then land on the snapshot.
         this.currentVideo = state.videoId;
         this.update({ videoId: state.videoId, title: this.titleCache.get(state.videoId) ?? null });
@@ -325,8 +350,20 @@ export class Session extends EventEmitter {
     const [position, duration] = await Promise.all([mpv.getTime(), mpv.getDuration()]);
     this.update({ position: position ?? this.state.position, duration });
 
-    if (!state || !state.isPlaying || this.prepare || state.videoId !== this.currentVideo) return;
-    if (position === null) return; // still buffering
+    if (!state || !state.isPlaying || this.prepare || state.videoId !== this.currentVideo) {
+      this.stallTicks = 0;
+      return;
+    }
+    if (position === null) {
+      // Supposed to be playing but mpv reports no position: buffering at
+      // first, but after ~7.5s of it the stream is dead — reload.
+      if (++this.stallTicks >= 10) {
+        this.stallTicks = 0;
+        this.noteLoadFailure();
+      }
+      return;
+    }
+    this.stallTicks = 0;
 
     const target = this.targetTime(state);
     const drift = target - position; // positive = we're behind
@@ -359,29 +396,41 @@ export class Session extends EventEmitter {
   async play() {
     if (!this.mpv) return this.setStatus("player still starting\u2026");
     if (!this.currentVideo) return this.setStatus("nothing loaded — /add or /search first");
-    const time = (await this.mpv.getTime()) ?? 0;
-    await this.mpv.setPause(false);
-    this.lastState = { videoId: this.currentVideo, isPlaying: true, time, at: this.serverNow() };
-    this.update({ isPlaying: true });
-    this.socket.emit("video:play", { time });
+    try {
+      const time = (await this.mpv.getTime()) ?? 0;
+      await this.mpv.setPause(false);
+      this.lastState = { videoId: this.currentVideo, isPlaying: true, time, at: this.serverNow() };
+      this.update({ isPlaying: true });
+      this.socket.emit("video:play", { time });
+    } catch {
+      this.setStatus("player not responding");
+    }
   }
 
   async pause() {
     if (!this.mpv || !this.currentVideo) return;
-    const time = (await this.mpv.getTime()) ?? 0;
-    await this.resetSpeed();
-    await this.mpv.setPause(true);
-    this.lastState = { videoId: this.currentVideo, isPlaying: false, time, at: this.serverNow() };
-    this.update({ isPlaying: false });
-    this.socket.emit("video:pause", { time });
+    try {
+      const time = (await this.mpv.getTime()) ?? 0;
+      await this.resetSpeed();
+      await this.mpv.setPause(true);
+      this.lastState = { videoId: this.currentVideo, isPlaying: false, time, at: this.serverNow() };
+      this.update({ isPlaying: false });
+      this.socket.emit("video:pause", { time });
+    } catch {
+      this.setStatus("player not responding");
+    }
   }
 
   async seekTo(time: number) {
     if (!this.mpv || !this.currentVideo) return;
-    await this.mpv.seek(time);
-    const isPlaying = this.lastState?.isPlaying ?? false;
-    this.lastState = { videoId: this.currentVideo, isPlaying, time, at: this.serverNow() };
-    this.socket.emit(isPlaying ? "video:play" : "video:pause", { time });
+    try {
+      await this.mpv.seek(time);
+      const isPlaying = this.lastState?.isPlaying ?? false;
+      this.lastState = { videoId: this.currentVideo, isPlaying, time, at: this.serverNow() };
+      this.socket.emit(isPlaying ? "video:play" : "video:pause", { time });
+    } catch {
+      this.setStatus("player not responding");
+    }
   }
 
   // Play immediately for everyone (the web client's "play now" path).

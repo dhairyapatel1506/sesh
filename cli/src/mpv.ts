@@ -107,9 +107,25 @@ export class Mpv extends EventEmitter {
   command(...args: unknown[]): Promise<unknown> {
     const request_id = this.nextRequestId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(request_id, { resolve, reject });
+      // A wedged mpv must never freeze the client: if a reply doesn't come
+      // back promptly, fail the call and let the caller's error path run.
+      const timeout = setTimeout(() => {
+        this.pending.delete(request_id);
+        reject(new MpvError("mpv not responding"));
+      }, 5000);
+      this.pending.set(request_id, {
+        resolve: (data) => {
+          clearTimeout(timeout);
+          resolve(data);
+        },
+        reject: (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        },
+      });
       this.ipc.write(JSON.stringify({ command: args, request_id }) + "\n", (err) => {
         if (err) {
+          clearTimeout(timeout);
           this.pending.delete(request_id);
           reject(err);
         }
