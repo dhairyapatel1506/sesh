@@ -1,8 +1,20 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createConnection, type Socket } from "node:net";
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// WSLg publishes its PulseAudio socket at a fixed path, but libpulse only
+// discovers it via $XDG_RUNTIME_DIR — which SSH and tmux sessions don't
+// inherit. Without this, mpv launched from such a session finds no audio
+// server at all and the probe wrongly convicts WSLg. Point libpulse at the
+// socket explicitly when the session gives it no other way to find one.
+function audioEnv(): NodeJS.ProcessEnv {
+  if (process.env.PULSE_SERVER || process.env.XDG_RUNTIME_DIR) return process.env;
+  if (!existsSync("/mnt/wslg/PulseServer")) return process.env;
+  return { ...process.env, PULSE_SERVER: "unix:/mnt/wslg/PulseServer" };
+}
 
 // mpv is controlled over its JSON IPC socket: newline-delimited JSON both
 // ways. Requests carry a request_id that the matching response echoes back;
@@ -24,7 +36,7 @@ export function probeAudioOutput(): Promise<boolean> {
         ...(process.env.SESH_MPV_ARGS ? process.env.SESH_MPV_ARGS.split(/\s+/) : []),
         "av://lavfi:sine=frequency=440:duration=0.2",
       ],
-      { timeout: 10000 },
+      { timeout: 10000, env: audioEnv() },
       (err) => resolve(!err),
     );
   });
@@ -73,7 +85,7 @@ export class Mpv extends EventEmitter {
         // Escape hatch for odd audio setups (e.g. SESH_MPV_ARGS="--ao=pulse").
         ...(process.env.SESH_MPV_ARGS ? process.env.SESH_MPV_ARGS.split(/\s+/) : []),
       ],
-      { stdio: "ignore" },
+      { stdio: "ignore", env: audioEnv() },
     );
 
     const spawnError = new Promise<never>((_, reject) => {
