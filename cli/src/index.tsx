@@ -1,9 +1,26 @@
 #!/usr/bin/env node
+import os from "node:os";
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, render, Text, useInput } from "ink";
 import { Session } from "./session.js";
 import { App } from "./ui.js";
 import { loadConfig, saveConfig } from "./config.js";
+
+// WSL's audio relay (WSLg) wedges often enough that sesh refuses to run
+// there rather than fail mysteriously. On Windows, run it from
+// PowerShell/Windows Terminal — mpv talks straight to WASAPI. Native Linux
+// is unaffected. (Automated tests import Session directly and skip this.)
+const isWsl =
+  process.platform === "linux" &&
+  (os.release().toLowerCase().includes("microsoft") || !!process.env.WSL_DISTRO_NAME);
+if (isWsl && !process.env.SESH_ALLOW_WSL) {
+  console.error(
+    "sesh doesn't run under WSL — its audio relay is too unreliable.\n" +
+      "Run it from PowerShell / Windows Terminal instead (see README → Terminal client → Windows).\n" +
+      "(Developers: set SESH_ALLOW_WSL=1 to override.)",
+  );
+  process.exit(1);
+}
 
 const DEFAULT_SERVER = "https://sesh.dhairya.cloud";
 

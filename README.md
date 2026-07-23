@@ -89,6 +89,26 @@ The free quota allows ~100 searches/day; repeated queries are served from an in-
 
 The `cli/` workspace is a full Sesh client for the terminal — same rooms, same sync, no browser. It plays the audio track through [mpv](https://mpv.io) (which resolves YouTube streams via yt-dlp) and renders a TUI with chat, the shared queue, search, and live sync stats. A terminal user and browser users can share a room; neither side can tell the difference.
 
+> **Note:** sesh runs on Windows (natively) and Linux — but it **refuses to run under WSL**, whose audio relay is too unreliable. On a Windows machine, install and run it from PowerShell.
+
+### Windows
+
+mpv plays straight through WASAPI; mpv's IPC rides a named pipe instead of a unix socket, and the client handles both. Needs [Node.js](https://nodejs.org) ≥ 20.
+
+```powershell
+# Playback engine — three pieces, all required (deno solves YouTube's throttling challenges):
+winget install shinchiro.mpv yt-dlp.yt-dlp.nightly DenoLand.Deno
+
+# The client itself (from a clone of this repo, in a fresh terminal so PATH is current):
+npm install; npm run build --workspace cli
+npm link --workspace cli    # generates the `sesh` command shim on your PATH
+
+sesh                        # create a room
+sesh <ROOM-CODE>            # join one
+```
+
+### Linux
+
 ```bash
 # Playback engine — three pieces, all required:
 sudo apt install mpv
@@ -106,18 +126,6 @@ sesh <ROOM-CODE>            # join one
 ```
 
 Type to chat; `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
-
-### Windows-native (no WSL audio)
-
-The CLI also runs on plain Windows — mpv talks straight to WASAPI, which sidesteps WSL's occasionally flaky audio relay entirely. mpv's IPC rides a named pipe instead of a unix socket; the client handles both.
-
-```powershell
-winget install shinchiro.mpv yt-dlp.yt-dlp.nightly DenoLand.Deno
-# with Node installed, run the built CLI (a WSL checkout works via \\wsl.localhost):
-node <path-to-repo>\cli\dist\index.js <ROOM-CODE>
-```
-
-Wrap that last line in a `sesh.cmd` somewhere on your PATH and it feels identical to the Linux install.
 
 ## Deploying
 
