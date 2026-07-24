@@ -405,7 +405,13 @@ function Room() {
     }
 
     if (state.isPlaying && alreadyPlaying) {
-      correctDrift(target);
+      // Fine correction is for a tab someone is actually watching. A hidden
+      // one still pulls authoritative state on its timer, and correcting from
+      // here would re-arm the very rate nudge the visibility handler just
+      // stood down — with a throttled timer to end it. Hard corrections
+      // (a different video, a play or pause) still apply while hidden; only
+      // the millisecond-level chasing waits until the tab is back.
+      if (!document.hidden) correctDrift(target);
       return;
     }
     if (!state.isPlaying && alreadyPaused) return;
@@ -821,9 +827,17 @@ function Room() {
   // estimatedPosition() accurate.
   useEffect(() => {
     if (!videoId) return;
-    const sampler = window.setInterval(() => estimatedPosition(), 100);
+    const sampler = window.setInterval(() => {
+      if (document.hidden) return;
+      estimatedPosition();
+    }, 100);
     const interval = window.setInterval(() => {
       const state = lastStateRef.current;
+      // Correcting a backgrounded tab does more harm than good — see the
+      // visibility handler. The video keeps playing at exactly 1x while
+      // hidden, which is the same rate the room's clock advances at, so
+      // there's nothing to correct in the meantime anyway.
+      if (document.hidden) return;
       if (!state || !state.isPlaying || state.videoId !== videoId) return;
       if (suppressUntilRef.current) return;
       if (playerRef.current?.getPlayerState() !== PlayerState.PLAYING) return;
@@ -971,13 +985,33 @@ function Room() {
     setEmojiOpen(false);
   };
 
-  // A backgrounded tab may get its video silently paused by the browser;
-  // catch back up to the authoritative room state when it becomes visible.
+  // Sync corrections and background tabs don't mix. Browsers throttle a hidden
+  // tab's timers to about once a second, and after a few minutes to once a
+  // minute — while the video itself keeps playing at exactly normal speed.
+  // That combination breaks both halves of the correction loop:
+  //
+  //  - A rate nudge is *ended* by a timer. Start one just before switching
+  //    away and it runs until that throttled timer finally fires, so a
+  //    correction meant to last a moment plays the video fast (or slow) for a
+  //    second or a minute — real drift, created by the thing meant to remove
+  //    it, which the next correction then "fixes" with an audible jump.
+  //  - Position measurement leans on catching the instant the player's cached
+  //    currentTime changes. Sampled once a second instead of ten times, that
+  //    instant is missed and the extrapolation overshoots, so a tab that is
+  //    perfectly in sync looks ahead of the room and gets slowed down.
+  //
+  // So: hand back normal speed and stop correcting while hidden (nothing
+  // drifts in the meantime — 1x playback against a 1x clock), then take one
+  // fresh reading and one authoritative resync on the way back in.
   useEffect(() => {
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        socket.emit("resync:request");
+      if (document.visibilityState === "hidden") {
+        window.clearTimeout(rateNudgeTimerRef.current);
+        setRate(1);
+        return;
       }
+      positionSampleRef.current = null; // nothing sampled while hidden is trustworthy
+      socket.emit("resync:request");
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
