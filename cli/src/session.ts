@@ -368,6 +368,13 @@ export class Session extends EventEmitter {
     const playedThrough = position !== null && duration !== null && duration - position < 3;
     this.dbg("eof-reached", video, "pos", position, "dur", duration, "genuine", playedThrough);
     if (playedThrough) {
+      // Settle locally, now — don't wait for the room's "paused at the end" to
+      // come back. Until it does, our own state still claims to be playing
+      // while mpv sits parked at EOF, which shows a phantom "syncing…" for
+      // seconds and, worse, makes the room's next play look like a no-op
+      // ("already playing") so a replay never reaches mpv.
+      this.lastState = { videoId: video, isPlaying: false, time: duration!, at: this.serverNow() };
+      this.update({ isPlaying: false, position: duration!, driftMs: null });
       this.socket.emit("video:ended", { time: duration, videoId: video });
     } else {
       this.noteLoadFailure("timeout");
@@ -437,7 +444,14 @@ export class Session extends EventEmitter {
 
       if (state.isPlaying) {
         // Position while playing belongs to the drift loop; only flip pause.
-        if (!this.state.isPlaying) {
+        // Ask mpv what it's really doing rather than trusting our own flag:
+        // a video that played out leaves mpv paused at EOF, and if our flag
+        // still reads "playing" there, this becomes a no-op. That was the
+        // silent replay — mpv never unpaused, while the drift loop hard-seeked
+        // it forward every couple of seconds, so the clock advanced and the
+        // play icon showed with no sound coming out.
+        const [paused, atEof] = await Promise.all([mpv.isPaused(), mpv.atEof()]);
+        if (!this.state.isPlaying || paused === true || atEof === true) {
           await mpv.seek(this.targetTime(state));
           await mpv.setPause(false);
           this.update({ isPlaying: true });

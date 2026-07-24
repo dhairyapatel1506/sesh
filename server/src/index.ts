@@ -433,7 +433,16 @@ io.on("connection", (socket) => {
       startVideoForRoom(socket.data.roomId, room, next.videoId);
       return;
     }
+    // Already settled by another client's report of the same ending — don't
+    // restamp it (a late report would otherwise shove a room someone had
+    // since paused mid-video back to the end).
+    if (!room.state.isPlaying) return;
     room.state = { ...room.state, isPlaying: false, time, updatedAt: Date.now() };
+    // Announce it. Without this, the end is invisible to everyone else until
+    // their next resync, so for a few seconds they still believe the video is
+    // playing — and anyone who hits replay in that window races clients whose
+    // idea of "now" is still running past the end of the video.
+    io.to(socket.data.roomId).emit("room:state", estimatedRoomState(room));
   });
 
   socket.on("queue:add", ({ videoId, title }: { videoId: string; title?: string | null }) => {

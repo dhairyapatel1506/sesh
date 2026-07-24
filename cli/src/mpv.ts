@@ -242,12 +242,32 @@ export class Mpv extends EventEmitter {
     }
   }
 
+  private async getFlag(prop: string): Promise<boolean | null> {
+    try {
+      const value = await this.command("get_property", prop);
+      return typeof value === "boolean" ? value : null;
+    } catch {
+      return null; // Property unavailable (e.g. nothing loaded).
+    }
+  }
+
   getTime(): Promise<number | null> {
     return this.getNumber("time-pos");
   }
 
   getDuration(): Promise<number | null> {
     return this.getNumber("duration");
+  }
+
+  // What mpv is *actually* doing, as opposed to what we last told it to do.
+  // Needed because a video that plays out leaves mpv parked and paused at the
+  // end (--keep-open) without us having asked for it.
+  isPaused(): Promise<boolean | null> {
+    return this.getFlag("pause");
+  }
+
+  atEof(): Promise<boolean | null> {
+    return this.getFlag("eof-reached");
   }
 
   quit(): void {

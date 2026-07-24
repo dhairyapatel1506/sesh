@@ -141,6 +141,10 @@ const RESYNC_INTERVAL_MS = 5000;
 // ...but drift correction itself runs locally far more often, against the
 // last known timestamped state extrapolated forward — no round trip needed.
 const LOCAL_DRIFT_CHECK_MS = 750;
+// How long a player may be buffering, or a local play/pause may be in flight,
+// before a resync is allowed to overrule it again.
+const BUFFERING_GRACE_MS = 4000;
+const LOCAL_ACTION_GRACE_MS = 1500;
 
 // YouTube IFrame API error codes: https://developers.google.com/youtube/iframe_api_reference#onError
 function describeYouTubeError(code: number): string {
@@ -220,6 +224,12 @@ function Room() {
   // quick succession.
   const suppressUntilRef = useRef(false);
   const suppressTimerRef = useRef<number | undefined>(undefined);
+
+  // When the player last started buffering, and when this tab last took a
+  // playback action of its own. Both mark "a change is in flight here that the
+  // server hasn't heard about yet", which a resync must not steamroll.
+  const bufferingSinceRef = useRef<number | null>(null);
+  const localActionAtRef = useRef<number | null>(null);
 
   const applyRemote = (apply: () => void) => {
     suppressUntilRef.current = true;
@@ -545,6 +555,10 @@ function Room() {
           },
           onStateChange: (event) => {
             if (!playerRef.current) return;
+            // Buffering is a transition, not a resting state — remember when
+            // it started so sync can leave an in-flight change alone.
+            bufferingSinceRef.current =
+              event.data === PlayerState.BUFFERING ? performance.now() : null;
             // A finished video must be reported, or the server keeps
             // extrapolating "playing" time past the end forever and every
             // resync tries to resume — which restarts an ended video from 0.
@@ -603,6 +617,7 @@ function Room() {
             if (document.hidden) return;
             if (suppressUntilRef.current) return;
             const time = playerRef.current.getCurrentTime();
+            localActionAtRef.current = performance.now();
             socket.emit(event.data === PlayerState.PLAYING ? "video:play" : "video:pause", {
               time,
             });
@@ -627,6 +642,44 @@ function Room() {
   // Listen for room state / remote playback / user-list events.
   useEffect(() => {
     const onRoomState = (state: RoomState) => {
+      // Everything below guards the *resync* path only. A resync is a snapshot
+      // of the room as it was when the server composed it — stale by the time
+      // it lands, and outranked by anything happening in this tab right now.
+      // Real remote actions arrive as video:play / video:pause and are never
+      // second-guessed here.
+
+      // The player is buffering, which means it's mid-transition and usually
+      // mid-*user action* — the iframe's own replay button, a drag of its
+      // progress bar — neither of which fires an event we can see until it
+      // resolves. "Correcting" it now drags the click back to wherever the
+      // room used to be and opens a suppress window that then swallows the
+      // PLAYING event which would have told the server about it, so the click
+      // vanishes without a trace and gets clicked again. That was the
+      // replay-takes-two-or-three-tries bug. Bounded, so a tab that is
+      // genuinely stuck buffering still gets healed by a later resync.
+      const playerState = playerRef.current?.getPlayerState();
+      if (
+        playerState === PlayerState.BUFFERING &&
+        bufferingSinceRef.current !== null &&
+        performance.now() - bufferingSinceRef.current < BUFFERING_GRACE_MS
+      ) {
+        return;
+      }
+
+      // This tab played or paused since the server composed the reply, so the
+      // reply already describes the past — obeying it would undo the click
+      // that just happened (press play, get yanked back to paused a moment
+      // later). Only contradictions are dropped, and only briefly.
+      const mine = lastStateRef.current;
+      if (
+        mine &&
+        localActionAtRef.current !== null &&
+        performance.now() - localActionAtRef.current < LOCAL_ACTION_GRACE_MS &&
+        state.videoId === mine.videoId &&
+        state.isPlaying !== mine.isPlaying
+      ) {
+        return;
+      }
       pendingStateRef.current = state;
       lastStateRef.current = state;
       if (!state.videoId) return;
