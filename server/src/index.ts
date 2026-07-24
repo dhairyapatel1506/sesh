@@ -331,6 +331,12 @@ io.on("connection", (socket) => {
   socket.on(
     "room:join",
     ({ roomId, name, clientId }: { roomId: string; name: string; clientId: string }) => {
+      // Moving straight from one room to another (the client is a single page
+      // app — no reconnect happens in between) must vacate the old one first,
+      // or this socket stays a member of both: still listed to the people it
+      // left, and receiving their playback events on top of its new room's.
+      if (socket.data.roomId && socket.data.roomId !== roomId) leaveRoom();
+
       const room = getOrCreateRoom(roomId);
       // Until real accounts exist, a name IS a person within a room — a
       // second client can't take one that's in use. Same clientId is fine:
@@ -527,11 +533,17 @@ io.on("connection", (socket) => {
     socket.emit("room:state", estimatedRoomState(room));
   });
 
-  socket.on("disconnect", () => {
-    console.log(`client disconnected: ${socket.id}`);
+  // Take this socket out of whatever room it's in. Closing the tab is only
+  // one way to leave — navigating back to the homepage or opening a different
+  // room leaves too, and in a single-page app that happens without the socket
+  // ever dropping. Without an explicit exit those people lingered in the user
+  // list (and the stats) until they finally closed the tab.
+  const leaveRoom = (opts: { disconnecting?: boolean } = {}) => {
     const roomId = socket.data.roomId as string | undefined;
     const clientId = socket.data.clientId as string | undefined;
+    socket.data.roomId = undefined;
     if (!roomId || !clientId) return;
+    if (!opts.disconnecting) socket.leave(roomId);
     const room = rooms.get(roomId);
     if (!room) return;
 
@@ -554,6 +566,13 @@ io.on("connection", (socket) => {
     } else {
       io.to(roomId).emit("room:users", userList(room));
     }
+  };
+
+  socket.on("room:leave", () => leaveRoom());
+
+  socket.on("disconnect", () => {
+    console.log(`client disconnected: ${socket.id}`);
+    leaveRoom({ disconnecting: true });
   });
 });
 

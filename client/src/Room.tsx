@@ -39,7 +39,11 @@ type QueueItem = {
   addedBy: string;
 };
 
-const NAME_STORAGE_KEY = "sesh:name";
+// Names are per room, not per person: they're first-come-first-served inside a
+// room and mean nothing outside it. Keying the remembered name by room is what
+// makes a refresh seamless while still asking who you want to be in a room you
+// haven't been in — and it dies with the tab either way.
+const nameKeyFor = (roomId: string) => `sesh:name:${roomId}`;
 const CLIENT_ID_STORAGE_KEY = "sesh:clientId";
 
 // Persists for this tab's lifetime so the server can recognize "the same
@@ -172,7 +176,7 @@ function Room() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [videoId, setVideoId] = useState<string | null>(null);
-  const [nickname, setNickname] = useState(() => sessionStorage.getItem(NAME_STORAGE_KEY) ?? "");
+  const [nickname, setNickname] = useState(() => sessionStorage.getItem(nameKeyFor(roomId)) ?? "");
   const [nameInput, setNameInput] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [joined, setJoined] = useState(false);
@@ -447,7 +451,7 @@ function Room() {
       if (state?.createdAt) setRoomCreatedAt(state.createdAt);
     };
     const onDenied = ({ reason }: { reason: string }) => {
-      sessionStorage.removeItem(NAME_STORAGE_KEY);
+      sessionStorage.removeItem(nameKeyFor(roomId));
       setNickname("");
       setJoined(false);
       setNameError(reason);
@@ -502,6 +506,12 @@ function Room() {
     return () => {
       socket.off("connect", join);
       window.clearInterval(interval);
+      // Leaving the page is leaving the room. The socket outlives this
+      // component (it's shared by the whole app), so without saying so
+      // explicitly, walking back to the homepage left this tab in the room:
+      // still in everyone's user list, still in the stats, until the tab
+      // itself was closed.
+      socket.emit("room:leave");
     };
   }, [nickname, roomId]);
 
@@ -715,13 +725,18 @@ function Room() {
 
     const onVideoLoad = ({ videoId: id }: { videoId: string }) => {
       prepareRef.current = null; // a user's pick overrides a prepare in flight
-      const state: RoomState = { videoId: id, isPlaying: false, time: 0, at: serverNow() };
+      // Somebody picked this — the server marks the room as playing it from
+      // the top in the same breath. So this means "we're all watching this
+      // now", not "here's a video to look at". Cueing it (thumbnail, big play
+      // button, waits to be told to start) parked that button in front of
+      // everyone until playback was announced separately, and whoever pressed
+      // it restarted the room from 0:00. Start it instead — muted if this tab
+      // hasn't earned autoplay yet, exactly as a mid-video switch does.
+      const state: RoomState = { videoId: id, isPlaying: true, time: 0, at: serverNow() };
       pendingStateRef.current = state;
       lastStateRef.current = state;
       setPlayerError(null);
-      if (playerRef.current) {
-        applyRemote(() => playerRef.current!.cueVideoById(id));
-      }
+      if (playerRef.current) syncPlayerToState(state);
       setVideoId(id);
     };
 
@@ -1110,7 +1125,7 @@ function Room() {
     const trimmed = nameInput.trim();
     if (!trimmed) return;
     setNameError(null);
-    sessionStorage.setItem(NAME_STORAGE_KEY, trimmed);
+    sessionStorage.setItem(nameKeyFor(roomId), trimmed);
     setNickname(trimmed);
   };
 
@@ -1136,21 +1151,25 @@ function Room() {
           </h1>
         </header>
         <div className="name-gate">
-          <p>Enter a name to join room {roomId}:</p>
+          {/* Refreshing a room you're already in shouldn't ask who you are
+              again — but the room can't render until the server confirms the
+              join, so this gate is on screen for one round trip either way.
+              Asking the question during it made a refresh flash "enter a
+              name" at someone who never had to answer it. */}
+          <p>{joining ? `Joining room ${roomId}…` : `Enter a name to join room ${roomId}:`}</p>
           {nameError && <p className="load-error">{nameError}</p>}
-          <div className="load-bar">
-            <input
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              placeholder="Your name"
-              onKeyDown={(e) => e.key === "Enter" && submitName()}
-              disabled={joining}
-              autoFocus
-            />
-            <button onClick={submitName} disabled={joining}>
-              {joining ? "Joining…" : "Join"}
-            </button>
-          </div>
+          {!joining && (
+            <div className="load-bar">
+              <input
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                placeholder="Your name"
+                onKeyDown={(e) => e.key === "Enter" && submitName()}
+                autoFocus
+              />
+              <button onClick={submitName}>Join</button>
+            </div>
+          )}
         </div>
       </div>
     );
