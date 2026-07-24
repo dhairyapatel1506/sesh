@@ -631,6 +631,13 @@ export class Session extends EventEmitter {
       await this.mpv.seek(0);
       await this.mpv.setPause(false);
       this.update({ isPlaying: true });
+      // Say we're rolling. video:load alone only tells the others *which*
+      // video — the browser cues it paused on a thumbnail and waits, because
+      // nothing has told it playback began. A browser picking a video doesn't
+      // hit this: its own player firing PLAYING broadcasts the play for it.
+      // Without this the others sat on a play button for up to a resync, and
+      // anyone who pressed it restarted the whole room from 0:00.
+      this.socket.emit("video:play", { time: 0 });
     } catch {
       this.setStatus("couldn't start playback");
     }

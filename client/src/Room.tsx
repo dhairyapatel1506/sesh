@@ -385,6 +385,21 @@ function Room() {
       }
     }
 
+    // The room has settled at the end of the video — someone else's player got
+    // there first — while this one is still playing out the last moment of it.
+    // Don't drag it there. Seeking to the duration and pausing leaves YouTube
+    // half-finished: the next click on it lands at 0:00 *paused* (and
+    // broadcasts that pause to everyone), so replaying takes two clicks. Left
+    // alone it ends on its own a fraction of a second later, in exactly the
+    // state the room is describing — and a naturally ended player replays on
+    // the first click.
+    if (!state.isPlaying && alreadyPlaying) {
+      const duration = playerRef.current.getDuration();
+      if (duration > 0 && target >= duration - 1 && estimatedPosition() >= duration - 1.5) {
+        return;
+      }
+    }
+
     if (state.isPlaying && alreadyPlaying) {
       correctDrift(target);
       return;
@@ -745,6 +760,12 @@ function Room() {
       if (!eventVideoId) return;
       const state: RoomState = { videoId: eventVideoId, isPlaying: true, time, at };
       lastStateRef.current = state;
+      // Also the state a player that doesn't exist yet should wake up into.
+      // Switching video tears the player down and builds a new one, and a play
+      // arriving during that gap used to be dropped — the new player woke into
+      // the stale "cued, paused at 0" from video:load and sat on a thumbnail
+      // until the next resync, seconds later.
+      pendingStateRef.current = state;
       syncPlayerToState(state);
     };
 
@@ -754,6 +775,7 @@ function Room() {
       if (!eventVideoId) return;
       const state: RoomState = { videoId: eventVideoId, isPlaying: false, time, at };
       lastStateRef.current = state;
+      pendingStateRef.current = state;
       syncPlayerToState(state);
     };
 
