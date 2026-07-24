@@ -27,7 +27,7 @@ Create a room, share the code, and everyone's player stays locked together — p
 - ⏱️ **Room uptime** — every room shows how long it's been going
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
 - 🌗 **Automatic dark mode** — follows your system theme
-- 💻 **Terminal client** — join the same rooms from a terminal, audio-only ([see below](#terminal-client))
+- 💻 **Terminal client** — join the same rooms from a terminal, audio-only: `npm install -g sesh-cli` ([see below](#terminal-client))
 
 ## How the sync works
 
@@ -91,22 +91,29 @@ The free quota allows ~100 searches/day; repeated queries are served from an in-
 
 The `cli/` workspace is a full Sesh client for the terminal — same rooms, same sync, no browser. It plays the audio track through [mpv](https://mpv.io) (which resolves YouTube streams via yt-dlp) and renders a TUI with chat, the shared queue, search, and live sync stats. A terminal user and browser users can share a room; neither side can tell the difference.
 
+It's published as [`sesh-cli`](https://www.npmjs.com/package/sesh-cli) — no clone, no build:
+
+```bash
+npm install -g sesh-cli
+
+sesh                        # create a room
+sesh <ROOM-CODE>            # join one
+```
+
+Needs [Node.js](https://nodejs.org) ≥ 20.12 and the playback engine below.
+
 > **Note:** sesh runs on Windows (natively) and Linux. It won't play **under WSL** (whose audio relay is too unreliable) — running `sesh` there hands the session off to the Windows-native install, opening it in a new Windows Terminal tab. That needs the Windows install below to exist.
 
 ### Windows
 
-mpv plays straight through WASAPI; mpv's IPC rides a named pipe instead of a unix socket, and the client handles both. Needs [Node.js](https://nodejs.org) ≥ 20 and git (`winget install Git.Git`) — or grab the repo as a ZIP from GitHub instead.
+mpv plays straight through WASAPI; mpv's IPC rides a named pipe instead of a unix socket, and the client handles both.
 
 ```powershell
 # Playback engine — three pieces, all required (deno solves YouTube's throttling challenges):
 winget install shinchiro.mpv yt-dlp.yt-dlp.nightly DenoLand.Deno
 
-# The client itself (from a clone of this repo, in a fresh terminal so PATH is current):
-npm install; npm run build --workspace cli
-npm link --workspace cli    # generates the `sesh` command shim on your PATH
-
-sesh                        # create a room
-sesh <ROOM-CODE>            # join one
+# Then, in a fresh terminal so PATH is current:
+npm install -g sesh-cli
 ```
 
 ### Linux
@@ -119,12 +126,16 @@ curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.l
 # yt-dlp needs a JS runtime (deno) to solve YouTube's throttling challenges:
 curl -fsSL https://deno.land/install.sh | sh
 
-# The client itself:
-npm install && npm run build --workspace cli
-npm link --workspace cli    # puts `sesh` on your PATH
+npm install -g sesh-cli
+```
 
-sesh                        # create a room
-sesh <ROOM-CODE>            # join one
+### From source
+
+For hacking on it — clone the repo, then:
+
+```bash
+npm install && npm run build --workspace cli
+npm link --workspace cli    # puts your build's `sesh` on your PATH
 ```
 
 Type to chat (`:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, typing indicators included); `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, `/emoji`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
@@ -149,9 +160,13 @@ sesh/
 │   └── src/
 │       └── index.ts     # rooms, sync relay, queue, chat, search proxy
 ├── cli/             # terminal client (Ink TUI + mpv audio engine)
-│   └── src/
+│   └── src/         #   published to npm as `sesh-cli`
 │       ├── session.ts   # socket + sync engine port
 │       ├── mpv.ts       # mpv JSON IPC wrapper
 │       └── ui.tsx       # panes: now playing, queue, chat, search
 └── render.yaml      # Render deploy blueprint
 ```
+
+## License
+
+[MIT](LICENSE)

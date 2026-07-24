@@ -3,12 +3,41 @@
   "version": "0.1.0",
   "description": "Terminal client for Sesh — synced YouTube listening rooms from your terminal",
   "type": "module",
+  "license": "MIT",
+  "author": "Dhairya Patel",
+  "homepage": "https://sesh.dhairya.cloud",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhairyapatel1506/sesh.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/dhairyapatel1506/sesh/issues"
+  },
+  "keywords": [
+    "youtube",
+    "watch-together",
+    "sync",
+    "terminal",
+    "tui",
+    "mpv",
+    "music",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
   "bin": {
     "sesh": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.tsx"
+    "dev": "tsx src/index.tsx",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "ink": "^6.0.0",
