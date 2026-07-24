@@ -1,6 +1,6 @@
 {
   "name": "sesh-terminal",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Terminal client for Sesh — synced YouTube listening rooms from your terminal",
   "type": "module",
   "license": "MIT",
