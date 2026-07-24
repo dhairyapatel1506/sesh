@@ -1,11 +1,11 @@
-# sesh-cli
+# sesh-terminal
 
 **Watch YouTube with your friends, perfectly in sync — from your terminal.**
 
 The terminal client for [Sesh](https://sesh.dhairya.cloud). Same rooms as the web app, audio only: a browser user and a terminal user can share a room and neither side can tell the difference.
 
 ```bash
-npm install -g sesh-cli
+npm install -g sesh-terminal
 
 sesh                 # create a room
 sesh F3K9QX          # join one

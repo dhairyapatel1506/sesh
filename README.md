@@ -27,7 +27,7 @@ Create a room, share the code, and everyone's player stays locked together — p
 - ⏱️ **Room uptime** — every room shows how long it's been going
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
 - 🌗 **Automatic dark mode** — follows your system theme
-- 💻 **Terminal client** — join the same rooms from a terminal, audio-only: `npm install -g sesh-cli` ([see below](#terminal-client))
+- 💻 **Terminal client** — join the same rooms from a terminal, audio-only: `npm install -g sesh-terminal` ([see below](#terminal-client))
 
 ## How the sync works
 
@@ -91,10 +91,10 @@ The free quota allows ~100 searches/day; repeated queries are served from an in-
 
 The `cli/` workspace is a full Sesh client for the terminal — same rooms, same sync, no browser. It plays the audio track through [mpv](https://mpv.io) (which resolves YouTube streams via yt-dlp) and renders a TUI with chat, the shared queue, search, and live sync stats. A terminal user and browser users can share a room; neither side can tell the difference.
 
-It's published as [`sesh-cli`](https://www.npmjs.com/package/sesh-cli) — no clone, no build:
+It's published as [`sesh-terminal`](https://www.npmjs.com/package/sesh-terminal) — no clone, no build:
 
 ```bash
-npm install -g sesh-cli
+npm install -g sesh-terminal
 
 sesh                        # create a room
 sesh <ROOM-CODE>            # join one
@@ -113,7 +113,7 @@ mpv plays straight through WASAPI; mpv's IPC rides a named pipe instead of a uni
 winget install shinchiro.mpv yt-dlp.yt-dlp.nightly DenoLand.Deno
 
 # Then, in a fresh terminal so PATH is current:
-npm install -g sesh-cli
+npm install -g sesh-terminal
 ```
 
 ### Linux
@@ -126,7 +126,7 @@ curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.l
 # yt-dlp needs a JS runtime (deno) to solve YouTube's throttling challenges:
 curl -fsSL https://deno.land/install.sh | sh
 
-npm install -g sesh-cli
+npm install -g sesh-terminal
 ```
 
 ### From source
@@ -160,7 +160,7 @@ sesh/
 │   └── src/
 │       └── index.ts     # rooms, sync relay, queue, chat, search proxy
 ├── cli/             # terminal client (Ink TUI + mpv audio engine)
-│   └── src/         #   published to npm as `sesh-cli`
+│   └── src/         #   published to npm as `sesh-terminal`
 │       ├── session.ts   # socket + sync engine port
 │       ├── mpv.ts       # mpv JSON IPC wrapper
 │       └── ui.tsx       # panes: now playing, queue, chat, search
