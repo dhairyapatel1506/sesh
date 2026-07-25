@@ -708,20 +708,35 @@ function Room() {
             // is only granted muted — is one the browser feels free to suspend
             // once it's out of view; an audible one it leaves alone. That's the
             // whole difference, and why this never happens to whoever pressed
-            // play. On the way back the suspended player resumes, buffers, and
-            // reports PLAYING from wherever it froze — indistinguishable from
-            // someone clicking play, except for the position, which is seconds
-            // in the past. Broadcast, it rewinds the entire room to this tab's
-            // stall. So while recovering, a play/pause from behind the room is
-            // the browser catching up rather than a person acting: stay quiet
-            // and let the resync already in flight pull this tab forward.
-            const roomTime = lastStateRef.current ? targetTime(lastStateRef.current) : null;
-            if (isRecovering() && roomTime !== null && time < roomTime - RESUME_BEHIND_SECONDS) {
+            // play. On the way back the suspended player resumes and reports
+            // PLAYING, which is indistinguishable from someone clicking play.
+            const roomState = lastStateRef.current;
+            const roomTime = roomState ? targetTime(roomState) : null;
+            const held = (why: string) => {
               logSync(
                 `${event.data === PlayerState.PLAYING ? "play" : "pause"} ` +
-                  `@${time.toFixed(1)} vs room ${roomTime.toFixed(1)} — held`,
+                  `@${time.toFixed(1)} vs room ${roomTime?.toFixed(1) ?? "?"} — held (${why})`,
               );
-              return;
+            };
+            if (isRecovering() && roomState) {
+              // The room is already playing, so a play from this tab tells it
+              // nothing it doesn't know. All such a broadcast can do is move
+              // the room's anchor to wherever this tab happens to be — and
+              // measured in the wild, that's routinely a second out either way,
+              // which is enough to make everyone else stutter or jump back.
+              // Being close to the room is not evidence of being a real click.
+              if (event.data === PlayerState.PLAYING && roomState.isPlaying) {
+                held("room already playing");
+                return;
+              }
+              // A pause is worth relaying even mid-recovery — it's news, and
+              // it's what someone reaching for the player actually does. Only
+              // ignore one reported from meaningfully behind the room, which a
+              // person pausing what they're watching never is.
+              if (roomTime !== null && time < roomTime - RESUME_BEHIND_SECONDS) {
+                held("behind room");
+                return;
+              }
             }
             logSync(
               `${event.data === PlayerState.PLAYING ? "play" : "pause"} ` +
