@@ -11,6 +11,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      # Secret — set the value in the Render dashboard, never in this file.
+      # Secrets — set the values in the Render dashboard, never in this file.
       - key: YOUTUBE_API_KEY
+        sync: false
+      # Neon connection string. Absent, the app runs without accounts.
+      - key: DATABASE_URL
         sync: false

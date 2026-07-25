@@ -4,6 +4,7 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
 import { Server, type Socket } from "socket.io";
+import { dbEnabled, migrate } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -585,6 +586,22 @@ if (isProd) {
     pageViews++;
     res.sendFile(path.join(clientDist, "index.html"));
   });
+}
+
+// Schema first, then serve. If the database is configured but broken, that's
+// worth failing loudly on — the alternative is a server that looks healthy and
+// errors on every sign-in. No database configured at all is fine, though: the
+// app just runs without accounts.
+if (dbEnabled()) {
+  try {
+    await migrate();
+    console.log("database ready");
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
+  }
+} else {
+  console.log("no DATABASE_URL — running without accounts");
 }
 
 httpServer.listen(PORT, () => {
