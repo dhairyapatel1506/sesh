@@ -63,6 +63,41 @@ function loadSettings(): Settings {
   }
 }
 
+// Windows lists the same microphone three times: once as itself, once as
+// "Default - <name>", and once as "Communications - <name>". The last two are
+// aliases pointing at whatever the OS currently prefers, not separate hardware,
+// which is why a list of two devices arrives as six near-identical lines. Drop
+// the aliases — "System default" is already the first option and means the same
+// thing — then collapse anything left with a duplicate name.
+function usableDevices(
+  all: MediaDeviceInfo[],
+  kind: MediaDeviceKind,
+  fallback: string,
+): AudioDevice[] {
+  const ofKind = all.filter((device) => device.kind === kind);
+  const strip = (label: string) => label.replace(/^(Default|Communications)\s+-\s+/i, "").trim();
+
+  const collapse = (devices: MediaDeviceInfo[]) => {
+    const seen = new Set<string>();
+    const out: AudioDevice[] = [];
+    for (const device of devices) {
+      const label = strip(device.label) || `${fallback} ${out.length + 1}`;
+      const key = label.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ deviceId: device.deviceId, label });
+    }
+    return out;
+  };
+
+  const real = collapse(
+    ofKind.filter((d) => d.deviceId !== "default" && d.deviceId !== "communications"),
+  );
+  // Some platforms expose *only* the aliases. Better a deduplicated list of
+  // those than an empty picker.
+  return real.length > 0 ? real : collapse(ofKind);
+}
+
 type PeerState = {
   connection: RTCPeerConnection;
   audio: HTMLAudioElement;
@@ -98,6 +133,9 @@ export function useVoice(roomId: string) {
   const inVoiceRef = useRef(false);
   const settingsRef = useRef(settings);
   const knownPeers = useRef<Set<string>>(new Set());
+  // True from the moment we ask to join until the first roster lands, so that
+  // roster can seed state without being mistaken for a burst of arrivals.
+  const justJoined = useRef(false);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -114,12 +152,8 @@ export function useVoice(roomId: string) {
   const refreshDevices = useCallback(async () => {
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
-      const named = (kind: MediaDeviceKind, fallback: string) =>
-        all
-          .filter((d) => d.kind === kind)
-          .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `${fallback} ${i + 1}` }));
-      setInputs(named("audioinput", "Microphone"));
-      setOutputs(named("audiooutput", "Speaker"));
+      setInputs(usableDevices(all, "audioinput", "Microphone"));
+      setOutputs(usableDevices(all, "audiooutput", "Speaker"));
     } catch {
       // Enumeration blocked — the pickers just stay empty.
     }
@@ -321,6 +355,11 @@ export function useVoice(roomId: string) {
     // One offerer per pair, decided by who arrived last, so two peers never
     // offer to each other at once.
     const onPeers = async (existing: VoicePeer[]) => {
+      // Everyone already here is *known*, not newly arrived. Without seeding
+      // this, the first roster after joining looks like everybody turning up at
+      // once and plays an arrival cue for each of them — so walking into a call
+      // of three sounded like four separate events.
+      knownPeers.current = new Set(existing.map((peer) => peer.peerId));
       for (const { peerId } of existing) {
         const peer = createPeer(peerId);
         try {
@@ -371,13 +410,18 @@ export function useVoice(roomId: string) {
     const onRoster = (roster: VoicePeer[]) => {
       const others = roster.filter((peer) => peer.peerId !== socket.id);
       // Arrivals and departures are announced to the people already in the
-      // call — that's the cue that tells you someone can hear you now.
-      if (inVoiceRef.current) {
+      // call — that's the cue that tells you someone can hear you now. Not on
+      // the roster that arrives with your own join, though: that one is a
+      // description of the room, not a list of things that just happened.
+      if (inVoiceRef.current && !justJoined.current) {
         const now = new Set(others.map((p) => p.peerId));
         for (const id of now) if (!knownPeers.current.has(id)) playPeerJoin();
         for (const id of knownPeers.current) if (!now.has(id)) playPeerLeave();
         knownPeers.current = now;
+      } else if (inVoiceRef.current) {
+        knownPeers.current = new Set(others.map((p) => p.peerId));
       }
+      justJoined.current = false;
       setPeers(others);
     };
     const onLeft = ({ peerId }: { peerId: string }) => teardownPeer(peerId);
@@ -402,6 +446,7 @@ export function useVoice(roomId: string) {
     setSpeaking(new Set());
     setError(null);
     knownPeers.current = new Set();
+    justJoined.current = false;
     for (const peerId of [...connections.current.keys()]) teardownPeer(peerId);
     for (const track of micStream.current?.getTracks() ?? []) track.stop();
     micStream.current = null;
@@ -435,6 +480,7 @@ export function useVoice(roomId: string) {
       watchLevel("me", graph.current.destination.stream);
 
       inVoiceRef.current = true;
+      justJoined.current = true;
       setInVoice(true);
       setMuted(false);
       socket.emit("voice:join");
