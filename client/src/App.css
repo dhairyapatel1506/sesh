@@ -541,16 +541,108 @@ button:disabled {
   color: #fff;
 }
 
+/* Filled, not ghosted: red-on-tinted-background read as a broken button rather
+   than a deliberate one, and leaving a call is worth stating plainly. */
 .voice-leave {
   padding: 0.3rem 0.7rem;
   font-size: 0.8rem;
-  background: transparent;
-  color: #ef4444;
+  font-weight: 500;
+  background: #ef4444;
+  color: #fff;
 }
 
 .voice-leave:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.12);
+  background: #dc2626;
   filter: none;
+}
+
+.voice-settings-menu {
+  position: relative;
+  display: flex;
+}
+
+.voice-settings {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 30;
+  width: min(20rem, calc(100vw - 2rem));
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  background: var(--bg, #fff);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  text-align: left;
+}
+
+.voice-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+}
+
+.voice-field > span {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  opacity: 0.85;
+}
+
+.voice-field em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.voice-field select,
+.voice-field input[type="range"] {
+  width: 100%;
+}
+
+.voice-field select {
+  padding: 0.35rem 0.4rem;
+  font: inherit;
+  font-size: 0.8rem;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  background: var(--bg);
+  color: inherit;
+}
+
+.voice-field input[type="range"] {
+  accent-color: var(--accent);
+  /* Range inputs ship with their own margins, which push them past the
+     panel's padding and make the panel look misaligned rather than the
+     slider. */
+  margin: 0;
+}
+
+.voice-check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-size: 0.78rem;
+}
+
+.voice-check input {
+  margin-top: 0.15rem;
+  accent-color: var(--accent);
+}
+
+.voice-check span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.voice-check em {
+  font-style: normal;
+  font-size: 0.72rem;
+  opacity: 0.65;
 }
 
 @media (prefers-reduced-motion: reduce) {

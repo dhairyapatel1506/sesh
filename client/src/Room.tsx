@@ -6,6 +6,7 @@ import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./yo
 import { useAuth } from "./auth";
 import { FriendsPanel, InviteToast, useFriends } from "./Friends";
 import { useVoice } from "./voice";
+import { playChatPing, warmAudio } from "./sounds";
 import { VoiceBar } from "./Voice";
 import "./App.css";
 
@@ -553,6 +554,35 @@ function Room() {
   // inline they pushed the page down and dragged the chat with them, so typing
   // a message meant scrolling past the whole list.
   const voice = useVoice(roomId);
+
+  // Talking over a video is hard because the video doesn't stop for you. While
+  // someone else is speaking, duck it — the same trick a radio desk does when
+  // the presenter opens their mic. The level before ducking is remembered so
+  // whatever the person had set is what comes back, and it's only restored if
+  // nothing else moved the volume in the meantime.
+  const duckedFromRef = useRef<number | null>(null);
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+    const shouldDuck = voice.inVoice && voice.settings.duckVideo && voice.othersSpeaking;
+
+    if (shouldDuck && duckedFromRef.current === null) {
+      const current = player.getVolume();
+      duckedFromRef.current = current;
+      player.setVolume(Math.round(current * 0.25));
+    } else if (!shouldDuck && duckedFromRef.current !== null) {
+      player.setVolume(duckedFromRef.current);
+      duckedFromRef.current = null;
+    }
+  }, [voice.inVoice, voice.settings.duckVideo, voice.othersSpeaking, videoId]);
+
+  // Leaving the call with the video still ducked would strand it quiet.
+  useEffect(() => {
+    if (voice.inVoice || duckedFromRef.current === null) return;
+    playerRef.current?.setVolume(duckedFromRef.current);
+    duckedFromRef.current = null;
+  }, [voice.inVoice]);
+
   const [friendsOpen, setFriendsOpen] = useState(false);
   const friendsMenuRef = useRef<HTMLDivElement>(null);
   const { friends } = useFriends();
@@ -1001,45 +1031,15 @@ function Room() {
     return () => window.clearInterval(interval);
   }, [debugMode, videoId]);
 
-  // A short synthesized two-tone ping — no audio file to ship, and the Web
-  // Audio API is precise enough that it sounds intentional rather than harsh.
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const playChatPing = () => {
-    try {
-      const ctx = (audioCtxRef.current ??= new AudioContext());
-      if (ctx.state === "suspended") void ctx.resume();
-      const t = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(880, t);
-      osc.frequency.setValueAtTime(1174.66, t + 0.09); // A5 → D6
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.12, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t);
-      osc.stop(t + 0.4);
-    } catch {
-      // No audio available (or blocked) — the tab-title badge still shows.
-    }
-  };
-
-  // Browsers keep an AudioContext suspended until a user gesture, and the
-  // ping fires while the tab is unfocused — so grab the first gesture to
-  // unlock audio ahead of time.
+  // Cues all live in sounds.ts — the chat ping shares a single AudioContext
+  // with the voice cues, and is deliberately loud enough to be heard over a
+  // music video playing through the same speakers.
   useEffect(() => {
-    const warm = () => {
-      try {
-        const ctx = (audioCtxRef.current ??= new AudioContext());
-        if (ctx.state === "suspended") void ctx.resume();
-      } catch {
-        // Same fallback as above.
-      }
-    };
-    window.addEventListener("pointerdown", warm, { once: true });
-    return () => window.removeEventListener("pointerdown", warm);
+    // Browsers keep an AudioContext suspended until a user gesture, and the
+    // ping fires while the tab is unfocused — so grab the first gesture to
+    // unlock audio ahead of time.
+    window.addEventListener("pointerdown", warmAudio, { once: true });
+    return () => window.removeEventListener("pointerdown", warmAudio);
   }, []);
 
   // Chat: history replaces (it re-arrives on every rejoin, catching up on

@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { socket } from "./socket";
+import {
+  playDeafen,
+  playMute,
+  playPeerJoin,
+  playPeerLeave,
+  playUndeafen,
+  playUnmute,
+  playVoiceJoin,
+  playVoiceLeave,
+} from "./sounds";
 
 export type VoicePeer = { peerId: string; name: string };
+export type AudioDevice = { deviceId: string; label: string };
 
 // Public STUN only. It's enough to discover your public address and punch
 // through the NAT most home routers use, which covers the large majority of
@@ -13,11 +24,44 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
 ];
 
+// Opus defaults to around 32 kbps for a mono voice track, which is fine for
+// speech and audibly thin next to music. Doubling it is still nothing beside a
+// video stream and noticeably cleaner on consonants and laughter.
+const VOICE_BITRATE = 64_000;
+
 // Speech is bursty and the meter is jumpy at the edges; these keep the ring
 // around someone's name from strobing on every syllable.
 const SPEAKING_THRESHOLD = 0.015;
 const SPEAKING_HANG_MS = 350;
 const METER_INTERVAL_MS = 100;
+
+const SETTINGS_KEY = "sesh:voice-settings";
+
+type Settings = {
+  inputDeviceId: string;
+  outputDeviceId: string;
+  inputVolume: number;
+  outputVolume: number;
+  duckVideo: boolean;
+};
+
+const defaultSettings: Settings = {
+  inputDeviceId: "",
+  outputDeviceId: "",
+  inputVolume: 1,
+  outputVolume: 1,
+  // On by default: the whole difficulty of talking over a video is that the
+  // video doesn't stop for you.
+  duckVideo: true,
+};
+
+function loadSettings(): Settings {
+  try {
+    return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") };
+  } catch {
+    return defaultSettings;
+  }
+}
 
 type PeerState = {
   connection: RTCPeerConnection;
@@ -35,29 +79,73 @@ export function useVoice(roomId: string) {
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inputs, setInputs] = useState<AudioDevice[]>([]);
+  const [outputs, setOutputs] = useState<AudioDevice[]>([]);
+  const [settings, setSettings] = useState<Settings>(loadSettings);
 
-  const localStream = useRef<MediaStream | null>(null);
+  const micStream = useRef<MediaStream | null>(null);
+  // The audio graph: mic -> gain -> destination. Peers are always sent the
+  // *destination's* track, never the microphone's, so changing input device is
+  // a rewire upstream rather than a track swap on every connection.
+  const graph = useRef<{
+    context: AudioContext;
+    gain: GainNode;
+    destination: MediaStreamAudioDestinationNode;
+    source: MediaStreamAudioSourceNode | null;
+  } | null>(null);
   const connections = useRef(new Map<string, PeerState>());
-  const audioContext = useRef<AudioContext | null>(null);
   const meters = useRef(new Map<string, { analyser: AnalyserNode; lastLoud: number }>());
   const inVoiceRef = useRef(false);
+  const settingsRef = useRef(settings);
+  const knownPeers = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    settingsRef.current = settings;
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      // Private mode — settings just don't persist.
+    }
+  }, [settings]);
+
+  // --- devices ------------------------------------------------------------
+  // Labels are hidden until microphone permission is granted, so the list is
+  // worth re-reading after joining rather than only on mount.
+  const refreshDevices = useCallback(async () => {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const named = (kind: MediaDeviceKind, fallback: string) =>
+        all
+          .filter((d) => d.kind === kind)
+          .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `${fallback} ${i + 1}` }));
+      setInputs(named("audioinput", "Microphone"));
+      setOutputs(named("audiooutput", "Speaker"));
+    } catch {
+      // Enumeration blocked — the pickers just stay empty.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshDevices();
+    navigator.mediaDevices?.addEventListener?.("devicechange", refreshDevices);
+    return () => navigator.mediaDevices?.removeEventListener?.("devicechange", refreshDevices);
+  }, [refreshDevices]);
 
   // --- speaking meters ----------------------------------------------------
-  const watchLevel = useCallback((id: string, stream: MediaStream) => {
+  const watchLevel = useCallback((id: string, node: AudioNode | MediaStream) => {
     try {
-      const ctx = (audioContext.current ??= new AudioContext());
-      void ctx.resume();
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
+      const audio = graph.current?.context;
+      if (!audio) return;
+      const analyser = audio.createAnalyser();
       analyser.fftSize = 512;
+      const source =
+        node instanceof MediaStream ? audio.createMediaStreamSource(node) : node;
       source.connect(analyser);
       meters.current.set(id, { analyser, lastLoud: 0 });
     } catch {
       // No meter is survivable — you just don't get the speaking ring.
     }
   }, []);
-
-  const unwatchLevel = (id: string) => meters.current.delete(id);
 
   useEffect(() => {
     if (!inVoice) return;
@@ -83,6 +171,84 @@ export function useVoice(roomId: string) {
     return () => window.clearInterval(timer);
   }, [inVoice]);
 
+  // --- output routing -----------------------------------------------------
+  const applyOutput = useCallback((audio: HTMLAudioElement) => {
+    const { outputDeviceId, outputVolume } = settingsRef.current;
+    audio.volume = outputVolume;
+    // setSinkId is Chromium-only; elsewhere the picker is simply absent and
+    // audio follows the system default.
+    const withSink = audio as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
+    if (outputDeviceId && withSink.setSinkId) {
+      void withSink.setSinkId(outputDeviceId).catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    for (const peer of connections.current.values()) {
+      peer.audio.volume = settings.outputVolume;
+      peer.audio.muted = deafened;
+    }
+  }, [settings.outputVolume, deafened]);
+
+  useEffect(() => {
+    for (const peer of connections.current.values()) applyOutput(peer.audio);
+  }, [settings.outputDeviceId, applyOutput]);
+
+  useEffect(() => {
+    if (graph.current) graph.current.gain.gain.value = settings.inputVolume;
+  }, [settings.inputVolume]);
+
+  // --- microphone ---------------------------------------------------------
+  const openMic = useCallback(async (deviceId: string) => {
+    // The room is playing audio out of the same speakers this mic is listening
+    // to, so cancellation isn't optional here the way it is in a call app.
+    const constraints: MediaStreamConstraints = {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+      },
+      video: false,
+    };
+    return navigator.mediaDevices.getUserMedia(constraints);
+  }, []);
+
+  const wireMic = useCallback(
+    (stream: MediaStream) => {
+      const g = graph.current;
+      if (!g) return;
+      g.source?.disconnect();
+      const source = g.context.createMediaStreamSource(stream);
+      source.connect(g.gain);
+      g.source = source;
+      micStream.current = stream;
+      for (const track of stream.getAudioTracks()) track.enabled = !muted;
+    },
+    [muted],
+  );
+
+  const setInputDevice = useCallback(
+    async (deviceId: string) => {
+      setSettings((s) => ({ ...s, inputDeviceId: deviceId }));
+      if (!inVoiceRef.current) return;
+      try {
+        const stream = await openMic(deviceId);
+        for (const track of micStream.current?.getTracks() ?? []) track.stop();
+        wireMic(stream);
+      } catch {
+        setError("Couldn't switch to that microphone.");
+      }
+    },
+    [openMic, wireMic],
+  );
+
+  const setOutputDevice = (deviceId: string) =>
+    setSettings((s) => ({ ...s, outputDeviceId: deviceId }));
+  const setInputVolume = (v: number) => setSettings((s) => ({ ...s, inputVolume: v }));
+  const setOutputVolume = (v: number) => setSettings((s) => ({ ...s, outputVolume: v }));
+  const setDuckVideo = (on: boolean) => setSettings((s) => ({ ...s, duckVideo: on }));
+
   // --- peer plumbing ------------------------------------------------------
   const teardownPeer = useCallback((peerId: string) => {
     const peer = connections.current.get(peerId);
@@ -93,7 +259,7 @@ export function useVoice(roomId: string) {
     peer.audio.srcObject = null;
     peer.audio.remove();
     connections.current.delete(peerId);
-    unwatchLevel(peerId);
+    meters.current.delete(peerId);
   }, []);
 
   const createPeer = useCallback(
@@ -108,9 +274,21 @@ export function useVoice(roomId: string) {
       // invite someone to pause the person talking to them.
       audio.style.display = "none";
       document.body.appendChild(audio);
+      applyOutput(audio);
+      audio.muted = deafened;
 
-      for (const track of localStream.current?.getTracks() ?? []) {
-        connection.addTrack(track, localStream.current!);
+      for (const track of graph.current?.destination.stream.getAudioTracks() ?? []) {
+        const sender = connection.addTrack(track, graph.current!.destination.stream);
+        // Ask for a bitrate worth listening to next to music. Best-effort: the
+        // browser may clamp it, and setParameters throws on some platforms if
+        // encodings haven't been created yet.
+        try {
+          const params = sender.getParameters();
+          params.encodings = [{ ...(params.encodings?.[0] ?? {}), maxBitrate: VOICE_BITRATE }];
+          void sender.setParameters(params).catch(() => {});
+        } catch {
+          // Keep the default bitrate.
+        }
       }
 
       connection.onicecandidate = (event) => {
@@ -121,10 +299,7 @@ export function useVoice(roomId: string) {
       connection.ontrack = (event) => {
         const [stream] = event.streams;
         audio.srcObject = stream;
-        void audio.play().catch(() => {
-          // Joining voice was a click, so autoplay is allowed — but if a
-          // browser still refuses, deafened state is the honest fallback.
-        });
+        void audio.play().catch(() => {});
         watchLevel(peerId, stream);
       };
       connection.onconnectionstatechange = () => {
@@ -137,7 +312,7 @@ export function useVoice(roomId: string) {
       connections.current.set(peerId, peer);
       return peer;
     },
-    [watchLevel],
+    [applyOutput, deafened, watchLevel],
   );
 
   // --- signalling ---------------------------------------------------------
@@ -170,7 +345,6 @@ export function useVoice(roomId: string) {
       try {
         if (data.description) {
           await peer.connection.setRemoteDescription(data.description);
-          // Anything that arrived early can be applied now.
           for (const candidate of peer.pending.splice(0)) {
             await peer.connection.addIceCandidate(candidate).catch(() => {});
           }
@@ -194,8 +368,18 @@ export function useVoice(roomId: string) {
     // The roster is everyone in the call including this tab. The UI renders
     // "you" separately from its own microphone meter, so leaving yourself in
     // here lists you twice — and makes the count in the idle state wrong too.
-    const onRoster = (roster: VoicePeer[]) =>
-      setPeers(roster.filter((peer) => peer.peerId !== socket.id));
+    const onRoster = (roster: VoicePeer[]) => {
+      const others = roster.filter((peer) => peer.peerId !== socket.id);
+      // Arrivals and departures are announced to the people already in the
+      // call — that's the cue that tells you someone can hear you now.
+      if (inVoiceRef.current) {
+        const now = new Set(others.map((p) => p.peerId));
+        for (const id of now) if (!knownPeers.current.has(id)) playPeerJoin();
+        for (const id of knownPeers.current) if (!now.has(id)) playPeerLeave();
+        knownPeers.current = now;
+      }
+      setPeers(others);
+    };
     const onLeft = ({ peerId }: { peerId: string }) => teardownPeer(peerId);
 
     socket.on("voice:peers", onPeers);
@@ -212,15 +396,20 @@ export function useVoice(roomId: string) {
 
   // --- join / leave -------------------------------------------------------
   const leave = useCallback(() => {
+    if (!inVoiceRef.current) return;
     inVoiceRef.current = false;
     setInVoice(false);
     setSpeaking(new Set());
     setError(null);
+    knownPeers.current = new Set();
     for (const peerId of [...connections.current.keys()]) teardownPeer(peerId);
-    for (const track of localStream.current?.getTracks() ?? []) track.stop();
-    localStream.current = null;
-    unwatchLevel("me");
+    for (const track of micStream.current?.getTracks() ?? []) track.stop();
+    micStream.current = null;
+    meters.current.clear();
+    graph.current?.source?.disconnect();
+    if (graph.current) graph.current.source = null;
     socket.emit("voice:leave");
+    playVoiceLeave();
   }, [teardownPeer]);
 
   const join = useCallback(async () => {
@@ -228,18 +417,30 @@ export function useVoice(roomId: string) {
     setConnecting(true);
     setError(null);
     try {
-      // The room is playing audio out of the same speakers this mic is
-      // listening to, so cancellation isn't optional here the way it is in a
-      // plain call app.
-      localStream.current = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false,
-      });
-      watchLevel("me", localStream.current);
+      const stream = await openMic(settingsRef.current.inputDeviceId);
+
+      if (!graph.current) {
+        const context = new AudioContext();
+        const gain = context.createGain();
+        const destination = context.createMediaStreamDestination();
+        gain.connect(destination);
+        graph.current = { context, gain, destination, source: null };
+      }
+      await graph.current.context.resume().catch(() => {});
+      graph.current.gain.gain.value = settingsRef.current.inputVolume;
+      wireMic(stream);
+      // Metered on the stream the peers are actually sent — past the gain
+      // stage, so the ring reflects what others hear rather than what the
+      // microphone picked up.
+      watchLevel("me", graph.current.destination.stream);
+
       inVoiceRef.current = true;
       setInVoice(true);
       setMuted(false);
       socket.emit("voice:join");
+      playVoiceJoin();
+      // Labels only become readable once permission is granted.
+      void refreshDevices();
     } catch (err) {
       const name = (err as DOMException)?.name;
       setError(
@@ -252,16 +453,17 @@ export function useVoice(roomId: string) {
     } finally {
       setConnecting(false);
     }
-  }, [connecting, watchLevel]);
+  }, [connecting, openMic, refreshDevices, watchLevel, wireMic]);
 
   const toggleMute = useCallback(() => {
     const next = !muted;
-    for (const track of localStream.current?.getAudioTracks() ?? []) {
+    for (const track of micStream.current?.getAudioTracks() ?? []) {
       // Disabling the track keeps the connection up and sends silence, which
       // is instant and reversible — stopping it would renegotiate.
       track.enabled = !next;
     }
     setMuted(next);
+    (next ? playMute : playUnmute)();
     if (next) {
       setSpeaking((prev) => {
         const copy = new Set(prev);
@@ -275,10 +477,14 @@ export function useVoice(roomId: string) {
     const next = !deafened;
     for (const peer of connections.current.values()) peer.audio.muted = next;
     setDeafened(next);
+    (next ? playDeafen : playUndeafen)();
     // Deafening while unmuted means talking to people you can't hear, which
     // nobody means to do — so it mutes too, the way Discord does.
-    if (next && !muted) toggleMute();
-  }, [deafened, muted, toggleMute]);
+    if (next && !muted) {
+      for (const track of micStream.current?.getAudioTracks() ?? []) track.enabled = false;
+      setMuted(true);
+    }
+  }, [deafened, muted]);
 
   // Changing rooms, or closing the tab, ends the call.
   useEffect(() => {
@@ -286,6 +492,9 @@ export function useVoice(roomId: string) {
       if (inVoiceRef.current) leave();
     };
   }, [roomId, leave]);
+
+  // Someone *else* talking — what the video should get out of the way for.
+  const othersSpeaking = [...speaking].some((id) => id !== "me");
 
   return {
     inVoice,
@@ -295,10 +504,20 @@ export function useVoice(roomId: string) {
     muted,
     deafened,
     error,
+    inputs,
+    outputs,
+    settings,
+    othersSpeaking,
     join,
     leave,
     toggleMute,
     toggleDeafen,
+    setInputDevice,
+    setOutputDevice,
+    setInputVolume,
+    setOutputVolume,
+    setDuckVideo,
     dismissError: () => setError(null),
+    canPickOutput: typeof (HTMLAudioElement.prototype as { setSinkId?: unknown }).setSinkId === "function",
   };
 }
