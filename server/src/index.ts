@@ -5,15 +5,25 @@ import cors from "cors";
 import { createServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import cookieParser from "cookie-parser";
-import { dbEnabled, env, migrate } from "./db.js";
+import { parse as parseCookie } from "cookie";
+import { dbEnabled, env, migrate, query } from "./db.js";
 import {
   authEnabled,
   clearSessionCookie,
   getUser,
+  readSession,
   setSessionCookie,
   signInWithGoogle,
   withUser,
 } from "./auth.js";
+import {
+  acceptFriend,
+  acceptedFriendIds,
+  areFriends,
+  listFriends,
+  removeFriend,
+  requestFriend,
+} from "./friends.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,7 +50,9 @@ if (!isProd) {
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: isProd ? undefined : { origin: "http://localhost:5173" },
+  // credentials here too: the socket handshake carries the session cookie,
+  // which is how presence knows who connected.
+  cors: isProd ? undefined : { origin: "http://localhost:5173", credentials: true },
 });
 
 app.get("/api/health", (_req, res) => {
@@ -88,6 +100,118 @@ app.post("/api/auth/google", async (req, res) => {
 app.post("/api/auth/logout", (_req, res) => {
   clearSessionCookie(res);
   res.json({ ok: true });
+});
+
+// Which signed-in people are in which room, right now. In memory alongside the
+// rooms themselves, not in the database: it describes this process's live
+// connections, and a restart makes every word of it false.
+const presence = new Map<string, string>(); // userId -> roomId
+const userSockets = new Map<string, Set<string>>(); // userId -> socket ids
+
+// Tell a user's own tabs, and their friends' tabs, that something they render
+// has changed. The client refetches rather than being handed a patch — the
+// list is small and this way there's one code path that builds it.
+async function notifyFriends(userId: string): Promise<void> {
+  const audience = new Set<string>([userId]);
+  try {
+    for (const id of await acceptedFriendIds(userId)) audience.add(id);
+  } catch {
+    // Database hiccup — the periodic refetch still catches up.
+  }
+  for (const id of audience) {
+    for (const socketId of userSockets.get(id) ?? []) {
+      io.to(socketId).emit("friends:changed");
+    }
+  }
+}
+
+const requireUser = (req: express.Request, res: express.Response): string | null => {
+  if (!authEnabled()) {
+    res.status(503).json({ error: "accounts aren't configured" });
+    return null;
+  }
+  if (!req.userId) {
+    res.status(401).json({ error: "sign in first" });
+    return null;
+  }
+  return req.userId;
+};
+
+app.get("/api/friends", async (req, res) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  try {
+    const friends = await listFriends(userId);
+    res.json({
+      friends: friends.map((friend) => ({
+        ...friend,
+        // Only settled friends reveal where they are. A pending request must
+        // not become a way to watch someone.
+        roomId: friend.status === "accepted" ? (presence.get(friend.id) ?? null) : null,
+      })),
+    });
+  } catch (err) {
+    console.error("friends list failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't load your friends" });
+  }
+});
+
+app.post("/api/friends/request", async (req, res) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  try {
+    const result = await requestFriend(userId, String(req.body?.code ?? ""));
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    await notifyFriends(userId);
+    // The person who was asked won't be in notifyFriends' audience until the
+    // request is accepted, so tell their tabs directly.
+    const target = await query<{ id: string }>("select id from users where friend_code = $1", [
+      String(req.body?.code ?? "").trim().toUpperCase(),
+    ]);
+    for (const socketId of userSockets.get(target[0]?.id ?? "") ?? []) {
+      io.to(socketId).emit("friends:changed");
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("friend request failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't send that request" });
+  }
+});
+
+app.post("/api/friends/accept", async (req, res) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  const otherId = String(req.body?.userId ?? "");
+  try {
+    const accepted = await acceptFriend(userId, otherId);
+    if (!accepted) return res.status(400).json({ error: "no request to accept" });
+    await notifyFriends(userId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("friend accept failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't accept that" });
+  }
+});
+
+app.post("/api/friends/remove", async (req, res) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  const otherId = String(req.body?.userId ?? "");
+  try {
+    // Collect the audience before deleting, or the person being removed never
+    // hears about it and keeps showing a friend who's gone.
+    const audience = await acceptedFriendIds(userId);
+    await removeFriend(userId, otherId);
+    for (const id of new Set([userId, otherId, ...audience])) {
+      for (const socketId of userSockets.get(id) ?? []) {
+        io.to(socketId).emit("friends:changed");
+      }
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("friend remove failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't do that" });
+  }
 });
 
 // Live traffic, straight from the process that already sees it all. Guarded
@@ -380,8 +504,32 @@ function startVideoForRoom(roomId: string, room: Room, videoId: string) {
   io.to(roomId).emit("video:prepare", { videoId });
 }
 
+// A socket carries the same session cookie the page does — the handshake is a
+// normal HTTP request. Reading it here means presence knows *who* connected,
+// not just that someone did, without the client asserting an identity it could
+// simply make up.
+io.use((socket, next) => {
+  if (authEnabled()) {
+    try {
+      const header = socket.handshake.headers.cookie;
+      const parsed = header ? parseCookie(header) : {};
+      socket.data.userId = readSession(parsed["sesh_session"]) ?? undefined;
+    } catch {
+      // Unsigned or unreadable — connect as anonymous, same as signed out.
+    }
+  }
+  next();
+});
+
 io.on("connection", (socket) => {
   console.log(`client connected: ${socket.id}`);
+
+  const userId = socket.data.userId as string | undefined;
+  if (userId) {
+    let sockets = userSockets.get(userId);
+    if (!sockets) userSockets.set(userId, (sockets = new Set()));
+    sockets.add(socket.id);
+  }
 
   socket.on(
     "room:join",
@@ -408,6 +556,10 @@ io.on("connection", (socket) => {
       }
 
       socket.data.roomId = roomId;
+      if (socket.data.userId) {
+        presence.set(socket.data.userId as string, roomId);
+        void notifyFriends(socket.data.userId as string);
+      }
       socket.data.clientId = clientId;
       socket.join(roomId);
 
@@ -621,13 +773,51 @@ io.on("connection", (socket) => {
     } else {
       io.to(roomId).emit("room:users", userList(room));
     }
+
+    // Only clear presence if this socket is still the one holding it. A second
+    // tab, or a reconnect that already re-joined, owns it now.
+    const uid = socket.data.userId as string | undefined;
+    if (uid && presence.get(uid) === roomId) {
+      const stillHere = [...(userSockets.get(uid) ?? [])].some(
+        (id) => id !== socket.id && io.sockets.sockets.get(id)?.data.roomId === roomId,
+      );
+      if (!stillHere) {
+        presence.delete(uid);
+        void notifyFriends(uid);
+      }
+    }
   };
 
   socket.on("room:leave", () => leaveRoom());
 
+  // "Come watch this" — a nudge to a friend's open tabs, carrying the room
+  // they'd be joining. Checked against the friendship rather than trusted:
+  // otherwise any signed-in stranger could push a link at anyone.
+  socket.on("friend:invite", async ({ toUserId }: { toUserId: string }) => {
+    const fromId = socket.data.userId as string | undefined;
+    const roomId = socket.data.roomId as string | undefined;
+    if (!fromId || !roomId || !toUserId) return;
+    try {
+      if (!(await areFriends(fromId, toUserId))) return;
+      const from = await getUser(fromId);
+      if (!from) return;
+      for (const socketId of userSockets.get(toUserId) ?? []) {
+        io.to(socketId).emit("friend:invited", { from: from.name, roomId });
+      }
+    } catch (err) {
+      console.error("invite failed:", (err as Error).message);
+    }
+  });
+
   socket.on("disconnect", () => {
     console.log(`client disconnected: ${socket.id}`);
     leaveRoom({ disconnecting: true });
+    const uid = socket.data.userId as string | undefined;
+    if (uid) {
+      const sockets = userSockets.get(uid);
+      sockets?.delete(socket.id);
+      if (sockets && sockets.size === 0) userSockets.delete(uid);
+    }
   });
 });
 

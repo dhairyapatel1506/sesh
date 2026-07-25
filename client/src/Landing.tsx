@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateRoomId } from "./roomId";
 import { SignInButton, useAuth } from "./auth";
+import { FriendsPanel, InviteToast } from "./Friends";
 import "./App.css";
 
 function Landing() {
@@ -21,6 +22,7 @@ function Landing() {
 
   return (
     <div className="app landing">
+      <InviteToast />
       <img src="/logo.png" alt="" className="landing-logo" />
       <h1>Sesh</h1>
       <p className="tagline">Watch YouTube with your friends, perfectly in sync.</p>
@@ -47,12 +49,15 @@ function Landing() {
       {enabled && !loading && (
         <div className="landing-account">
           {user ? (
-            <p>
-              Signed in as <strong>{user.name}</strong> ·{" "}
-              <button className="link-button" onClick={() => void signOut()}>
-                sign out
-              </button>
-            </p>
+            <>
+              <p>
+                Signed in as <strong>{user.name}</strong> ·{" "}
+                <button className="link-button" onClick={() => void signOut()}>
+                  sign out
+                </button>
+              </p>
+              <FriendsPanel mode="landing" />
+            </>
           ) : (
             <>
               <p className="landing-account-pitch">Sign in to keep a friends list.</p>

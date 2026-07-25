@@ -335,6 +335,123 @@ button:disabled {
   justify-content: center;
 }
 
+.friends {
+  margin-top: 1.5rem;
+  text-align: left;
+  max-width: 26rem;
+}
+
+.landing .friends {
+  margin-inline: auto;
+}
+
+.friends h2 {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.friends h3 {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin: 1rem 0 0.4rem;
+  font-weight: 600;
+}
+
+.friends-code {
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+}
+
+.friends-code code {
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.friends-note,
+.friends-empty {
+  font-size: 0.8rem;
+  opacity: 0.75;
+  margin-top: 0.6rem;
+}
+
+.friends-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.friends-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.friend-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* "in a room" is the whole point of the list, so it reads as a live state
+   rather than another piece of metadata. */
+.friend-where {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.friend-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.friend-actions button:not(.link-button) {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.room-friends {
+  margin-top: 1.5rem;
+}
+
+/* Floats over whatever you're watching rather than displacing it — an invite
+   shouldn't reflow the page you're in the middle of using. */
+.invite-toast {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 0.9rem;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  max-width: calc(100vw - 2rem);
+}
+
+.invite-toast button:not(.link-button) {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.invite-toast .link-button {
+  color: #fff;
+  opacity: 0.7;
+}
+
 /* A button that reads as a link — for actions that sit inside a sentence. */
 .link-button {
   background: none;

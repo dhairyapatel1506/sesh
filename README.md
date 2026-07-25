@@ -25,6 +25,7 @@ Create a room, share the code, and everyone's player stays locked together — p
   - Searchable emoji picker built in, plus `:shortcodes:` (`:fire:` → 🔥) — and emoji-only messages render big
 - 👥 **Presence** — see who's in the room with you; names are first-come-first-served per room (no impersonating whoever's already there)
 - 🔑 **Optional sign-in** — Sesh works with no account at all: open a link, type a name, you're in. Signing in with Google only adds a friends list, and carries your name into rooms so you stop typing it
+- 🫂 **Friends** — swap 6-character friend codes to connect. Your list shows who's in a room right now, with one click to join them; from inside a sesh, one click invites them to yours. Presence is live (no polling) and only ever visible to settled friends — a pending request reveals nothing
 - ⏱️ **Room uptime** — every room shows how long it's been going
 - 🔇 **Tap for sound** — browsers only autoplay a muted video, so anyone who didn't press play themselves lands in the room silently. A one-tap prompt over the player turns the sound on (which also keeps the browser from suspending the tab in the background)
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go

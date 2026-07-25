@@ -4,6 +4,7 @@ import { API_BASE, socket } from "./socket";
 import { applyShortcodes, searchEmojis } from "./emoji";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import { useAuth } from "./auth";
+import { FriendsPanel, InviteToast } from "./Friends";
 import "./App.css";
 
 type RoomState = {
@@ -1333,6 +1334,8 @@ function Room() {
         </div>
       </header>
 
+      <InviteToast />
+
       <div className="room-toolbar">
         <div className="user-list">
           {users.map((u) => (
@@ -1478,6 +1481,15 @@ function Room() {
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {/* Inside the video column, not beside it: room-main is a two-column
+              flex row on desktop (video, chat) and a third child would land
+              between them. */}
+          {authUser && (
+            <div className="room-friends">
+              <FriendsPanel mode="room" />
             </div>
           )}
         </div>
