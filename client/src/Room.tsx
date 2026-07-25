@@ -1418,7 +1418,7 @@ function Room() {
               </button>
               {friendsOpen && (
                 <div className="friends-popover">
-                  <FriendsPanel mode="room" />
+                  <FriendsPanel mode="room" roomId={roomId} />
                 </div>
               )}
             </div>

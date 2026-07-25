@@ -55,8 +55,13 @@ function DevicePanel({
             {volume > 1 && " · boosted"}
           </em>
         </span>
+        {/* The fill is drawn from the value rather than left to the browser:
+            a native range leaves its thumb inset at the extremes, so a slider
+            at maximum still looks a little short of it. */}
         <input
           type="range"
+          className={maxVolume > 1 ? "has-unity-mark" : undefined}
+          style={{ "--fill": `${(volume / maxVolume) * 100}%` } as React.CSSProperties}
           min={0}
           max={maxVolume}
           step={0.05}
@@ -129,6 +134,7 @@ export function VoiceBar({ voice, myName }: { voice: Voice; myName: string }) {
     speaking,
     muted,
     deafened,
+    mutedPeers,
     error,
     inputs,
     outputs,
@@ -138,6 +144,7 @@ export function VoiceBar({ voice, myName }: { voice: Voice; myName: string }) {
     leave,
     toggleMute,
     toggleDeafen,
+    togglePeerMute,
     setInputDevice,
     setOutputDevice,
     setInputVolume,
@@ -181,11 +188,12 @@ export function VoiceBar({ voice, myName }: { voice: Voice; myName: string }) {
       <div className="voice-people">
         {everyone.map((person) => {
           const isMe = person.peerId === "me";
-          const isSpeaking = speaking.has(person.peerId) && !(isMe && muted);
+          const silenced = mutedPeers.has(person.peerId);
+          const isSpeaking = speaking.has(person.peerId) && !(isMe && muted) && !silenced;
           return (
             <div
               key={person.peerId}
-              className={`voice-person${isSpeaking ? " is-speaking" : ""}`}
+              className={`voice-person${isSpeaking ? " is-speaking" : ""}${silenced ? " is-silenced" : ""}`}
               title={isMe ? `${person.name} (you)` : person.name}
             >
               <span className="voice-avatar">{initials(person.name)}</span>
@@ -193,6 +201,20 @@ export function VoiceBar({ voice, myName }: { voice: Voice; myName: string }) {
                 {person.name}
                 {isMe && muted && <span className="voice-muted-mark">🔇</span>}
               </span>
+              {/* Silencing someone is yours alone — it changes what you hear,
+                  not what anyone else does, so it lives on their chip rather
+                  than in a menu that suggests it has wider reach. */}
+              {!isMe && (
+                <button
+                  className="voice-person-mute"
+                  onClick={() => togglePeerMute(person.peerId)}
+                  title={silenced ? `Unmute ${person.name} for you` : `Mute ${person.name} for you`}
+                  aria-label={silenced ? `Unmute ${person.name}` : `Mute ${person.name}`}
+                  aria-pressed={silenced}
+                >
+                  {silenced ? "🔇" : "🔊"}
+                </button>
+              )}
             </div>
           );
         })}

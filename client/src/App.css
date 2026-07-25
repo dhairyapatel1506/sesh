@@ -400,6 +400,13 @@ button:disabled {
 
 /* "in a room" is the whole point of the list, so it reads as a live state
    rather than another piece of metadata. */
+/* A friend standing in this very room needs no invitation. */
+.friend-here {
+  font-size: 0.75rem;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+
 .friend-where {
   font-size: 0.7rem;
   opacity: 0.7;
@@ -507,6 +514,31 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 8rem;
+}
+
+/* Someone you've silenced still shows, just visibly turned down. */
+.voice-person.is-silenced {
+  opacity: 0.55;
+}
+
+.voice-person-mute {
+  padding: 0 0.15rem;
+  font-size: 0.7rem;
+  line-height: 1;
+  background: none;
+  border: 0;
+  color: inherit;
+  opacity: 0.5;
+}
+
+.voice-person-mute:hover:not(:disabled) {
+  opacity: 1;
+  filter: none;
+  background: none;
+}
+
+.voice-person.is-silenced .voice-person-mute {
+  opacity: 1;
 }
 
 .voice-muted-mark {
@@ -637,19 +669,103 @@ button:disabled {
   margin: 0;
 }
 
+/* The browser's own arrow sits hard against the border and no amount of
+   padding moves it — it's positioned against the box, not the text. Drawing
+   our own is the only way to give it room to breathe. */
 .voice-field select {
-  /* Room on the right for the arrow the browser draws inside the box. */
-  padding: 0.4rem 0.6rem;
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0.4rem 2rem 0.4rem 0.6rem;
   font: inherit;
   font-size: 0.8rem;
   border-radius: 8px;
   border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
-  background: var(--bg);
+  background-color: var(--bg);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 1rem top 50%, right 0.7rem top 50%;
+  background-size: 0.3rem 0.3rem, 0.3rem 0.3rem;
+  background-repeat: no-repeat;
   color: inherit;
+  cursor: pointer;
 }
 
+/* Track filled from the value rather than by the browser: a native range
+   insets its thumb at both ends, so a slider at maximum stops visibly short
+   of full and reads as a rendering bug. */
 .voice-field input[type="range"] {
-  accent-color: var(--accent);
+  appearance: none;
+  -webkit-appearance: none;
+  height: 1.1rem;
+  background: transparent;
+  cursor: pointer;
+}
+
+.voice-field input[type="range"]::-webkit-slider-runnable-track {
+  height: 0.3rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--fill, 100%),
+    var(--border, rgba(128, 128, 128, 0.35)) var(--fill, 100%) 100%
+  );
+}
+
+.voice-field input[type="range"]::-moz-range-track {
+  height: 0.3rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--fill, 100%),
+    var(--border, rgba(128, 128, 128, 0.35)) var(--fill, 100%) 100%
+  );
+}
+
+.voice-field input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 0.8rem;
+  height: 0.8rem;
+  margin-top: -0.25rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+}
+
+.voice-field input[type="range"]::-moz-range-thumb {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+}
+
+/* Where 100% sits on a slider that runs past it, so "normal" stays findable
+   and a thumb resting mid-track reads as deliberate rather than stuck. Drawn
+   on the track itself — the track pseudo-element paints over anything on the
+   input behind it. */
+.voice-field input.has-unity-mark::-webkit-slider-runnable-track {
+  background-image: linear-gradient(var(--bg) 0 0),
+    linear-gradient(
+      to right,
+      var(--accent) 0 var(--fill, 100%),
+      var(--border, rgba(128, 128, 128, 0.35)) var(--fill, 100%) 100%
+    );
+  background-size: 2px 100%, 100% 100%;
+  background-position: 50% 0, 0 0;
+  background-repeat: no-repeat, no-repeat;
+}
+
+.voice-field input.has-unity-mark::-moz-range-track {
+  background-image: linear-gradient(var(--bg) 0 0),
+    linear-gradient(
+      to right,
+      var(--accent) 0 var(--fill, 100%),
+      var(--border, rgba(128, 128, 128, 0.35)) var(--fill, 100%) 100%
+    );
+  background-size: 2px 100%, 100% 100%;
+  background-position: 50% 0, 0 0;
+  background-repeat: no-repeat, no-repeat;
 }
 
 .voice-check {

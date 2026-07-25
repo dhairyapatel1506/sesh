@@ -56,7 +56,15 @@ export function useFriends() {
   return { friends, refresh };
 }
 
-export function FriendsPanel({ mode }: { mode: "landing" | "room" }) {
+export function FriendsPanel({
+  mode,
+  roomId,
+}: {
+  mode: "landing" | "room";
+  /** The room this panel is being shown inside, so friends already here can be
+      recognised rather than invited to where they're standing. */
+  roomId?: string;
+}) {
   const { user } = useAuth();
   const { friends, refresh } = useFriends();
   const navigate = useNavigate();
@@ -153,21 +161,27 @@ export function FriendsPanel({ mode }: { mode: "landing" | "room" }) {
           <li key={friend.id}>
             <span className="friend-name">
               {friend.name}
-              {friend.roomId && <span className="friend-where">in a room</span>}
+              {friend.roomId && friend.roomId !== roomId && (
+                <span className="friend-where">in a room</span>
+              )}
             </span>
             <span className="friend-actions">
               {/* In a room: offer to pull them here. On the landing page:
                   offer to go where they are. Only one of the two ever makes
                   sense at a time. */}
               {mode === "room" ? (
-                <button
-                  onClick={() => {
-                    socket.emit("friend:invite", { toUserId: friend.id });
-                    setNote(`Invited ${friend.name}.`);
-                  }}
-                >
-                  Invite
-                </button>
+                friend.roomId === roomId ? (
+                  <span className="friend-here">here</span>
+                ) : (
+                  <button
+                    onClick={() => {
+                      socket.emit("friend:invite", { toUserId: friend.id });
+                      setNote(`Invited ${friend.name}.`);
+                    }}
+                  >
+                    Invite
+                  </button>
+                )
               ) : (
                 friend.roomId && <button onClick={() => navigate(`/room/${friend.roomId}`)}>Join</button>
               )}

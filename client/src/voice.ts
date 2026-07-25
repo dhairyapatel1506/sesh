@@ -113,6 +113,10 @@ export function useVoice(roomId: string) {
   const [speaking, setSpeaking] = useState<Set<string>>(new Set());
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
+  // People you've silenced for yourself. Local only — muting someone in your
+  // own ears is a personal preference; muting them in everyone else's would be
+  // a moderation power, and a room of friends doesn't need one of those.
+  const [mutedPeers, setMutedPeers] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [inputs, setInputs] = useState<AudioDevice[]>([]);
   const [outputs, setOutputs] = useState<AudioDevice[]>([]);
@@ -136,6 +140,8 @@ export function useVoice(roomId: string) {
   // True from the moment we ask to join until the first roster lands, so that
   // roster can seed state without being mistaken for a burst of arrivals.
   const justJoined = useRef(false);
+  // Read inside createPeer, which runs outside React's render cycle.
+  const mutedPeersRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -159,11 +165,18 @@ export function useVoice(roomId: string) {
     }
   }, []);
 
+  // Only ever asked for once voice is actually being used. Enumerating audio
+  // devices makes the browser touch the audio subsystem, and on Bluetooth
+  // headsets that can be enough to flip the link from A2DP (stereo, full
+  // bandwidth) to the headset profile (mono, telephone bandwidth) — which
+  // sounds exactly like the video going muffled for a second. Someone who
+  // never opens voice now never triggers any of it.
   useEffect(() => {
+    if (!inVoice) return;
     void refreshDevices();
     navigator.mediaDevices?.addEventListener?.("devicechange", refreshDevices);
     return () => navigator.mediaDevices?.removeEventListener?.("devicechange", refreshDevices);
-  }, [refreshDevices]);
+  }, [inVoice, refreshDevices]);
 
   // --- speaking meters ----------------------------------------------------
   const watchLevel = useCallback((id: string, node: AudioNode | MediaStream) => {
@@ -218,11 +231,11 @@ export function useVoice(roomId: string) {
   }, []);
 
   useEffect(() => {
-    for (const peer of connections.current.values()) {
+    for (const [peerId, peer] of connections.current) {
       peer.audio.volume = settings.outputVolume;
-      peer.audio.muted = deafened;
+      peer.audio.muted = deafened || mutedPeers.has(peerId);
     }
-  }, [settings.outputVolume, deafened]);
+  }, [settings.outputVolume, deafened, mutedPeers]);
 
   useEffect(() => {
     for (const peer of connections.current.values()) applyOutput(peer.audio);
@@ -309,7 +322,7 @@ export function useVoice(roomId: string) {
       audio.style.display = "none";
       document.body.appendChild(audio);
       applyOutput(audio);
-      audio.muted = deafened;
+      audio.muted = deafened || mutedPeersRef.current.has(peerId);
 
       for (const track of graph.current?.destination.stream.getAudioTracks() ?? []) {
         const sender = connection.addTrack(track, graph.current!.destination.stream);
@@ -447,6 +460,8 @@ export function useVoice(roomId: string) {
     setError(null);
     knownPeers.current = new Set();
     justJoined.current = false;
+    mutedPeersRef.current = new Set();
+    setMutedPeers(new Set());
     for (const peerId of [...connections.current.keys()]) teardownPeer(peerId);
     for (const track of micStream.current?.getTracks() ?? []) track.stop();
     micStream.current = null;
@@ -519,6 +534,16 @@ export function useVoice(roomId: string) {
     }
   }, [muted]);
 
+  const togglePeerMute = useCallback((peerId: string) => {
+    setMutedPeers((prev) => {
+      const next = new Set(prev);
+      if (next.has(peerId)) next.delete(peerId);
+      else next.add(peerId);
+      mutedPeersRef.current = next;
+      return next;
+    });
+  }, []);
+
   const toggleDeafen = useCallback(() => {
     const next = !deafened;
     for (const peer of connections.current.values()) peer.audio.muted = next;
@@ -549,6 +574,7 @@ export function useVoice(roomId: string) {
     speaking,
     muted,
     deafened,
+    mutedPeers,
     error,
     inputs,
     outputs,
@@ -558,6 +584,7 @@ export function useVoice(roomId: string) {
     leave,
     toggleMute,
     toggleDeafen,
+    togglePeerMute,
     setInputDevice,
     setOutputDevice,
     setInputVolume,
