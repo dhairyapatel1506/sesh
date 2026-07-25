@@ -567,10 +567,24 @@ button:disabled {
 }
 
 /* Off states are stated in colour as well as icon — an emoji swap alone is
-   easy to miss when you're checking whether you're still muted. */
-.voice-control.is-off {
+   easy to miss when you're checking whether you're still muted. The chevron
+   turns with its control so the pair stays one object rather than half a red
+   button; it keeps its own hover, though, since it does its own job. */
+.voice-control.is-off,
+.voice-caret.is-off,
+.voice-caret.is-off[aria-expanded="true"] {
   background: #ef4444;
   color: #fff;
+}
+
+/* Darker red, the way Leave darkens — the generic hover below would otherwise
+   wash a red button back to the page tint, which reads as it switching off.
+   Written per element rather than on the group so hovering the microphone
+   doesn't light up its chevron as well. */
+.voice-control.is-off:hover:not(:disabled),
+.voice-caret.is-off:hover:not(:disabled) {
+  background: #dc2626;
+  filter: none;
 }
 
 /* Filled, not ghosted: red-on-tinted-background read as a broken button rather

@@ -84,6 +84,9 @@ function ControlWithMenu({
   onClose,
   button,
   caretLabel,
+  /** Whether the control this menu belongs to is switched off, so the pair
+      reads as one thing rather than half a red button. */
+  off,
   children,
 }: {
   open: boolean;
@@ -91,6 +94,7 @@ function ControlWithMenu({
   onClose: () => void;
   button: React.ReactNode;
   caretLabel: string;
+  off?: boolean;
   children: React.ReactNode;
 }) {
   const holder = useRef<HTMLDivElement>(null);
@@ -113,7 +117,7 @@ function ControlWithMenu({
     <div className="voice-control-group" ref={holder}>
       {button}
       <button
-        className="voice-caret"
+        className={`voice-caret${off ? " is-off" : ""}`}
         onClick={onToggle}
         aria-expanded={open}
         aria-label={caretLabel}
@@ -226,6 +230,7 @@ export function VoiceBar({ voice, myName }: { voice: Voice; myName: string }) {
           onToggle={() => setMenu((m) => (m === "input" ? null : "input"))}
           onClose={() => setMenu(null)}
           caretLabel="Input settings"
+          off={muted}
           button={
             <button
               className={`voice-control${muted ? " is-off" : ""}`}
@@ -256,6 +261,7 @@ export function VoiceBar({ voice, myName }: { voice: Voice; myName: string }) {
           onToggle={() => setMenu((m) => (m === "output" ? null : "output"))}
           onClose={() => setMenu(null)}
           caretLabel="Output settings"
+          off={deafened}
           button={
             <button
               className={`voice-control${deafened ? " is-off" : ""}`}
