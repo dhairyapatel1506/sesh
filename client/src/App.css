@@ -418,6 +418,147 @@ button:disabled {
   font-size: 0.8rem;
 }
 
+/* ---- Voice ------------------------------------------------------------ */
+
+.voice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 12px;
+  background: var(--accent-bg);
+}
+
+/* Before anyone joins there's nothing to frame — just an offer. */
+.voice-idle {
+  background: none;
+  padding: 0;
+  justify-content: flex-start;
+}
+
+.voice-join {
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: transparent;
+  color: var(--accent);
+}
+
+.voice-join:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.voice-hint,
+.voice-error {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.voice-error {
+  color: #ef4444;
+  opacity: 1;
+  cursor: pointer;
+}
+
+.voice-people {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.voice-person {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.6rem 0.25rem 0.25rem;
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 0.8rem;
+}
+
+.voice-avatar {
+  display: grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  /* The speaking ring is drawn as a box-shadow so it can appear and grow
+     without changing the avatar's size — anything that alters layout makes
+     the whole row jitter every time somebody talks. */
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  transition: box-shadow 120ms ease-out;
+}
+
+.voice-person.is-speaking .voice-avatar {
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.9);
+}
+
+.voice-person-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 8rem;
+}
+
+.voice-muted-mark {
+  margin-left: 0.3rem;
+  font-size: 0.7rem;
+}
+
+.voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.voice-control {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.9rem;
+  line-height: 1;
+  background: var(--bg);
+  color: inherit;
+}
+
+.voice-control:hover:not(:disabled) {
+  filter: none;
+  background: var(--accent-bg);
+}
+
+/* Off states are stated in colour as well as icon — an emoji swap alone is
+   easy to miss when you're checking whether you're still muted. */
+.voice-control.is-off {
+  background: #ef4444;
+  color: #fff;
+}
+
+.voice-leave {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  background: transparent;
+  color: #ef4444;
+}
+
+.voice-leave:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12);
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-avatar {
+    transition: none;
+  }
+}
+
 .toolbar-actions {
   display: flex;
   align-items: center;

@@ -5,6 +5,8 @@ import { applyShortcodes, searchEmojis } from "./emoji";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import { useAuth } from "./auth";
 import { FriendsPanel, InviteToast, useFriends } from "./Friends";
+import { useVoice } from "./voice";
+import { VoiceBar } from "./Voice";
 import "./App.css";
 
 type RoomState = {
@@ -550,6 +552,7 @@ function Room() {
   // Friends live behind a toolbar menu rather than under the video: listed
   // inline they pushed the page down and dragged the chat with them, so typing
   // a message meant scrolling past the whole list.
+  const voice = useVoice(roomId);
   const [friendsOpen, setFriendsOpen] = useState(false);
   const friendsMenuRef = useRef<HTMLDivElement>(null);
   const { friends } = useFriends();
@@ -1425,6 +1428,11 @@ function Room() {
           </button>
         </div>
       </div>
+
+      {/* Its own row above the video: the call is about who's here, which
+          belongs next to the people list, and putting it inside the video
+          column would push the queue down the page. */}
+      <VoiceBar voice={voice} myName={nickname} />
 
       <div className="load-bar">
         <input

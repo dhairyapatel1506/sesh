@@ -411,6 +411,15 @@ type Room = {
   queue: QueueItem[];
   pendingStart: PendingStart | null;
   createdAt: number; // when the room came into existence — drives the uptime display
+  // Who's in the voice call, keyed by socket id rather than clientId: a peer
+  // connection belongs to one tab, and the same person in two tabs is two
+  // different ends of the mesh.
+  voice: Map<string, VoicePeer>;
+};
+
+type VoicePeer = {
+  name: string;
+  clientId: string;
 };
 
 const CHAT_MAX_LENGTH = 500;
@@ -443,6 +452,7 @@ function getOrCreateRoom(roomId: string): Room {
       queue: [],
       pendingStart: null,
       createdAt: Date.now(),
+      voice: new Map(),
     };
     rooms.set(roomId, room);
   }
@@ -782,6 +792,13 @@ io.on("connection", (socket) => {
       room.users.delete(clientId);
     }
 
+    // Leaving the room leaves the call — otherwise the roster keeps showing
+    // someone whose peer connection is already gone.
+    if (room.voice.delete(socket.id)) {
+      io.to(roomId).emit("voice:left", { peerId: socket.id });
+      io.to(roomId).emit("voice:roster", Array.from(room.voice, ([id, p]) => ({ peerId: id, name: p.name })));
+    }
+
     // Don't let a synchronized start wait out its timeout on someone who left.
     if (room.pendingStart?.waiting.delete(clientId) && room.pendingStart.waiting.size === 0) {
       beginPendingStart(roomId, room);
@@ -809,6 +826,56 @@ io.on("connection", (socket) => {
   };
 
   socket.on("room:leave", () => leaveRoom());
+
+  // ---- Voice ------------------------------------------------------------
+  // The server introduces peers and then gets out of the way: audio flows
+  // browser-to-browser and never passes through here. Relaying live audio on a
+  // free instance would fall over, and the mesh costs each participant one
+  // connection per other participant — fine for a room of friends, which is
+  // all this is for.
+  const voiceRoster = (room: Room) =>
+    Array.from(room.voice, ([socketId, peer]) => ({ peerId: socketId, name: peer.name }));
+
+  const leaveVoice = () => {
+    const roomId = socket.data.roomId as string | undefined;
+    const room = roomId ? rooms.get(roomId) : undefined;
+    if (!room || !room.voice.delete(socket.id)) return;
+    io.to(roomId!).emit("voice:left", { peerId: socket.id });
+    io.to(roomId!).emit("voice:roster", voiceRoster(room));
+  };
+
+  socket.on("voice:join", () => {
+    const room = currentRoom(socket);
+    const roomId = socket.data.roomId as string | undefined;
+    const clientId = socket.data.clientId as string | undefined;
+    if (!room || !roomId || !clientId) return;
+    if (room.voice.has(socket.id)) return;
+
+    // Whoever is already in the call is handed to the newcomer, who makes the
+    // offers. One side offering per pair is what keeps two peers from talking
+    // over each other with simultaneous offers (glare) — no negotiation
+    // tie-breaking needed anywhere.
+    const existing = voiceRoster(room);
+    room.voice.set(socket.id, {
+      name: room.users.get(clientId)?.name ?? "Someone",
+      clientId,
+    });
+    socket.emit("voice:peers", existing);
+    io.to(roomId).emit("voice:roster", voiceRoster(room));
+  });
+
+  socket.on("voice:leave", () => leaveVoice());
+
+  // Offers, answers and ICE candidates, passed to one named peer. The payload
+  // is opaque here on purpose: this is a post box, not a participant.
+  socket.on("voice:signal", ({ to, data }: { to: string; data: unknown }) => {
+    const room = currentRoom(socket);
+    if (!room || typeof to !== "string") return;
+    // Both ends must be in this room's call, or this becomes a way to push
+    // arbitrary payloads at any socket on the server.
+    if (!room.voice.has(socket.id) || !room.voice.has(to)) return;
+    io.to(to).emit("voice:signal", { from: socket.id, data });
+  });
 
   // "Come watch this" — a nudge to a friend's open tabs, carrying the room
   // they'd be joining. Checked against the friendship rather than trusted:
