@@ -278,15 +278,7 @@ function Room() {
     recoveringRef.current && performance.now() < recoverUntilRef.current;
   const [needsUnmute, setNeedsUnmute] = useState(false);
 
-  // ?debug — an on-page record of what sync actually decided. On-page because
-  // the thing being debugged is what a tab does while it's in the background,
-  // and reading it from devtools risks changing the behaviour under test.
   const debugMode = useRef(new URLSearchParams(window.location.search).has("debug")).current;
-  const syncLogRef = useRef<string[]>([]);
-  const logSync = (line: string) => {
-    if (!debugMode) return;
-    syncLogRef.current = [...syncLogRef.current.slice(-7), line];
-  };
 
   // videoId of a server-initiated synchronized start this tab is pre-buffering
   // (see video:prepare): the video plays muted until its first PLAYING event —
@@ -372,7 +364,6 @@ function Room() {
       performance.now() - recoverSinceRef.current >= RECOVER_MIN_MS
     ) {
       recoveringRef.current = false;
-      logSync(`recovered (drift ${(drift * 1000).toFixed(0)}ms)`);
     }
 
     if (gap < DRIFT_TOLERANCE_SECONDS) {
@@ -712,12 +703,6 @@ function Room() {
             // PLAYING, which is indistinguishable from someone clicking play.
             const roomState = lastStateRef.current;
             const roomTime = roomState ? targetTime(roomState) : null;
-            const held = (why: string) => {
-              logSync(
-                `${event.data === PlayerState.PLAYING ? "play" : "pause"} ` +
-                  `@${time.toFixed(1)} vs room ${roomTime?.toFixed(1) ?? "?"} — held (${why})`,
-              );
-            };
             if (isRecovering() && roomState) {
               // The room is already playing, so a play from this tab tells it
               // nothing it doesn't know. All such a broadcast can do is move
@@ -725,24 +710,13 @@ function Room() {
               // measured in the wild, that's routinely a second out either way,
               // which is enough to make everyone else stutter or jump back.
               // Being close to the room is not evidence of being a real click.
-              if (event.data === PlayerState.PLAYING && roomState.isPlaying) {
-                held("room already playing");
-                return;
-              }
+              if (event.data === PlayerState.PLAYING && roomState.isPlaying) return;
               // A pause is worth relaying even mid-recovery — it's news, and
               // it's what someone reaching for the player actually does. Only
               // ignore one reported from meaningfully behind the room, which a
               // person pausing what they're watching never is.
-              if (roomTime !== null && time < roomTime - RESUME_BEHIND_SECONDS) {
-                held("behind room");
-                return;
-              }
+              if (roomTime !== null && time < roomTime - RESUME_BEHIND_SECONDS) return;
             }
-            logSync(
-              `${event.data === PlayerState.PLAYING ? "play" : "pause"} ` +
-                `@${time.toFixed(1)} vs room ${roomTime?.toFixed(1) ?? "?"} — sent` +
-                `${isRecovering() ? " (recovering)" : ""}`,
-            );
             localActionAtRef.current = performance.now();
             socket.emit(event.data === PlayerState.PLAYING ? "video:play" : "video:pause", {
               time,
@@ -955,17 +929,11 @@ function Room() {
         state?.isPlaying && playerRef.current ? targetTime(state) - estimatedPosition() : 0;
       setDebugInfo(
         [
-          [
-            `drift ${(drift * 1000).toFixed(0)}ms`,
-            `clock offset ${clockOffsetRef.current.toFixed(0)}ms`,
-            `start lag ${(playStartLagRef.current * 1000).toFixed(0)}ms`,
-            `rate ${playbackRateRef.current}`,
-            isRecovering() ? "RECOVERING" : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-          ...syncLogRef.current,
-        ].join("\n"),
+          `drift ${(drift * 1000).toFixed(0)}ms`,
+          `clock offset ${clockOffsetRef.current.toFixed(0)}ms`,
+          `start lag ${(playStartLagRef.current * 1000).toFixed(0)}ms`,
+          `rate ${playbackRateRef.current}`,
+        ].join(" · "),
       );
     }, 250);
     return () => window.clearInterval(interval);
@@ -1108,7 +1076,6 @@ function Room() {
       if (document.visibilityState === "hidden") {
         window.clearTimeout(rateNudgeTimerRef.current);
         setRate(1);
-        logSync("hidden");
         return;
       }
       // Distrust this tab's own playback state until it proves it's caught up:
@@ -1119,7 +1086,6 @@ function Room() {
       recoverUntilRef.current = performance.now() + RECOVER_MAX_MS;
       positionSampleRef.current = null; // nothing sampled while hidden is trustworthy
       socket.emit("resync:request");
-      logSync("visible — recovering");
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
