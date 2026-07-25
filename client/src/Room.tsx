@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { API_BASE, socket } from "./socket";
 import { applyShortcodes, searchEmojis } from "./emoji";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
+import { useAuth } from "./auth";
 import "./App.css";
 
 type RoomState = {
@@ -187,6 +188,7 @@ function describeYouTubeError(code: number): string {
 function Room() {
   const { roomId = "" } = useParams();
   const clientIdRef = useRef(getClientId());
+  const { user: authUser, loading: authLoading } = useAuth();
 
   const [connected, setConnected] = useState(socket.connected);
   const [urlInput, setUrlInput] = useState("");
@@ -536,6 +538,18 @@ function Room() {
     const t = window.setInterval(() => setUptimeTick(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, [roomCreatedAt]);
+
+  // Signed in? Then the name question is already answered — walk straight in.
+  // Exactly once per visit, though: names are first-come-first-served per room,
+  // so if this one is taken the server denies the join, and re-filling the same
+  // name would just deny it again forever. After that they pick one by hand.
+  const autoNamedRef = useRef(false);
+  useEffect(() => {
+    if (authLoading || !authUser || nickname || autoNamedRef.current) return;
+    autoNamedRef.current = true;
+    sessionStorage.setItem(nameKeyFor(roomId), authUser.name);
+    setNickname(authUser.name);
+  }, [authLoading, authUser, nickname, roomId]);
 
   // Join the room once a nickname is known, and rejoin on every (re)connect —
   // a fresh socket id after a reconnect has no room membership on the server.

@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateRoomId } from "./roomId";
+import { SignInButton, useAuth } from "./auth";
 import "./App.css";
 
 function Landing() {
   const [joinCode, setJoinCode] = useState("");
   const navigate = useNavigate();
+  const { user, loading, enabled, signOut } = useAuth();
 
   const handleCreate = () => {
     navigate(`/room/${generateRoomId()}`);
@@ -38,6 +40,27 @@ function Landing() {
           <button onClick={handleJoin}>Join</button>
         </div>
       </div>
+
+      {/* Sign-in sits below the two things people came here to do, and stays
+          out of the way entirely when the server has no accounts configured.
+          Nothing here is a gate — it only adds friends on top. */}
+      {enabled && !loading && (
+        <div className="landing-account">
+          {user ? (
+            <p>
+              Signed in as <strong>{user.name}</strong> ·{" "}
+              <button className="link-button" onClick={() => void signOut()}>
+                sign out
+              </button>
+            </p>
+          ) : (
+            <>
+              <p className="landing-account-pitch">Sign in to keep a friends list.</p>
+              <SignInButton />
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

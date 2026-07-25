@@ -4,7 +4,16 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
 import { Server, type Socket } from "socket.io";
+import cookieParser from "cookie-parser";
 import { dbEnabled, migrate } from "./db.js";
+import {
+  authEnabled,
+  clearSessionCookie,
+  getUser,
+  setSessionCookie,
+  signInWithGoogle,
+  withUser,
+} from "./auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,7 +33,9 @@ const app = express();
 
 if (!isProd) {
   // Vite dev server runs on a different port/origin than this API in dev.
-  app.use(cors({ origin: "http://localhost:5173" }));
+  // credentials, or the session cookie is neither sent nor accepted across
+  // that origin boundary and sign-in silently does nothing in dev only.
+  app.use(cors({ origin: "http://localhost:5173", credentials: true }));
 }
 
 const httpServer = createServer(app);
@@ -33,6 +44,49 @@ const io = new Server(httpServer, {
 });
 
 app.get("/api/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.use(cookieParser());
+app.use(express.json());
+app.use(withUser);
+
+// The client asks what sign-in is available rather than being built with it
+// baked in: the client ID then lives in one place (the server's environment),
+// and a deploy without one simply shows no sign-in button instead of a broken
+// one. Not a secret — it's public by design, visible in any page that uses it.
+app.get("/api/auth/config", (_req, res) => {
+  res.json({
+    enabled: authEnabled(),
+    clientId: authEnabled() ? process.env.GOOGLE_CLIENT_ID : null,
+  });
+});
+
+app.get("/api/auth/me", async (req, res) => {
+  if (!req.userId) return res.json({ user: null });
+  try {
+    res.json({ user: await getUser(req.userId) });
+  } catch {
+    res.json({ user: null });
+  }
+});
+
+app.post("/api/auth/google", async (req, res) => {
+  if (!authEnabled()) return res.status(503).json({ error: "sign-in isn't configured" });
+  const credential = req.body?.credential;
+  if (typeof credential !== "string") return res.status(400).json({ error: "no credential" });
+  try {
+    const user = await signInWithGoogle(credential);
+    setSessionCookie(res, user.id);
+    res.json({ user });
+  } catch (err) {
+    console.error("sign-in failed:", (err as Error).message);
+    res.status(401).json({ error: "couldn't verify that sign-in" });
+  }
+});
+
+app.post("/api/auth/logout", (_req, res) => {
+  clearSessionCookie(res);
   res.json({ ok: true });
 });
 

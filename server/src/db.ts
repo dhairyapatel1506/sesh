@@ -24,6 +24,12 @@ function getPool(): pg.Pool | null {
     if (connectionString) {
       pool = new pg.Pool({
         connectionString,
+        // Say what we mean rather than inheriting it from the URL's sslmode.
+        // A coming pg release reinterprets sslmode=require as libpq does —
+        // encrypted but with the certificate unchecked — which would silently
+        // downgrade this connection the day the dependency updates. Verifying
+        // the certificate is the point of TLS to a database we don't host.
+        ssl: { rejectUnauthorized: true },
         // Neon closes idle connections itself and its free plan counts them,
         // so a single small web service has no reason to hold many.
         max: 5,

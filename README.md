@@ -23,7 +23,8 @@ Create a room, share the code, and everyone's player stays locked together — p
   - "…is typing" indicators, live as people compose
   - Away in another tab? The tab title shows an unread count, the favicon gets a red dot, and a soft ping sounds (mutable via the 🔔 toggle)
   - Searchable emoji picker built in, plus `:shortcodes:` (`:fire:` → 🔥) — and emoji-only messages render big
-- 👥 **Presence** — see who's in the room with you; names are first-come-first-served per room (no impersonating whoever's already there), picked fresh every visit — no accounts, nothing stored
+- 👥 **Presence** — see who's in the room with you; names are first-come-first-served per room (no impersonating whoever's already there)
+- 🔑 **Optional sign-in** — Sesh works with no account at all: open a link, type a name, you're in. Signing in with Google only adds a friends list, and carries your name into rooms so you stop typing it
 - ⏱️ **Room uptime** — every room shows how long it's been going
 - 🔇 **Tap for sound** — browsers only autoplay a muted video, so anyone who didn't press play themselves lands in the room silently. A one-tap prompt over the player turns the sound on (which also keeps the browser from suspending the tab in the background)
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
@@ -87,6 +88,21 @@ YOUTUBE_API_KEY=your-key-here
 ```
 
 The free quota allows ~100 searches/day; repeated queries are served from an in-memory cache.
+
+### Accounts (optional)
+
+Signing in is only needed for the friends list. Leave these unset and Sesh runs exactly as it always has — anonymous rooms, no sign-in button anywhere.
+
+```bash
+# server/.env
+DATABASE_URL=postgresql://...        # any Postgres; Neon's free tier is plenty
+GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+SESSION_SECRET=...                   # openssl rand -hex 32
+```
+
+The Google client is an **OAuth client ID of type "Web application"** with your origins (e.g. `http://localhost:5173`) listed as authorized JavaScript origins and *no* redirect URIs — sign-in happens in the page, so nothing ever redirects. Only the default `email`/`profile`/`openid` scopes are used, which is why the consent screen needs no verification review.
+
+Tables are created on boot: `server/migrations/*.sql` are applied in filename order, each in a transaction, tracked in a `_migrations` table. A database that's configured but unreachable stops the server rather than letting it serve a broken sign-in.
 
 ## Terminal client
 

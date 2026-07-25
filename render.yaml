@@ -14,6 +14,10 @@ services:
       # Secrets — set the values in the Render dashboard, never in this file.
       - key: YOUTUBE_API_KEY
         sync: false
-      # Neon connection string. Absent, the app runs without accounts.
+      # Accounts. All three absent, the app runs without sign-in at all.
       - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: SESSION_SECRET
         sync: false
