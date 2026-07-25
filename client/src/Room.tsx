@@ -201,6 +201,8 @@ function Room() {
   const [nameError, setNameError] = useState<string | null>(null);
   const [joined, setJoined] = useState(false);
   const [roomCreatedAt, setRoomCreatedAt] = useState<number | null>(null);
+  // Seeded from the local clock only because the offset isn't measured yet;
+  // the first tick a second later replaces it with server time.
   const [uptimeTick, setUptimeTick] = useState(Date.now());
   const [typers, setTypers] = useState<{ clientId: string; name: string; until: number }[]>([]);
   const [emojiQuery, setEmojiQuery] = useState("");
@@ -533,10 +535,15 @@ function Room() {
     };
   }, []);
 
-  // One-second heartbeat for the room-uptime display.
+  // One-second heartbeat for the room-uptime display. On the server's clock,
+  // not this machine's: roomCreatedAt is a server timestamp, so subtracting a
+  // local Date.now() from it doesn't measure elapsed time — it measures how
+  // wrong this computer's clock is. A laptop running 45 minutes fast showed
+  // every brand-new room as 45 minutes old. Playback already corrects for this
+  // (see clockOffsetRef); the uptime display simply wasn't using it.
   useEffect(() => {
     if (!roomCreatedAt) return;
-    const t = window.setInterval(() => setUptimeTick(Date.now()), 1000);
+    const t = window.setInterval(() => setUptimeTick(serverNow()), 1000);
     return () => window.clearInterval(t);
   }, [roomCreatedAt]);
 
@@ -683,7 +690,13 @@ function Room() {
                 playerRef.current!.seekTo(0, true);
                 positionSampleRef.current = null;
               });
-              if (prepareUnmuteRef.current) playerRef.current.unMute();
+              // Sound comes back if this tab had it a moment ago, or if it has
+              // ever earned autoplay outright — someone who pressed play
+              // themselves shouldn't be silenced by the room's next video.
+              if (prepareUnmuteRef.current || autoplayGrantedRef.current) {
+                playerRef.current.unMute();
+                mutedByUsRef.current = false;
+              }
               socket.emit("video:ready", { videoId: videoIdRef.current });
               return;
             }
@@ -845,6 +858,10 @@ function Room() {
         applyRemote(() => {
           positionSampleRef.current = null;
           playerRef.current!.mute();
+          // Marked like every other mute we perform. If the restore below
+          // never runs, this is what makes the silence recoverable instead of
+          // permanent and invisible.
+          mutedByUsRef.current = true;
           playerRef.current!.loadVideoById(id, 0);
         });
       }
@@ -1119,6 +1136,19 @@ function Room() {
         autoplayGrantedRef.current = true;
         mutedByUsRef.current = false;
       }
+      // Silent because of something we did, on a tab that's already allowed to
+      // make noise? Then no one needs to be asked — just turn it back on. This
+      // is the safety net for every path that mutes and fails to restore, of
+      // which the pre-buffer is only the one we know about. Without it the
+      // person who pressed play sits in silence wondering why.
+      if (mutedByUsRef.current && silent && autoplayGrantedRef.current) {
+        player.unMute();
+        if (player.getVolume() === 0) player.setVolume(100);
+        mutedByUsRef.current = false;
+        setNeedsUnmute(false);
+        return;
+      }
+      // Only ask when we genuinely can't do it ourselves.
       setNeedsUnmute(mutedByUsRef.current && silent);
     }, 1000);
     return () => window.clearInterval(interval);

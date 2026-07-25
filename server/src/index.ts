@@ -419,6 +419,15 @@ const CHAT_MAX_LENGTH = 500;
 const CHAT_HISTORY_LIMIT = 100;
 const QUEUE_LIMIT = 50;
 const QUEUE_TITLE_MAX_LENGTH = 200;
+
+// Last time each (person, video) pair was queued, to swallow double-fired
+// clicks. Small and self-pruning — see below.
+const DUPLICATE_QUEUE_WINDOW_MS = 2000;
+const recentQueueAdds = new Map<string, number>();
+setInterval(() => {
+  const cutoff = Date.now() - DUPLICATE_QUEUE_WINDOW_MS;
+  for (const [key, at] of recentQueueAdds) if (at < cutoff) recentQueueAdds.delete(key);
+}, 30_000).unref();
 // How long a synchronized start waits for stragglers to finish buffering.
 const PREPARE_TIMEOUT_MS = 8000;
 
@@ -671,6 +680,17 @@ io.on("connection", (socket) => {
       return;
     }
     if (room.queue.length >= QUEUE_LIMIT) return;
+    // The same person queueing the same video twice within a couple of seconds
+    // is a double-fired click, not two decisions — one reported laptop did it
+    // on every add. Queueing it twice on purpose that fast isn't a thing
+    // anyone does, and the queue already allows the same video twice if you
+    // wait. Guarding here covers every cause: a doubled tap, a trackpad, a
+    // buffered emit flushed after a reconnect.
+    const now = Date.now();
+    const justQueued = recentQueueAdds.get(`${clientId}:${videoId}`);
+    if (justQueued && now - justQueued < DUPLICATE_QUEUE_WINDOW_MS) return;
+    recentQueueAdds.set(`${clientId}:${videoId}`, now);
+
     room.queue.push({
       id: crypto.randomUUID(),
       videoId,

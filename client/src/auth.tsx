@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { API_BASE } from "./socket";
+import { API_BASE, socket } from "./socket";
 
 export type User = {
   id: string;
@@ -60,16 +60,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // The server reads who you are from the cookie on the socket's *handshake*,
+  // which happened when the page loaded — before you signed in. Until that
+  // connection is replaced it stays anonymous, so nothing addressed to you
+  // arrives: friends appear only on refresh, and nobody sees you as online.
+  // Reconnecting redoes the handshake, now with the cookie.
+  const reidentify = () => {
+    socket.disconnect();
+    socket.connect();
+  };
+
+  const signIn = (next: User | null) => {
+    setUser(next);
+    reidentify();
+  };
+
   const signOut = async () => {
     await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }).catch(
       () => {},
     );
     setUser(null);
+    // Same in reverse: the socket would otherwise keep announcing a presence
+    // that belongs to someone who just signed out.
+    reidentify();
   };
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, enabled: clientId !== null, clientId, setUser, signOut }}
+      value={{ user, loading, enabled: clientId !== null, clientId, setUser: signIn, signOut }}
     >
       {children}
     </AuthContext.Provider>
