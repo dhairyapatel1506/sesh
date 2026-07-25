@@ -149,13 +149,23 @@ const LOCAL_DRIFT_CHECK_MS = 750;
 // before a resync is allowed to overrule it again.
 const BUFFERING_GRACE_MS = 4000;
 const LOCAL_ACTION_GRACE_MS = 1500;
-// A tab coming back into view gets a moment in which a play/pause that lands
-// behind the room is read as the browser resuming suspended media rather than
-// as a person clicking. Short, because a real click is only mistaken for a
-// resume if it happens this soon after the tab reappears *and* lands this far
-// behind the room — which a click on a synced player never does.
-const RESUME_GRACE_MS = 1500;
+// After a tab comes back into view it is "recovering" until it proves it's
+// caught up with the room. While recovering, a play/pause landing this far
+// behind the room is the browser resuming suspended media, not a person
+// clicking, and must not be broadcast. This deliberately isn't a fixed window:
+// a resuming player has to finish buffering before it reports anything, which
+// takes as long as it takes. Recovery ends the moment the tab is back in sync,
+// so outside of that everything (including scrubbing backwards) works normally.
 const RESUME_BEHIND_SECONDS = 0.75;
+// Recovery can't end on the first in-sync reading: at the instant a tab comes
+// back the player often still *looks* fine — it hasn't resumed yet, so nothing
+// has moved and drift reads as zero. Ending there closes the window before the
+// event it exists to catch even arrives. So hold it open for a beat regardless,
+// then keep holding for as long as the tab is actually behind.
+const RECOVER_MIN_MS = 5000;
+// Backstop only, for a tab that never converges — otherwise it could stay
+// unable to broadcast indefinitely.
+const RECOVER_MAX_MS = 30_000;
 
 // YouTube IFrame API error codes: https://developers.google.com/youtube/iframe_api_reference#onError
 function describeYouTubeError(code: number): string {
@@ -258,9 +268,25 @@ function Room() {
   // opposed to the person deliberately turning the sound down. Only the
   // former earns an unmute prompt.
   const mutedByUsRef = useRef(false);
-  // When this tab last came back into view, so a resume can be told from a click.
-  const visibleAtRef = useRef(0);
+  // Set when this tab comes back into view, cleared once it's demonstrably back
+  // in sync (see correctDrift) — the window in which a "play" may really be the
+  // browser resuming media it suspended while nobody was looking.
+  const recoveringRef = useRef(false);
+  const recoverSinceRef = useRef(0);
+  const recoverUntilRef = useRef(0);
+  const isRecovering = () =>
+    recoveringRef.current && performance.now() < recoverUntilRef.current;
   const [needsUnmute, setNeedsUnmute] = useState(false);
+
+  // ?debug — an on-page record of what sync actually decided. On-page because
+  // the thing being debugged is what a tab does while it's in the background,
+  // and reading it from devtools risks changing the behaviour under test.
+  const debugMode = useRef(new URLSearchParams(window.location.search).has("debug")).current;
+  const syncLogRef = useRef<string[]>([]);
+  const logSync = (line: string) => {
+    if (!debugMode) return;
+    syncLogRef.current = [...syncLogRef.current.slice(-7), line];
+  };
 
   // videoId of a server-initiated synchronized start this tab is pre-buffering
   // (see video:prepare): the video plays muted until its first PLAYING event —
@@ -337,6 +363,17 @@ function Room() {
     const player = playerRef.current!;
     const drift = target - estimatedPosition(); // positive = we're behind
     const gap = Math.abs(drift);
+
+    // Close enough to the room to be trusted again — but not before the
+    // settling period is up, or this ends the moment it began.
+    if (
+      recoveringRef.current &&
+      gap <= RESUME_BEHIND_SECONDS &&
+      performance.now() - recoverSinceRef.current >= RECOVER_MIN_MS
+    ) {
+      recoveringRef.current = false;
+      logSync(`recovered (drift ${(drift * 1000).toFixed(0)}ms)`);
+    }
 
     if (gap < DRIFT_TOLERANCE_SECONDS) {
       // In sync — make sure no stale nudge keeps running.
@@ -666,23 +703,31 @@ function Room() {
             if (document.hidden) return;
             if (suppressUntilRef.current) return;
             const time = playerRef.current.getCurrentTime();
-            // Neither can a tab that only just stopped being hidden. A tab
-            // playing *silently* — which every joiner is, since autoplay is
-            // only granted muted — is one the browser feels free to suspend
-            // once it's out of view; an audible one it leaves alone. That's
-            // the whole difference, and why this never happens to whoever
-            // pressed play. On the way back the suspended player resumes,
-            // buffers for an instant, and reports PLAYING from wherever it
-            // froze — indistinguishable from someone clicking play, except
-            // for the position, which is seconds in the past. Broadcast, it
-            // rewinds the entire room to this tab's stall. So a play/pause
-            // landing this soon after the tab reappears, and this far behind
-            // the room, is the browser resuming rather than a person acting:
-            // stay quiet and let the resync already in flight catch us up.
-            const sinceVisible = performance.now() - visibleAtRef.current;
-            if (sinceVisible < RESUME_GRACE_MS && lastStateRef.current) {
-              if (time < targetTime(lastStateRef.current) - RESUME_BEHIND_SECONDS) return;
+            // Neither can a tab that's still recovering from having been one.
+            // A tab playing *silently* — which every joiner is, since autoplay
+            // is only granted muted — is one the browser feels free to suspend
+            // once it's out of view; an audible one it leaves alone. That's the
+            // whole difference, and why this never happens to whoever pressed
+            // play. On the way back the suspended player resumes, buffers, and
+            // reports PLAYING from wherever it froze — indistinguishable from
+            // someone clicking play, except for the position, which is seconds
+            // in the past. Broadcast, it rewinds the entire room to this tab's
+            // stall. So while recovering, a play/pause from behind the room is
+            // the browser catching up rather than a person acting: stay quiet
+            // and let the resync already in flight pull this tab forward.
+            const roomTime = lastStateRef.current ? targetTime(lastStateRef.current) : null;
+            if (isRecovering() && roomTime !== null && time < roomTime - RESUME_BEHIND_SECONDS) {
+              logSync(
+                `${event.data === PlayerState.PLAYING ? "play" : "pause"} ` +
+                  `@${time.toFixed(1)} vs room ${roomTime.toFixed(1)} — held`,
+              );
+              return;
             }
+            logSync(
+              `${event.data === PlayerState.PLAYING ? "play" : "pause"} ` +
+                `@${time.toFixed(1)} vs room ${roomTime?.toFixed(1) ?? "?"} — sent` +
+                `${isRecovering() ? " (recovering)" : ""}`,
+            );
             localActionAtRef.current = performance.now();
             socket.emit(event.data === PlayerState.PLAYING ? "video:play" : "video:pause", {
               time,
@@ -886,7 +931,6 @@ function Room() {
 
   // Live sync diagnostics, rendered when the URL has ?debug — compare these
   // side by side in two tabs instead of guessing by ear.
-  const debugMode = useRef(new URLSearchParams(window.location.search).has("debug")).current;
   const [debugInfo, setDebugInfo] = useState("");
   useEffect(() => {
     if (!debugMode || !videoId) return;
@@ -896,11 +940,17 @@ function Room() {
         state?.isPlaying && playerRef.current ? targetTime(state) - estimatedPosition() : 0;
       setDebugInfo(
         [
-          `drift ${(drift * 1000).toFixed(0)}ms`,
-          `clock offset ${clockOffsetRef.current.toFixed(0)}ms`,
-          `start lag ${(playStartLagRef.current * 1000).toFixed(0)}ms`,
-          `rate ${playbackRateRef.current}`,
-        ].join(" · "),
+          [
+            `drift ${(drift * 1000).toFixed(0)}ms`,
+            `clock offset ${clockOffsetRef.current.toFixed(0)}ms`,
+            `start lag ${(playStartLagRef.current * 1000).toFixed(0)}ms`,
+            `rate ${playbackRateRef.current}`,
+            isRecovering() ? "RECOVERING" : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          ...syncLogRef.current,
+        ].join("\n"),
       );
     }, 250);
     return () => window.clearInterval(interval);
@@ -1043,11 +1093,18 @@ function Room() {
       if (document.visibilityState === "hidden") {
         window.clearTimeout(rateNudgeTimerRef.current);
         setRate(1);
+        logSync("hidden");
         return;
       }
-      visibleAtRef.current = performance.now(); // a resume is about to look like a click
+      // Distrust this tab's own playback state until it proves it's caught up:
+      // whatever the browser did to the player while it was out of view, the
+      // room must not hear about it as if it were somebody clicking.
+      recoveringRef.current = true;
+      recoverSinceRef.current = performance.now();
+      recoverUntilRef.current = performance.now() + RECOVER_MAX_MS;
       positionSampleRef.current = null; // nothing sampled while hidden is trustworthy
       socket.emit("resync:request");
+      logSync("visible — recovering");
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
