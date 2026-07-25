@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { OAuth2Client } from "google-auth-library";
-import { query, dbEnabled } from "./db.js";
+import { query, dbEnabled, env } from "./db.js";
 
 const COOKIE_NAME = "sesh_session";
 const SESSION_DAYS = 30;
@@ -18,10 +18,10 @@ export type User = {
   friendCode: string;
 };
 
-export const authEnabled = () => dbEnabled() && Boolean(process.env.GOOGLE_CLIENT_ID);
+export const authEnabled = () => dbEnabled() && Boolean(env("GOOGLE_CLIENT_ID"));
 
 let client: OAuth2Client | null = null;
-const googleClient = () => (client ??= new OAuth2Client(process.env.GOOGLE_CLIENT_ID));
+const googleClient = () => (client ??= new OAuth2Client(env("GOOGLE_CLIENT_ID")));
 
 function randomCode(length = 6): string {
   const bytes = crypto.randomBytes(length);
@@ -36,7 +36,7 @@ function randomCode(length = 6): string {
 // it only removes it from the browser. For "who are my friends" that's a fair
 // trade, and the cookie is httpOnly so script on the page can't read it.
 function sign(payload: string): string {
-  const secret = process.env.SESSION_SECRET;
+  const secret = env("SESSION_SECRET");
   if (!secret) throw new Error("SESSION_SECRET is not set");
   return crypto.createHmac("sha256", secret).update(payload).digest("base64url");
 }
@@ -100,7 +100,7 @@ export async function getUser(userId: string): Promise<User | null> {
 export async function signInWithGoogle(credential: string): Promise<User> {
   const ticket = await googleClient().verifyIdToken({
     idToken: credential,
-    audience: process.env.GOOGLE_CLIENT_ID,
+    audience: env("GOOGLE_CLIENT_ID"),
   });
   const payload = ticket.getPayload();
   if (!payload?.sub || !payload.email) throw new Error("incomplete Google profile");

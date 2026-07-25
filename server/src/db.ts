@@ -5,6 +5,18 @@ import pg from "pg";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Values pasted into a dashboard arrive with invisible passengers — a trailing
+// newline, a wrapping pair of quotes the shell would have eaten. Neither is
+// visible in the UI that accepted it, and both fail in ways that point
+// somewhere else entirely: a client id with a newline fails as an audience
+// mismatch, a connection string with quotes as a DNS error.
+export function env(key: string): string | undefined {
+  const raw = process.env[key];
+  if (raw === undefined) return undefined;
+  const cleaned = raw.trim().replace(/^["']|["']$/g, "");
+  return cleaned === "" ? undefined : cleaned;
+}
+
 // Everything about accounts is optional. With no DATABASE_URL the app runs
 // exactly as it always has — anonymous rooms, no sign-in button — instead of
 // refusing to boot. That keeps local dev and the existing deployment working
@@ -20,7 +32,7 @@ let initialised = false;
 function getPool(): pg.Pool | null {
   if (!initialised) {
     initialised = true;
-    const connectionString = process.env.DATABASE_URL;
+    const connectionString = env("DATABASE_URL");
     if (connectionString) {
       pool = new pg.Pool({
         connectionString,

@@ -5,7 +5,7 @@ import cors from "cors";
 import { createServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import cookieParser from "cookie-parser";
-import { dbEnabled, migrate } from "./db.js";
+import { dbEnabled, env, migrate } from "./db.js";
 import {
   authEnabled,
   clearSessionCookie,
@@ -58,7 +58,7 @@ app.use(withUser);
 app.get("/api/auth/config", (_req, res) => {
   res.json({
     enabled: authEnabled(),
-    clientId: authEnabled() ? process.env.GOOGLE_CLIENT_ID : null,
+    clientId: authEnabled() ? env("GOOGLE_CLIENT_ID") : null,
   });
 });
 
