@@ -278,6 +278,35 @@ button:disabled {
   max-width: 640px;
 }
 
+/* Anchors the unmute nudge over the video rather than the page. */
+.player-frame {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* Sits clear of YouTube's own top-right controls and bottom bar. */
+.unmute-nudge {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 2;
+  padding: 0.45rem 0.8rem;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+
+.unmute-nudge:hover {
+  background: rgba(0, 0, 0, 0.9);
+}
+
 /* The YouTube API sets the iframe's width/height as HTML attributes (not
    CSS), so it ignores the wrapper's responsive sizing unless overridden
    here directly. */
@@ -628,7 +657,8 @@ button:disabled {
     min-width: 0;
   }
 
-  .room-video #yt-player {
+  .room-video #yt-player,
+  .room-video .player-frame {
     max-width: none;
   }
 

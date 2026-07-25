@@ -25,6 +25,7 @@ Create a room, share the code, and everyone's player stays locked together — p
   - Searchable emoji picker built in, plus `:shortcodes:` (`:fire:` → 🔥) — and emoji-only messages render big
 - 👥 **Presence** — see who's in the room with you; names are first-come-first-served per room (no impersonating whoever's already there), picked fresh every visit — no accounts, nothing stored
 - ⏱️ **Room uptime** — every room shows how long it's been going
+- 🔇 **Tap for sound** — browsers only autoplay a muted video, so anyone who didn't press play themselves lands in the room silently. A one-tap prompt over the player turns the sound on (which also keeps the browser from suspending the tab in the background)
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
 - 🌗 **Automatic dark mode** — follows your system theme
 - 💻 **Terminal client** — join the same rooms from a terminal, audio-only: `npm install -g sesh-terminal` ([see below](#terminal-client))

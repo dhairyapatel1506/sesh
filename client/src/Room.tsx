@@ -149,6 +149,13 @@ const LOCAL_DRIFT_CHECK_MS = 750;
 // before a resync is allowed to overrule it again.
 const BUFFERING_GRACE_MS = 4000;
 const LOCAL_ACTION_GRACE_MS = 1500;
+// A tab coming back into view gets a moment in which a play/pause that lands
+// behind the room is read as the browser resuming suspended media rather than
+// as a person clicking. Short, because a real click is only mistaken for a
+// resume if it happens this soon after the tab reappears *and* lands this far
+// behind the room — which a click on a synced player never does.
+const RESUME_GRACE_MS = 1500;
+const RESUME_BEHIND_SECONDS = 0.75;
 
 // YouTube IFrame API error codes: https://developers.google.com/youtube/iframe_api_reference#onError
 function describeYouTubeError(code: number): string {
@@ -247,6 +254,13 @@ function Room() {
   // Once this tab has genuinely gotten permission to play audio, the browser
   // remembers that for the rest of the page's lifetime.
   const autoplayGrantedRef = useRef(false);
+  // Whether *we* silenced this tab (to get autoplay past the browser), as
+  // opposed to the person deliberately turning the sound down. Only the
+  // former earns an unmute prompt.
+  const mutedByUsRef = useRef(false);
+  // When this tab last came back into view, so a resume can be told from a click.
+  const visibleAtRef = useRef(0);
+  const [needsUnmute, setNeedsUnmute] = useState(false);
 
   // videoId of a server-initiated synchronized start this tab is pre-buffering
   // (see video:prepare): the video plays muted until its first PLAYING event —
@@ -363,6 +377,7 @@ function Room() {
           playerRef.current!.loadVideoById(state.videoId!, target + playStartLagRef.current);
           if (!autoplayGrantedRef.current) {
             playerRef.current!.mute();
+            mutedByUsRef.current = true;
           }
           playRequestedAtRef.current = performance.now();
         } else {
@@ -436,8 +451,11 @@ function Room() {
         playerRef.current!.seekTo(target + playStartLagRef.current, true);
         if (!autoplayGrantedRef.current) {
           // Browsers block unmuted autoplay without a user gesture; start
-          // muted and let the user unmute via the player's own volume control.
+          // muted and offer the unmute prompt (see needsUnmute) to get the
+          // sound — and with it the browser's willingness to keep this tab
+          // running in the background — back.
           playerRef.current!.mute();
+          mutedByUsRef.current = true;
         }
         playRequestedAtRef.current = performance.now();
         playerRef.current!.playVideo();
@@ -648,6 +666,23 @@ function Room() {
             if (document.hidden) return;
             if (suppressUntilRef.current) return;
             const time = playerRef.current.getCurrentTime();
+            // Neither can a tab that only just stopped being hidden. A tab
+            // playing *silently* — which every joiner is, since autoplay is
+            // only granted muted — is one the browser feels free to suspend
+            // once it's out of view; an audible one it leaves alone. That's
+            // the whole difference, and why this never happens to whoever
+            // pressed play. On the way back the suspended player resumes,
+            // buffers for an instant, and reports PLAYING from wherever it
+            // froze — indistinguishable from someone clicking play, except
+            // for the position, which is seconds in the past. Broadcast, it
+            // rewinds the entire room to this tab's stall. So a play/pause
+            // landing this soon after the tab reappears, and this far behind
+            // the room, is the browser resuming rather than a person acting:
+            // stay quiet and let the resync already in flight catch us up.
+            const sinceVisible = performance.now() - visibleAtRef.current;
+            if (sinceVisible < RESUME_GRACE_MS && lastStateRef.current) {
+              if (time < targetTime(lastStateRef.current) - RESUME_BEHIND_SECONDS) return;
+            }
             localActionAtRef.current = performance.now();
             socket.emit(event.data === PlayerState.PLAYING ? "video:play" : "video:pause", {
               time,
@@ -1010,6 +1045,7 @@ function Room() {
         setRate(1);
         return;
       }
+      visibleAtRef.current = performance.now(); // a resume is about to look like a click
       positionSampleRef.current = null; // nothing sampled while hidden is trustworthy
       socket.emit("resync:request");
     };
@@ -1025,9 +1061,12 @@ function Room() {
     const interval = window.setInterval(() => {
       const player = playerRef.current;
       if (!player) return;
-      if (!player.isMuted() && player.getPlayerState() === PlayerState.PLAYING) {
+      const silent = player.isMuted() || player.getVolume() === 0;
+      if (!silent && player.getPlayerState() === PlayerState.PLAYING) {
         autoplayGrantedRef.current = true;
+        mutedByUsRef.current = false;
       }
+      setNeedsUnmute(mutedByUsRef.current && silent);
     }, 1000);
     return () => window.clearInterval(interval);
   }, [videoId]);
@@ -1071,6 +1110,21 @@ function Room() {
       navigator.mediaSession.setActionHandler("pause", null);
     };
   }, [videoId, videoTitle, roomId]);
+
+  // Autoplay is only granted to a silent tab, so everyone who didn't press
+  // play themselves ends up watching with no sound and no obvious sign of it.
+  // Turning it back on takes a click — this is that click. It also stops the
+  // browser suspending this tab whenever it goes out of view, which is what
+  // made returning to it rewind the room.
+  const enableSound = () => {
+    const player = playerRef.current;
+    if (!player) return;
+    player.unMute();
+    if (player.getVolume() === 0) player.setVolume(100);
+    mutedByUsRef.current = false;
+    autoplayGrantedRef.current = true;
+    setNeedsUnmute(false);
+  };
 
   const loadVideo = (id: string) => {
     prepareRef.current = null; // this pick overrides a prepare in flight
@@ -1313,7 +1367,14 @@ function Room() {
         <div className="room-video">
           {videoId ? (
             <>
-              <div id="yt-player" ref={playerContainerRef} />
+              <div className="player-frame">
+                <div id="yt-player" ref={playerContainerRef} />
+                {needsUnmute && (
+                  <button className="unmute-nudge" onClick={enableSound}>
+                    🔇 Tap for sound
+                  </button>
+                )}
+              </div>
               {playerError && (
                 <p className="load-error">{playerError} Try pasting a different link.</p>
               )}
