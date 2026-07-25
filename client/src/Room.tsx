@@ -4,7 +4,7 @@ import { API_BASE, socket } from "./socket";
 import { applyShortcodes, searchEmojis } from "./emoji";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import { useAuth } from "./auth";
-import { FriendsPanel, InviteToast } from "./Friends";
+import { FriendsPanel, InviteToast, useFriends } from "./Friends";
 import "./App.css";
 
 type RoomState = {
@@ -546,6 +546,33 @@ function Room() {
     const t = window.setInterval(() => setUptimeTick(serverNow()), 1000);
     return () => window.clearInterval(t);
   }, [roomCreatedAt]);
+
+  // Friends live behind a toolbar menu rather than under the video: listed
+  // inline they pushed the page down and dragged the chat with them, so typing
+  // a message meant scrolling past the whole list.
+  const [friendsOpen, setFriendsOpen] = useState(false);
+  const friendsMenuRef = useRef<HTMLDivElement>(null);
+  const { friends } = useFriends();
+  const friendsOnline = friends.filter((f) => f.status === "accepted" && f.roomId).length;
+  // The count is the point of the menu being closed — you can see someone's
+  // around without opening anything.
+  const friendsPending = friends.some((f) => f.status === "incoming");
+
+  useEffect(() => {
+    if (!friendsOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!friendsMenuRef.current?.contains(event.target as Node)) setFriendsOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFriendsOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [friendsOpen]);
 
   // Signed in? Then the name question is already answered — walk straight in.
   // Exactly once per visit, though: names are first-come-first-served per room,
@@ -1374,9 +1401,29 @@ function Room() {
             </span>
           ))}
         </div>
-        <button className="copy-link" onClick={copyLink}>
-          {linkCopied ? "Copied!" : "Copy invite link"}
-        </button>
+        <div className="toolbar-actions">
+          {authUser && (
+            <div className="friends-menu" ref={friendsMenuRef}>
+              <button
+                className="friends-toggle"
+                aria-expanded={friendsOpen}
+                onClick={() => setFriendsOpen((open) => !open)}
+              >
+                Friends
+                {friendsOnline > 0 && <span className="friends-badge">{friendsOnline}</span>}
+                {friendsPending && <span className="friends-dot" title="Someone wants to be friends" />}
+              </button>
+              {friendsOpen && (
+                <div className="friends-popover">
+                  <FriendsPanel mode="room" />
+                </div>
+              )}
+            </div>
+          )}
+          <button className="copy-link" onClick={copyLink}>
+            {linkCopied ? "Copied!" : "Copy invite link"}
+          </button>
+        </div>
       </div>
 
       <div className="load-bar">
@@ -1514,14 +1561,6 @@ function Room() {
             </div>
           )}
 
-          {/* Inside the video column, not beside it: room-main is a two-column
-              flex row on desktop (video, chat) and a third child would land
-              between them. */}
-          {authUser && (
-            <div className="room-friends">
-              <FriendsPanel mode="room" />
-            </div>
-          )}
         </div>
 
         <div className="room-chat">

@@ -418,8 +418,94 @@ button:disabled {
   font-size: 0.8rem;
 }
 
-.room-friends {
-  margin-top: 1.5rem;
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  /* The dropdown hangs off this, not off its own button — anchored to the
+     button it lands mid-page, half over the search bar, and reads like it
+     opened in the wrong place. Off the toolbar's right edge it lines up with
+     everything else. */
+  position: relative;
+}
+
+.friends-menu {
+  position: static;
+}
+
+/* Quiet, like the copy-link button beside it — neither is the reason you're
+   on this page, and two filled buttons in the toolbar shout over the video. */
+.friends-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: transparent;
+  color: var(--accent);
+}
+
+.friends-toggle:hover:not(:disabled),
+.friends-toggle[aria-expanded="true"] {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+/* How many friends are watching something, readable without opening anything —
+   which is most of the reason to have a friends list at all. */
+.friends-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--accent, #6366f1);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.friends-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.friends-popover {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 30;
+  width: min(22rem, calc(100vw - 2rem));
+  max-height: min(26rem, 60vh);
+  overflow-y: auto;
+  padding: 0.9rem 1rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  background: var(--bg, #fff);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  text-align: left;
+}
+
+@media (prefers-color-scheme: dark) {
+  .friends-popover {
+    background: var(--bg, #16161a);
+  }
+}
+
+.friends-popover .friends {
+  margin-top: 0;
+  max-width: none;
+}
+
+.friends-popover .friends h2 {
+  /* The button already says "Friends". */
+  display: none;
 }
 
 /* Floats over whatever you're watching rather than displacing it — an invite
@@ -796,8 +882,14 @@ button:disabled {
 
   .room-main {
     display: flex;
-    align-items: stretch;
+    /* flex-start, not stretch: the chat sizes itself to the player below
+       rather than to the whole left column. Anything under the video (the
+       queue) would otherwise push the chat's composer down the page, so
+       sending a message meant scrolling past it. */
+    align-items: flex-start;
     gap: 1.25rem;
+    /* Lets the chat work out the player's height from the row's width. */
+    container-type: inline-size;
   }
 
   .room-video {
@@ -810,15 +902,20 @@ button:disabled {
     max-width: none;
   }
 
-  /* The chat is absolutely positioned inside this wrapper so the row's
-     height comes from the video alone — a long chat scrolls inside itself
-     instead of stretching the row taller than the player. The min-height
-     keeps the chat usable before any video is loaded. */
+  /* The chat is absolutely positioned inside this wrapper so a long history
+     scrolls inside itself instead of stretching the row.
+
+     The height is the player's height, worked out rather than inherited: the
+     player fills what's left of the row after the chat and the gap, at 16:9,
+     so its height is that width × 9/16. Matching the column instead would drag
+     the composer below the fold every time something appeared under the video.
+     min-height only matters on a narrow desktop or before a video loads. */
   .room-chat {
     position: relative;
     width: 320px;
     flex-shrink: 0;
-    min-height: 22rem;
+    height: calc((100cqw - 320px - 1.25rem) * 0.5625);
+    min-height: 15rem;
   }
 
   .room-chat .chat {
