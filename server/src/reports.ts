@@ -5,26 +5,35 @@ import { env, query } from "./db.js";
 // a free anonymous write endpoint with an image upload attached.
 //
 // The threat isn't clever, it's boring: somebody points a script at this and
-// fills the database. So there are four independent limits, and any one of
-// them refusing is enough — per address, per account, per size, and a global
-// ceiling that protects the server even if the first three are somehow walked
-// around by a distributed flood.
+// fills the database. So there are limits — but the first version of them was
+// tuned as though every request were an attack, and the result was that the
+// feature appeared broken to the first person who used it honestly.
+//
+// Two things were wrong. Three an hour is fewer than anyone testing a new
+// report box naturally sends, so the third attempt reads as a bug rather than
+// a limit. And counting by address alone means a household, an office or a
+// campus shares one budget between everybody in it — NAT is universal, so an
+// IP is a building, not a person.
 
 export const REPORT_MIN_LENGTH = 10;
 export const REPORT_MAX_LENGTH = 2000;
 
-// Comfortably more than an honest person needs in an hour, and far less than
-// a script wants. Someone hitting this is either testing it or abusing it, and
-// the message says so plainly rather than failing silently.
-const PER_IP_HOURLY = 3;
-const PER_IP_DAILY = 10;
-// Whatever happens, the server as a whole will not accept more than this. A
-// thousand addresses each staying under their own limit still can't get past
-// it.
-const GLOBAL_HOURLY = 60;
-
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
+
+// Whoever this is being counted against. A signed-in person gets their own
+// budget, so two people in the same flat — or one person on a laptop and a
+// terminal — don't spend each other's. Anonymous reporters can only be
+// identified by address, which is the honest limit of what's knowable.
+const PER_SUBJECT_HOURLY = 12;
+const PER_SUBJECT_DAILY = 40;
+
+// The backstop: a distributed flood where every individual subject stays
+// under its own limit still can't get past this.
+const GLOBAL_HOURLY = 120;
+// Screenshots are the part with a storage cost, so they get a tighter ceiling
+// of their own. Text is cheap; two megabytes at a time is not.
+const GLOBAL_IMAGE_HOURLY = 30;
 
 export const IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -37,11 +46,27 @@ export const REPORT_RETENTION_DAYS = 90;
 // In memory, like every other rate limit here: it describes this process's
 // recent traffic, and a restart losing it costs an abuser one extra window at
 // worst while costing an honest reporter nothing.
-const recent: { at: number; ipHash: string }[] = [];
+const recent: { at: number; subject: string; withImage: boolean }[] = [];
 
 function prune(now: number): void {
   const cutoff = now - DAY_MS;
   while (recent.length > 0 && recent[0].at < cutoff) recent.shift();
+}
+
+/** Who a report counts against: the account if there is one, else the address. */
+export const subjectOf = (ipHash: string, userId?: string | null): string =>
+  userId ? `u:${userId}` : `ip:${ipHash}`;
+
+// "Try later" is a useless thing to be told. Work out when the oldest report in
+// the window ages out, so the refusal can name a number.
+function waitFor(subject: string, now: number, window: number, allowance: number): string {
+  const mine = recent.filter((r) => r.subject === subject && r.at > now - window).map((r) => r.at);
+  if (mine.length < allowance) return "shortly";
+  const freesAt = mine.sort((a, b) => a - b)[mine.length - allowance] + window;
+  const minutes = Math.max(1, Math.ceil((freesAt - now) / 60_000));
+  if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  return `in about ${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
 /**
@@ -67,7 +92,7 @@ export type ReportInput = {
 
 /** Everything that can be checked without touching the database. */
 export function vetReport(
-  input: Pick<ReportInput, "text" | "ipHash" | "image">,
+  input: Pick<ReportInput, "text" | "ipHash" | "image" | "userId">,
 ): ReportRefusal | { ok: true } {
   const now = Date.now();
   prune(now);
@@ -93,30 +118,36 @@ export function vetReport(
     }
   }
 
-  if (recent.length >= GLOBAL_HOURLY) {
-    const inLastHour = recent.filter((r) => r.at > now - HOUR_MS).length;
-    if (inLastHour >= GLOBAL_HOURLY) {
-      return {
-        ok: false,
-        status: 503,
-        error: "We're getting an unusual number of reports right now — please try again later.",
-      };
-    }
-  }
-
-  const mine = recent.filter((r) => r.ipHash === input.ipHash);
-  if (mine.filter((r) => r.at > now - HOUR_MS).length >= PER_IP_HOURLY) {
+  const lastHour = recent.filter((r) => r.at > now - HOUR_MS);
+  if (lastHour.length >= GLOBAL_HOURLY) {
     return {
       ok: false,
-      status: 429,
-      error: "You've sent a few reports just now — give it an hour before the next one.",
+      status: 503,
+      error: "We're getting an unusual number of reports right now — please try again later.",
     };
   }
-  if (mine.length >= PER_IP_DAILY) {
+  if (input.image && lastHour.filter((r) => r.withImage).length >= GLOBAL_IMAGE_HOURLY) {
+    return {
+      ok: false,
+      status: 503,
+      error: "We can't take more screenshots just now — send the report without one and describe it.",
+    };
+  }
+
+  const subject = subjectOf(input.ipHash, input.userId);
+  const mine = recent.filter((r) => r.subject === subject);
+  if (mine.filter((r) => r.at > now - HOUR_MS).length >= PER_SUBJECT_HOURLY) {
     return {
       ok: false,
       status: 429,
-      error: "That's as many reports as we take from one place in a day. Thanks — we've got them.",
+      error: `That's a lot of reports in one hour — you can send another ${waitFor(subject, now, HOUR_MS, PER_SUBJECT_HOURLY)}.`,
+    };
+  }
+  if (mine.length >= PER_SUBJECT_DAILY) {
+    return {
+      ok: false,
+      status: 429,
+      error: `That's as many reports as we take in a day — you can send another ${waitFor(subject, now, DAY_MS, PER_SUBJECT_DAILY)}. Thanks, we've got them.`,
     };
   }
 
@@ -124,8 +155,8 @@ export function vetReport(
 }
 
 /** Records that a report was accepted, for the limits above. */
-export function noteReport(ipHash: string): void {
-  recent.push({ at: Date.now(), ipHash });
+export function noteReport(subject: string, withImage: boolean): void {
+  recent.push({ at: Date.now(), subject, withImage });
 }
 
 /**
@@ -165,7 +196,7 @@ export async function saveReport(input: ReportInput): Promise<string> {
       input.ipHash,
     ],
   );
-  noteReport(input.ipHash);
+  noteReport(subjectOf(input.ipHash, input.userId), Boolean(input.image));
   return id;
 }
 

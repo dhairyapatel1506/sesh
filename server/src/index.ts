@@ -388,7 +388,7 @@ app.post("/api/report", async (req, res) => {
     return res.status(400).json({ error: "That attachment didn't look like an image." });
   }
 
-  const verdict = vetReport({ text, ipHash, image });
+  const verdict = vetReport({ text, ipHash, image, userId: req.userId ?? null });
   if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.error });
 
   try {
