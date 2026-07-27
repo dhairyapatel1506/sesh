@@ -1251,6 +1251,45 @@ button:disabled {
   filter: none;
 }
 
+/* Pushed to the far end of the queue's header: it's a setting for this list,
+   not another item in it. */
+.autoplay-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.autoplay-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.autoplay-note {
+  font-size: 0.72rem;
+  opacity: 0.7;
+  margin-bottom: 0.5rem;
+}
+
+/* A lookup is a second or two of nothing happening, right after a video ended
+   — which without a word looks exactly like the room breaking. */
+.radio-status {
+  font-size: 0.78rem;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+.radio-status.is-dry {
+  color: var(--text);
+  opacity: 0.8;
+}
+
 .chat {
   margin-top: 1.75rem;
   border: 1px solid var(--border);
@@ -1652,5 +1691,202 @@ button:disabled {
 }
 
 .link-done .link-lead {
+  margin: 0;
+}
+
+/* ---- Reporting a bug --------------------------------------------------- */
+
+/* The last thing on the page, and the quietest — it exists for the rare visit
+   where something is broken, and shouldn't draw the eye on all the others. */
+.app-footer {
+  margin-top: 2.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.report-link {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+  opacity: 0.75;
+}
+
+.report-link:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--accent);
+  opacity: 1;
+  filter: none;
+}
+
+/* Centred over the page rather than dropped into it: a report is written about
+   whatever is on screen, so the page stays visible behind it. Scrollable on the
+   backdrop so a short phone in landscape can still reach the buttons. */
+.report-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.report-dialog {
+  width: min(26rem, 100%);
+  max-height: calc(100svh - 1.5rem);
+  overflow-y: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  text-align: left;
+}
+
+/* Anywhere on the form is a valid place to drop a screenshot, so the whole
+   dialog lights up rather than just the attach button. */
+.report-dialog.is-dragging {
+  border-color: var(--accent-border);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.25),
+    inset 0 0 0 2px var(--accent-bg);
+}
+
+.report-title {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.report-lead {
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
+.report-text {
+  font: inherit;
+  font-size: 0.9rem;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 6rem;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+}
+
+.report-text:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+.report-text::placeholder {
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.report-count,
+.report-retention {
+  font-size: 0.72rem;
+  opacity: 0.7;
+}
+
+.report-retention {
+  margin-top: -0.15rem;
+}
+
+/* The real file input is a browser control nobody can style; the button in
+   front of it is the one people see. */
+.report-file {
+  display: none;
+}
+
+.report-attach {
+  padding: 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  background: transparent;
+  color: var(--text);
+  border: 1px dashed var(--border);
+}
+
+.report-attach:hover:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  filter: none;
+}
+
+.report-thumb {
+  position: relative;
+  align-self: flex-start;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.3rem;
+  line-height: 0;
+}
+
+.report-thumb img {
+  max-width: 100%;
+  max-height: 9rem;
+  border-radius: 6px;
+}
+
+.report-thumb-meta {
+  position: absolute;
+  left: 0.55rem;
+  bottom: 0.55rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
+.report-thumb-remove {
+  position: absolute;
+  top: -0.5rem;
+  right: -0.5rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.report-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.report-cancel {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.report-cancel:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+/* The shared error style is spaced for sitting under a load bar; inside the
+   dialog the flex gap already provides that. */
+.report-error {
   margin: 0;
 }

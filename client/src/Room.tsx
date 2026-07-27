@@ -8,6 +8,7 @@ import { FriendsPanel, InviteToast, totalUnread, useFriends } from "./Friends";
 import { useVoice } from "./voice";
 import { playChatPing, warmAudio } from "./sounds";
 import { VoiceBar } from "./Voice";
+import { ReportBug } from "./Report";
 import "./App.css";
 
 type RoomState = {
@@ -336,8 +337,19 @@ function Room() {
   const positionSampleRef = useRef<{ value: number; at: number } | null>(null);
   const playbackRateRef = useRef(1);
 
-  const estimatedPosition = () => {
+  // YT.Player hands back its object immediately but only attaches the methods
+  // once the iframe is ready, so every poll that starts the moment a videoId
+  // exists spends the gap calling functions that aren't there yet — harmless,
+  // but it fills the console with "getCurrentTime is not a function" and hides
+  // real errors. Asking the object what it can do beats tracking a ready flag,
+  // which would be one more thing that has to be kept true.
+  const readyPlayer = (): YTPlayer | null => {
     const player = playerRef.current;
+    return player && typeof player.getCurrentTime === "function" ? player : null;
+  };
+
+  const estimatedPosition = () => {
+    const player = readyPlayer();
     if (!player) return 0;
     const raw = player.getCurrentTime();
     const now = performance.now();
@@ -1007,7 +1019,7 @@ function Room() {
       if (document.hidden) return;
       if (!state || !state.isPlaying || state.videoId !== videoId) return;
       if (suppressUntilRef.current) return;
-      if (playerRef.current?.getPlayerState() !== PlayerState.PLAYING) return;
+      if (readyPlayer()?.getPlayerState() !== PlayerState.PLAYING) return;
       correctDrift(targetTime(state));
     }, LOCAL_DRIFT_CHECK_MS);
     return () => {
@@ -1106,6 +1118,44 @@ function Room() {
     };
   }, []);
 
+  // Autoplay belongs to the room, not to this tab: when the queue empties the
+  // server keeps everyone on the same YouTube Mix, so the switch has to show
+  // whatever the room currently thinks — including someone else flipping it.
+  // available stays false until the server says otherwise, so a server with no
+  // YouTube key never shows a switch that couldn't do anything.
+  const [radio, setRadio] = useState({ autoplay: true, available: false });
+  const [radioStatus, setRadioStatus] = useState<"searching" | "dry" | null>(null);
+  useEffect(() => {
+    const onState = ({ autoplay, available }: { autoplay: boolean; available?: boolean }) => {
+      // The broadcast that follows a toggle carries only the setting. Whether
+      // this server can do radio at all was answered on join and can't change
+      // under it, so an absent flag means "unchanged", not "no".
+      setRadio((prev) => ({ autoplay, available: available ?? prev.available }));
+    };
+    const onSearching = () => setRadioStatus("searching");
+    // The pick is immediately followed by the usual prepare/play sequence, so
+    // there's nothing to announce — the video arriving is the announcement.
+    const onPicked = () => setRadioStatus(null);
+    const onDry = () => setRadioStatus("dry");
+    // Anything actually starting settles the question either way, including a
+    // person queueing something themselves after a dry lookup.
+    const onStarted = () => setRadioStatus(null);
+    socket.on("radio:state", onState);
+    socket.on("radio:searching", onSearching);
+    socket.on("radio:picked", onPicked);
+    socket.on("radio:dry", onDry);
+    socket.on("video:load", onStarted);
+    socket.on("video:prepare", onStarted);
+    return () => {
+      socket.off("radio:state", onState);
+      socket.off("radio:searching", onSearching);
+      socket.off("radio:picked", onPicked);
+      socket.off("radio:dry", onDry);
+      socket.off("video:load", onStarted);
+      socket.off("video:prepare", onStarted);
+    };
+  }, []);
+
   // Keep the newest message in view.
   const chatListRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -1165,7 +1215,7 @@ function Room() {
   useEffect(() => {
     if (!videoId) return;
     const interval = window.setInterval(() => {
-      const player = playerRef.current;
+      const player = readyPlayer();
       if (!player) return;
       const silent = player.isMuted() || player.getVolume() === 0;
       if (!silent && player.getPlayerState() === PlayerState.PLAYING) {
@@ -1543,44 +1593,77 @@ function Room() {
             <p className="empty-state">Paste a YouTube link above to start a sesh.</p>
           )}
 
-          {queue.length > 0 && (
+          {(queue.length > 0 || radio.available) && (
             <div className="queue">
               <div className="queue-head">
-                Up next <span className="queue-count">{queue.length}</span>
-              </div>
-              <ul className="queue-list">
-                {queue.map((item, index) => (
-                  <li key={item.id} className="queue-item">
-                    <img
-                      src={`https://i.ytimg.com/vi/${item.videoId}/default.jpg`}
-                      alt=""
-                      loading="lazy"
+                <span>Up next</span>
+                {queue.length > 0 && <span className="queue-count">{queue.length}</span>}
+                {/* The checkbox shows the room's setting, never this tab's
+                    intention: the emit is answered with a radio:state to
+                    everyone, which is what moves it. So a click that doesn't
+                    reach the server visibly doesn't take, which is honest —
+                    the setting really didn't change for anyone. */}
+                {radio.available && (
+                  <label className="autoplay-toggle">
+                    <input
+                      type="checkbox"
+                      checked={radio.autoplay}
+                      onChange={(e) => socket.emit("radio:set", { on: e.target.checked })}
                     />
-                    <span className="queue-info">
-                      <span className="queue-title">{item.title ?? "YouTube video"}</span>
-                      <span className="queue-meta">
-                        #{index + 1} · added by {item.addedBy}
+                    Autoplay
+                  </label>
+                )}
+              </div>
+              {radio.available && (
+                <p className="autoplay-note">
+                  {radio.autoplay
+                    ? "When the queue runs out, Sesh keeps playing something similar."
+                    : "Playback stops when the queue runs out."}
+                </p>
+              )}
+              {radioStatus === "searching" && (
+                <p className="radio-status">Finding something to play next…</p>
+              )}
+              {radioStatus === "dry" && (
+                <p className="radio-status is-dry">
+                  Couldn't find anything to play next — the room has stopped.
+                </p>
+              )}
+              {queue.length > 0 && (
+                <ul className="queue-list">
+                  {queue.map((item, index) => (
+                    <li key={item.id} className="queue-item">
+                      <img
+                        src={`https://i.ytimg.com/vi/${item.videoId}/default.jpg`}
+                        alt=""
+                        loading="lazy"
+                      />
+                      <span className="queue-info">
+                        <span className="queue-title">{item.title ?? "YouTube video"}</span>
+                        <span className="queue-meta">
+                          #{index + 1} · added by {item.addedBy}
+                        </span>
                       </span>
-                    </span>
-                    <button
-                      className="queue-action"
-                      title="Play now"
-                      aria-label="Play now"
-                      onClick={() => socket.emit("queue:play", { id: item.id })}
-                    >
-                      ▶
-                    </button>
-                    <button
-                      className="queue-action"
-                      title="Remove from queue"
-                      aria-label="Remove from queue"
-                      onClick={() => socket.emit("queue:remove", { id: item.id })}
-                    >
-                      ✕
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                      <button
+                        className="queue-action"
+                        title="Play now"
+                        aria-label="Play now"
+                        onClick={() => socket.emit("queue:play", { id: item.id })}
+                      >
+                        ▶
+                      </button>
+                      <button
+                        className="queue-action"
+                        title="Remove from queue"
+                        aria-label="Remove from queue"
+                        onClick={() => socket.emit("queue:remove", { id: item.id })}
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
 
@@ -1694,6 +1777,13 @@ function Room() {
           </div>
         </div>
       </div>
+
+      {/* Below everything, deliberately: something went wrong is worth telling
+          us about, but it isn't what anyone came here to do. The room code goes
+          with the report — it's the single most useful thing on one. */}
+      <footer className="app-footer">
+        <ReportBug roomId={roomId} />
+      </footer>
     </div>
   );
 }

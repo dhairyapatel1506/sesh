@@ -1,36 +1,19 @@
-import React, { useEffect, useReducer, useState } from "react";
+import React, { useEffect, useReducer, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import type { Session } from "./session.js";
+import { completion, helpRows, label, matchCommands, subcommandsOf, usage } from "./commands.js";
 import { searchEmojis, type Emoji } from "./emoji.js";
 import { extractVideoId, fetchTitle, formatTime, parseTime, search } from "./youtube.js";
 import type { SearchResult } from "./types.js";
 
 const CHAT_VISIBLE = 10;
-
-const HELP = [
-  ["<text>", "send a chat message (:name: inserts emoji)"],
-  ["/search <query>", "search YouTube"],
-  ["/pick <n>", "play search result n for everyone"],
-  ["/queue <n>", "add search result n to the queue"],
-  ["/add <url>", "queue a YouTube link (plays if room is idle)"],
-  ["/play  /pause", "control playback for everyone"],
-  ["/seek <m:ss>", "jump everyone to a position"],
-  ["/skip", "jump to the next queued track"],
-  ["/remove <n>", "remove queue item n"],
-  ["/vol <0-130>", "local volume (only affects you)"],
-  ["/emoji [query]", "browse/search emoji + their :names:"],
-  // Everything below needs an account — `sesh login` in a shell sets one up.
-  ["/friends", "toggle the friends pane (n = a row in it)"],
-  ["/friends add <CODE>", "send a friend request to that code"],
-  ["/friends accept <n>", "take a request · /friends remove <n>"],
-  ["/invite <n>", "ask friend n to come to this room"],
-  ["/join <n>  /accept", "go to friend n's room · take an invite"],
-  ["/dms  /dm <n|name>", "your conversations · message a friend"],
-  ["/room", "back to room chat (Esc does it too)"],
-  ["/whoami", "who this terminal is signed in as"],
-  ["PgUp / PgDn", "scroll chat history"],
-  ["/help  /quit", "toggle this help / leave"],
-] as const;
+// A few rows above the prompt, not a menu that swallows the room. Anyone who
+// wants the whole list has /help.
+const SUGGESTIONS_VISIBLE = 5;
+// Wide enough for the longest command in the table, so nothing runs into its
+// description — in the help card and in the suggestions, which have to line up
+// with each other to read as the same list.
+const COMMAND_COLUMN = 21;
 
 // "up 2h 14m" — coarse on purpose; nobody needs the seconds after an hour.
 function formatUptime(ms: number): string {
@@ -43,15 +26,78 @@ function formatUptime(ms: number): string {
   return `${s}s`;
 }
 
+// What the half-typed line could become. Learning this TUI used to mean
+// running /help and trying commands one at a time; the list narrowing under
+// the cursor teaches the same thing without anyone having to ask for it.
+function Suggestions({
+  line,
+  signedIn,
+  accountsEnabled,
+}: {
+  line: string;
+  signedIn: boolean;
+  accountsEnabled: boolean;
+}) {
+  // Only ever while a command is being written. The moment the line is chat
+  // again — or empty — this is just clutter in front of the room.
+  if (!line.startsWith("/")) return null;
+  const matches = matchCommands(line.slice(1));
+  if (matches.length === 0) {
+    return (
+      <Text color="gray">
+        no command matches <Text color="yellow">{line.split(" ")[0]}</Text> — /help lists them all
+      </Text>
+    );
+  }
+  const shown = matches.slice(0, SUGGESTIONS_VISIBLE);
+  const hidden = matches.length - shown.length;
+  const finished = completion(line);
+  const footer = [
+    hidden > 0 ? `… ${hidden} more` : "",
+    // Says what Tab will actually put on the line — the argument hint beside
+    // it is a description, not something Tab is about to type for you. And
+    // there's nothing to offer once the name is written out in full.
+    finished && finished.trim() !== line ? `Tab completes ${finished.trim()}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <Box flexDirection="column">
+      {shown.map((cmd, i) => (
+        <Text key={cmd.name}>
+          {/* The first row is the one Tab would take, so it's the one that
+              looks picked. */}
+          <Text color={i === 0 ? "magenta" : "gray"} bold={i === 0}>
+            {label(cmd).padEnd(COMMAND_COLUMN)}
+          </Text>
+          <Text color="gray">{cmd.desc}</Text>
+          {/* Better said here than found out by running it: these do nothing
+              at all until there's an account behind them. */}
+          {cmd.account && !signedIn && (
+            <Text color="yellow" dimColor>
+              {accountsEnabled ? " (sign in)" : " (off here)"}
+            </Text>
+          )}
+        </Text>
+      ))}
+      {footer && <Text color="gray">{footer}</Text>}
+    </Box>
+  );
+}
+
 function InputLine({
   onSubmit,
   onType,
   to,
+  signedIn,
+  accountsEnabled,
 }: {
   onSubmit: (line: string) => void;
   onType: (line: string) => void;
   /** Whose DM the next line goes to, if it isn't going to the room. */
   to: string | null;
+  signedIn: boolean;
+  accountsEnabled: boolean;
 }) {
   const [line, setLine] = useState("");
   useInput((input, key) => {
@@ -69,7 +115,15 @@ function InputLine({
       });
       return;
     }
-    if (key.ctrl || key.meta || key.escape || key.upArrow || key.downArrow || key.leftArrow || key.rightArrow || key.tab) {
+    // The one non-printing key this input answers to: it finishes the command
+    // highlighted in the list already on screen, which is the only thing Tab
+    // could sensibly mean here. Arrows and ctrl stay swallowed — there is no
+    // cursor to move.
+    if (key.tab) {
+      setLine((prev) => completion(prev) ?? prev);
+      return;
+    }
+    if (key.ctrl || key.meta || key.escape || key.upArrow || key.downArrow || key.leftArrow || key.rightArrow) {
       return;
     }
     setLine((prev) => {
@@ -79,15 +133,18 @@ function InputLine({
     });
   });
   return (
-    <Box>
-      {/* The prompt itself says where the line is going — mistaking a DM for
-          room chat is not a mistake anyone should be able to make quietly. */}
-      <Text color={to ? "cyan" : "magenta"} bold>
-        {to ? `→ ${to} ` : ""}
-        {"> "}
-      </Text>
-      <Text>{line}</Text>
-      <Text color="gray">▏</Text>
+    <Box flexDirection="column">
+      <Suggestions line={line} signedIn={signedIn} accountsEnabled={accountsEnabled} />
+      <Box>
+        {/* The prompt itself says where the line is going — mistaking a DM for
+            room chat is not a mistake anyone should be able to make quietly. */}
+        <Text color={to ? "cyan" : "magenta"} bold>
+          {to ? `→ ${to} ` : ""}
+          {"> "}
+        </Text>
+        <Text>{line}</Text>
+        <Text color="gray">▏</Text>
+      </Box>
     </Box>
   );
 }
@@ -125,6 +182,16 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
     const t = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(t);
   }, [s.roomCreatedAt]);
+
+  // The first thing someone new needs is the way to find everything else. Once
+  // per run, on the way in — /join and /accept rejoin, and being told this
+  // again every time you follow a friend would be nagging.
+  const greeted = useRef(false);
+  useEffect(() => {
+    if (!s.joined || greeted.current) return;
+    greeted.current = true;
+    session.setStatus("new here? type / to see every command");
+  }, [s.joined]);
 
   // Escape clears whatever panel is taking up space; PgUp/PgDn walk the
   // chat history (a windowed slice anchored to the newest message).
@@ -183,12 +250,12 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         break;
       case "seek": {
         const time = parseTime(arg);
-        if (time === null) return session.setStatus("usage: /seek 1:30");
+        if (time === null) return session.setStatus(usage("seek"));
         void session.seekTo(time);
         break;
       }
       case "search":
-        if (!arg) return session.setStatus("usage: /search lofi hip hop");
+        if (!arg) return session.setStatus(usage("search"));
         session.setStatus("searching…");
         void (async () => {
           try {
@@ -202,14 +269,14 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         break;
       case "pick": {
         const result = nth(results, arg);
-        if (!result) return session.setStatus("usage: /pick <result #>");
+        if (!result) return session.setStatus(usage("pick"));
         setResults(null);
         void session.playNow(result.videoId, result.title);
         break;
       }
       case "queue": {
         const result = nth(results, arg);
-        if (!result) return session.setStatus("usage: /queue <result #>");
+        if (!result) return session.setStatus(usage("queue"));
         void session.addToQueue(result.videoId, result.title);
         break;
       }
@@ -227,14 +294,37 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         break;
       case "remove": {
         const item = nth(s.queue, arg);
-        if (!item) return session.setStatus("usage: /remove <queue #>");
+        if (!item) return session.setStatus(usage("remove"));
         session.queueRemove(item.id);
         break;
       }
       case "vol": {
         const volume = Number(arg);
-        if (!Number.isFinite(volume)) return session.setStatus("usage: /vol 80");
+        if (!Number.isFinite(volume)) return session.setStatus(usage("vol"));
         void session.setVolume(volume);
+        break;
+      }
+      case "autoplay": {
+        // A toggle that can't do anything is worse than no toggle: say why
+        // rather than accepting the word and changing nothing.
+        if (!s.radioAvailable) {
+          return session.setStatus("autoplay isn't available on this server (it has no YouTube key)");
+        }
+        const wanted = arg.trim().toLowerCase();
+        if (!wanted) {
+          return session.setStatus(
+            s.autoplay
+              ? "autoplay is on — the room keeps going when the queue empties · /autoplay off"
+              : "autoplay is off — the room stops when the queue empties · /autoplay on",
+          );
+        }
+        if (wanted !== "on" && wanted !== "off") return session.setStatus(usage("autoplay"));
+        session.setAutoplay(wanted === "on");
+        break;
+      }
+      case "bug": {
+        if (!arg.trim()) return session.setStatus(usage("bug"));
+        void session.reportBug(arg);
         break;
       }
       case "emoji": {
@@ -254,34 +344,34 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         const sub = rest[0].toLowerCase();
         const value = rest.slice(1).join(" ");
         if (sub === "add") {
-          if (!value) return session.setStatus("usage: /friends add ABC123");
+          if (!value) return session.setStatus(usage("friends add"));
           setShowFriends(true);
           void session.addFriend(value);
         } else if (sub === "accept") {
           const request = nth(session.friendRequests(), value);
-          if (!request) return session.setStatus("usage: /friends accept <request #>");
+          if (!request) return session.setStatus(usage("friends accept"));
           setShowFriends(true);
           void session.acceptFriendRequest(request);
         } else if (sub === "remove") {
           const friend = nth(session.acceptedFriends(), value);
-          if (!friend) return session.setStatus("usage: /friends remove <friend #>");
+          if (!friend) return session.setStatus(usage("friends remove"));
           void session.removeFriend(friend);
         } else {
-          session.setStatus("try: /friends · /friends add <CODE> · accept <n> · remove <n>");
+          session.setStatus(`try: /friends · ${subcommandsOf("friends")}`);
         }
         break;
       }
       case "invite": {
         if (!session.requireAccount()) break;
         const friend = nth(session.acceptedFriends(), arg);
-        if (!friend) return session.setStatus("usage: /invite <friend #> — /friends numbers them");
+        if (!friend) return session.setStatus(usage("invite"));
         session.invite(friend);
         break;
       }
       case "join": {
         if (!session.requireAccount()) break;
         const friend = nth(session.acceptedFriends(), arg);
-        if (!friend) return session.setStatus("usage: /join <friend #> — /friends numbers them");
+        if (!friend) return session.setStatus(usage("join"));
         if (!friend.roomId) return session.setStatus(`${friend.name} isn't in a room right now`);
         void session.switchRoom(friend.roomId);
         break;
@@ -299,7 +389,7 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
       case "dm": {
         if (!session.requireAccount()) break;
         const friend = session.findFriend(arg);
-        if (!friend) return session.setStatus("usage: /dm <friend # or name> — /friends lists them");
+        if (!friend) return session.setStatus(usage("dm"));
         setShowDms(false);
         void session.openDm(friend);
         break;
@@ -397,6 +487,17 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         ) : (
           <Text color="gray">nothing playing — /search or /add something</Text>
         )}
+        {/* The radio picks the next song without anyone asking, so it says so
+            where the playback it decides is being read. Hidden outright on a
+            server that can't do it — a state nobody can change is noise. */}
+        {s.radioAvailable &&
+          (s.radioSearching ? (
+            <Text color="magenta">finding something to play next…</Text>
+          ) : (
+            <Text color="gray">
+              autoplay {s.autoplay ? "on" : "off"} · /autoplay {s.autoplay ? "off" : "on"}
+            </Text>
+          ))}
       </Box>
 
       {/* Search results */}
@@ -610,11 +711,9 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
 
       {showHelp && (
         <Box borderStyle="round" borderColor="gray" paddingX={1} flexDirection="column">
-          {HELP.map(([cmd, desc]) => (
+          {helpRows().map(([cmd, desc]) => (
             <Text key={cmd}>
-              {/* Wide enough for the longest command in the list, so nothing
-                  runs into its description. */}
-              <Text color="magenta">{cmd.padEnd(21)}</Text>
+              <Text color="magenta">{cmd.padEnd(COMMAND_COLUMN)}</Text>
               <Text color="gray">{desc}</Text>
             </Text>
           ))}
@@ -623,6 +722,8 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
 
       <InputLine
         to={dm?.name ?? null}
+        signedIn={!!s.account}
+        accountsEnabled={s.accountsEnabled}
         onSubmit={handle}
         onType={(line) => {
           // Only real chat text counts as "typing" — commands don't. Which end
@@ -635,7 +736,7 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
       <Text color="gray">
         {dm
           ? `→ ${dm.name} · Esc or /room goes back to room chat`
-          : `type to chat · /help for commands · ctrl+c to leave · share: ${serverUrl.replace(/^https?:\/\//, "")}/room/${s.roomId}`}
+          : `type to chat · / lists commands as you type · ctrl+c to leave · share: ${serverUrl.replace(/^https?:\/\//, "")}/room/${s.roomId}`}
       </Text>
     </Box>
   );

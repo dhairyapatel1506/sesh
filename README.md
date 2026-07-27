@@ -30,6 +30,8 @@ Create a room, share the code, and everyone's player stays locked together — p
   - Echo cancellation, noise suppression and automatic gain are each a checkbox. All on by default, because most people are on speakers and the room is playing audio into the same microphone — but they're also why a good mic can sound like a phone, so on headphones you can switch them off
 - 🫂 **Friends** — swap 6-character friend codes to connect. Your list shows who's **online**, who's **in a room** (one click to join them), and who's away; from inside a sesh, one click invites anyone who's actually around. Presence is live (no polling) and only ever visible to settled friends — a pending request reveals nothing
 - 💌 **Direct messages** — message a friend outside any room, from the same friends list. Unread counts, typing indicators, and a sound when something arrives while you're not looking. Conversations are kept for 30 days and then deleted — long enough to pick a thread back up, short enough that Sesh isn't an archive
+- 📻 **Autoplay** — when the queue runs out, the room keeps going on its own instead of falling silent, using YouTube's own Mix radio for whatever just played. Room-wide (everyone's hearing the same thing), on by default, and it only ever engages on an empty queue after a video genuinely ends — so it never overrides anything anyone chose. Videos the room already played are skipped, so it doesn't circle
+- 🐞 **Report a bug** — from the web or the terminal, signed in or not. The web form takes a screenshot by file, paste or drag-and-drop, downscaled in the browser before it's sent. Rate-limited per address with a global ceiling, so an open endpoint stays an open endpoint; reports are kept 90 days
 - ⏱️ **Room uptime** — every room shows how long it's been going
 - 🔇 **Tap for sound** — browsers only autoplay a muted video, so anyone who didn't press play themselves lands in the room silently. A one-tap prompt over the player turns the sound on (which also keeps the browser from suspending the tab in the background)
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
@@ -93,6 +95,8 @@ YOUTUBE_API_KEY=your-key-here
 ```
 
 The free quota allows ~100 searches/day; repeated queries are served from an in-memory cache.
+
+The same key powers **autoplay**, which is far cheaper than search: a `search.list` call costs 100 of the 10,000 daily units, while reading a video's Mix playlist costs 1. (YouTube removed `search.list?relatedToVideoId` in 2023 — it answers 400 now — so the Mix is both the only route to real recommendations and the affordable one.) Without a key, search and autoplay are both simply absent.
 
 ### Accounts (optional)
 
@@ -162,9 +166,9 @@ npm install && npm run build --workspace cli
 npm link --workspace cli    # puts your build's `sesh` on your PATH
 ```
 
-Type to chat (`:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, typing indicators included); `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, `/emoji`, …).
+Type to chat (`:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, typing indicators included). **Type `/` and the commands appear as you go**, each with a one-line description, narrowing with every keystroke — `Tab` completes the best match. `/help` still lists everything at once, and `sesh --version` reports the installed version.
 
-Sign in with `sesh login` (`sesh whoami`, `sesh logout`) and the terminal gets the account features too: `/friends` shows who's online and who's in a room, `/invite <n>` pulls one here, `/join <n>` and `/accept` move you into their room without restarting, and `/dms` / `/dm <n|name>` are direct messages, with `/room` (or Esc) going back to room chat. Voice is read-only there — the roster shows in the presence line, but joining a call needs the browser. Without signing in the CLI behaves exactly as it always has.
+Sign in with `sesh login` (`sesh whoami`, `sesh logout`) and the terminal gets the account features too: `/friends` shows who's online and who's in a room, `/invite <n>` pulls one here, `/join <n>` and `/accept` move you into their room without restarting, and `/dms` / `/dm <n|name>` are direct messages, with `/room` (or Esc) going back to room chat. `/autoplay [on|off]` controls the room's radio, and `/bug <description>` files a report without leaving the terminal. Voice is read-only there — the roster shows in the presence line, but joining a call needs the browser. Without signing in the CLI behaves exactly as it always has.
 
 The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
 
@@ -173,6 +177,8 @@ The sync engine is a straight port of the web client's — server-authoritative 
 The repo includes a [`render.yaml`](render.yaml) blueprint — one web service that builds both workspaces and serves the client's static build from Express. Set `YOUTUBE_API_KEY` in the dashboard (it's marked `sync: false` so it never lives in the repo).
 
 Optionally set a `STATS_TOKEN` env var to enable `GET /api/stats?token=…` — live connected sockets, active rooms (users, uptime, what's playing), and page views since the last deploy. Without the env var the endpoint stays off.
+
+The same token reads bug reports: `GET /api/reports?token=…` lists them (newest first, with the room and a hashed reporter address), and `GET /api/reports/:id/image?token=…` returns an attached screenshot. Gated because those screenshots are of whatever the reporter had on screen.
 
 ## Project structure
 

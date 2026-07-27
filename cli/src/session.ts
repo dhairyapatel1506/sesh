@@ -53,6 +53,22 @@ export type UiState = {
   // wondering why nobody's typing.
   voice: string[];
 
+  // ---- the room's radio ----
+  // Keeping the room going on YouTube's Mix when the queue runs dry. It's the
+  // room's setting rather than this terminal's — everyone is listening to the
+  // same thing — so the server owns it and this only ever mirrors what it
+  // says. A server with no YouTube key can never do it at all, which is what
+  // radioAvailable is for: an "off" that can't be switched on is worth saying
+  // out loud instead of pretending the toggle works.
+  autoplay: boolean;
+  radioAvailable: boolean;
+  radioSearching: boolean;
+
+  // What this server will take as a bug report — asked for rather than
+  // guessed, because the numbers are enforced at the far end and a client
+  // that invents its own refuses reports the server would have accepted.
+  reportLimits: { enabled: boolean; minLength: number; maxLength: number } | null;
+
   // ---- accounts ----
   account: Account | null;
   // Whether this server does accounts at all, so "sign in first" isn't said to
@@ -136,6 +152,12 @@ export class Session extends EventEmitter {
       status: null,
       fatal: null,
       voice: [],
+      // The server's own default, so the footer doesn't say "off" for the
+      // fraction of a second before radio:state lands on join.
+      autoplay: true,
+      radioAvailable: true,
+      radioSearching: false,
+      reportLimits: null,
       account: opts.account ?? null,
       accountsEnabled: true,
       friends: [],
@@ -234,6 +256,24 @@ export class Session extends EventEmitter {
         // Older server, or offline — leave the optimistic default alone.
       });
 
+    // The same question about bug reports: how long one has to be, and whether
+    // this server keeps them at all.
+    void fetch(`${this.opts.serverUrl}/api/report/limits`)
+      .then((res) => res.json() as Promise<{ enabled?: boolean; minLength?: number; maxLength?: number }>)
+      .then((limits) =>
+        this.update({
+          reportLimits: {
+            enabled: limits?.enabled !== false,
+            minLength: limits?.minLength ?? 10,
+            maxLength: limits?.maxLength ?? 2000,
+          },
+        }),
+      )
+      .catch(() => {
+        // Nothing to do: /bug asks the server anyway and repeats whatever it
+        // answers, so an unanswered question here costs only the early warning.
+      });
+
     this.socket.on("connect", async () => {
       // Before the clock sync, which takes the better part of a second: the
       // friends list is the one thing the server won't push again on its own
@@ -274,6 +314,42 @@ export class Session extends EventEmitter {
     this.socket.on("voice:roster", (roster: { peerId: string; name: string }[]) =>
       this.update({ voice: roster.map((peer) => peer.name) }),
     );
+
+    // `available` only rides along with the copy sent on join — the broadcast
+    // that follows someone toggling it carries the setting alone — so it must
+    // not overwrite what we already know about this server.
+    this.socket.on(
+      "radio:state",
+      ({ autoplay, available }: { autoplay: boolean; available?: boolean }) => {
+        this.update({
+          autoplay,
+          ...(available === undefined ? {} : { radioAvailable: available }),
+          // Turning it off mid-lookup abandons the lookup; the "finding
+          // something" line must not sit there afterwards.
+          ...(autoplay ? {} : { radioSearching: false }),
+        });
+      },
+    );
+
+    // A lookup takes a moment, and a room that goes quiet without saying why
+    // reads as broken. These three are the whole story of one: started, landed
+    // on something, or came back empty-handed.
+    this.socket.on("radio:searching", () => {
+      this.update({ radioSearching: true });
+      this.setStatus("finding something to play next…", { sticky: true });
+    });
+    this.socket.on("radio:picked", ({ videoId, title }: { videoId: string; title: string }) => {
+      // The pick arrives with its title, so cache it: the now-playing line
+      // then reads right the instant the video starts, instead of showing a
+      // raw id until the separate title lookup comes back.
+      if (title) this.titleCache.set(videoId, title);
+      this.update({ radioSearching: false });
+      this.setStatus(`autoplay: ${title}`);
+    });
+    this.socket.on("radio:dry", () => {
+      this.update({ radioSearching: false });
+      this.setStatus("autoplay found nothing else to play — /search or /add something");
+    });
 
     // The server never sends the list itself, only a nudge that it changed.
     this.socket.on("friends:changed", () => void this.refreshFriends());
@@ -784,6 +860,51 @@ export class Session extends EventEmitter {
     this.setStatus(`volume ${volume}`);
   }
 
+  // Nothing is set locally here on purpose: the setting belongs to the room,
+  // so the server's radio:state broadcast is what moves every screen — this
+  // one included, a beat later. A toggle that flipped here first would show
+  // "off" to the person who typed it even if the room never agreed.
+  setAutoplay(on: boolean): void {
+    if (!this.state.radioAvailable) {
+      return this.setStatus("autoplay isn't available on this server");
+    }
+    this.socket.emit("radio:set", { on });
+  }
+
+  // ---- bug reports ----
+
+  // Deliberately usable signed out — the people most likely to hit a bug are
+  // the ones who never signed in — so this goes out with whatever token
+  // authedFetch finds, including none.
+  async reportBug(text: string): Promise<void> {
+    const limits = this.state.reportLimits;
+    if (limits && !limits.enabled) return this.setStatus("this server doesn't take bug reports");
+    const description = text.trim();
+    // Checked here as well as there, because a round trip to be told "say
+    // more" is a round trip nobody needed to make.
+    const min = limits?.minLength ?? 10;
+    if (description.length < min) {
+      return this.setStatus(`say a bit more than that — ${min} characters minimum`);
+    }
+    this.setStatus("sending…");
+    try {
+      const res = await authedFetch(this.opts.serverUrl, "/api/report", {
+        method: "POST",
+        body: JSON.stringify({ text: description, client: "cli", roomId: this.state.roomId }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      // Repeated word for word, and left on screen rather than gone in four
+      // seconds: a refusal explains itself (a rate limit says when to come
+      // back), and paraphrasing it would throw that away.
+      if (!res.ok) {
+        return this.setStatus(data.error ?? `couldn't file that (${res.status})`, { sticky: true });
+      }
+      this.setStatus("thanks — that's filed");
+    } catch {
+      this.setStatus("couldn't reach the server");
+    }
+  }
+
   // ---- friends ----
 
   // Every account-only command asks this first, so someone who can't use one
@@ -930,6 +1051,9 @@ export class Session extends EventEmitter {
       duration: null,
       driftMs: null,
       voice: [],
+      // The room being left may have been mid-lookup; the room being joined
+      // will say what its own radio is doing in its room:join reply.
+      radioSearching: false,
       // The invite has been taken up (or abandoned by going somewhere else);
       // either way it's no longer something to accept.
       invite: null,

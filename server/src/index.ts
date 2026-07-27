@@ -36,6 +36,19 @@ import {
   unreadBySender,
 } from "./dm.js";
 import { approveLink, pollLink, startLink } from "./clilink.js";
+import { radioAvailable, radioPick } from "./radio.js";
+import {
+  decodeDataUrl,
+  hashIp,
+  listReports,
+  pruneOldReports,
+  REPORT_MAX_LENGTH,
+  REPORT_MIN_LENGTH,
+  reportImage,
+  REPORT_RETENTION_DAYS,
+  saveReport,
+  vetReport,
+} from "./reports.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,7 +85,15 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use(cookieParser());
-app.use(express.json());
+
+// Bodies stay small everywhere except the one endpoint that carries a
+// screenshot. Raising the limit globally would hand every other route a 4 MB
+// budget it has no use for, which is a free way to make the server work hard.
+const smallBody = express.json({ limit: "100kb" });
+const reportBody = express.json({ limit: "4mb" });
+app.use((req, res, next) =>
+  (req.path === "/api/report" ? reportBody : smallBody)(req, res, next),
+);
 app.use(withUser);
 
 // The client asks what sign-in is available rather than being built with it
@@ -348,6 +369,98 @@ app.post("/api/auth/cli/poll", async (req, res) => {
   }
 });
 
+// ---- Bug reports ----------------------------------------------------------
+// Deliberately open to anonymous reporters — the people most likely to hit a
+// bug are the ones who never signed in — which is why server/src/reports.ts is
+// mostly limits rather than storage.
+app.post("/api/report", async (req, res) => {
+  if (!dbEnabled()) return res.status(503).json({ error: "reports aren't set up on this server" });
+
+  // Behind Render's proxy the socket address is the proxy's. Express only
+  // trusts the forwarded header when told to, and taking the first entry is
+  // right because anything after it is client-supplied.
+  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+  const ipHash = hashIp(forwarded || req.socket.remoteAddress || "unknown");
+
+  const text = String(req.body?.text ?? "");
+  const image = decodeDataUrl(req.body?.image);
+  if (req.body?.image && !image) {
+    return res.status(400).json({ error: "That attachment didn't look like an image." });
+  }
+
+  const verdict = vetReport({ text, ipHash, image });
+  if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.error });
+
+  try {
+    await saveReport({
+      text,
+      client: req.body?.client === "cli" ? "cli" : "web",
+      ipHash,
+      userId: req.userId ?? null,
+      roomId: typeof req.body?.roomId === "string" ? req.body.roomId.slice(0, 12) : null,
+      userAgent: req.headers["user-agent"] ?? null,
+      image,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("bug report failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't file that — sorry" });
+  }
+});
+
+// What the client should tell people before they type: the same numbers the
+// server enforces, so the two can't drift apart.
+app.get("/api/report/limits", (_req, res) => {
+  res.json({
+    enabled: dbEnabled(),
+    minLength: REPORT_MIN_LENGTH,
+    maxLength: REPORT_MAX_LENGTH,
+    imageMaxBytes: 2 * 1024 * 1024,
+    retentionDays: REPORT_RETENTION_DAYS,
+  });
+});
+
+// Reading them back is behind the same token the stats endpoint uses — these
+// contain screenshots of whatever someone had on screen.
+const statsToken = () =>
+  String(process.env.STATS_TOKEN ?? "").trim().replace(/^["']|["']$/g, "");
+
+const withStatsToken = (req: express.Request, res: express.Response): boolean => {
+  const token = statsToken();
+  const given = String(req.query.token ?? "").trim().replace(/^["']|["']$/g, "");
+  if (!token) {
+    res.status(503).json({ error: "set STATS_TOKEN to enable this" });
+    return false;
+  }
+  if (given !== token) {
+    res.status(403).json({ error: "bad token" });
+    return false;
+  }
+  return true;
+};
+
+app.get("/api/reports", async (req, res) => {
+  if (!withStatsToken(req, res)) return;
+  try {
+    res.json({ reports: await listReports(Number(req.query.limit ?? 50)) });
+  } catch (err) {
+    console.error("listing reports failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't read those" });
+  }
+});
+
+app.get("/api/reports/:id/image", async (req, res) => {
+  if (!withStatsToken(req, res)) return;
+  try {
+    const image = await reportImage(String(req.params.id));
+    if (!image) return res.status(404).json({ error: "no image on that report" });
+    res.type(image.mime).send(image.data);
+  } catch (err) {
+    console.error("reading a report image failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't read that" });
+  }
+});
+
 // Live traffic, straight from the process that already sees it all. Guarded
 // by STATS_TOKEN (set it in the Render dashboard; without it the endpoint
 // stays off). Counters are in-memory and reset on every deploy — same
@@ -545,6 +658,20 @@ type Room = {
   queue: QueueItem[];
   pendingStart: PendingStart | null;
   createdAt: number; // when the room came into existence — drives the uptime display
+  // Keep playing something similar when the queue runs out. On unless someone
+  // turns it off: the alternative at that exact moment is silence and going
+  // back to the search box, which is the thing this exists to avoid. It can
+  // only ever engage on an empty queue, so it never overrides a decision
+  // anybody actually made.
+  autoplay: boolean;
+  // What this room has already played, newest last, so radio doesn't circle
+  // back to the same handful of tracks. Trimmed — it's a memory of a sitting,
+  // not a history.
+  played: string[];
+  // A radio lookup is async, and every client reports the same video ending.
+  // Without this, three reports become three lookups and the room starts the
+  // third one's answer.
+  radioPending: boolean;
   // Who's in the voice call, keyed by socket id rather than clientId: a peer
   // connection belongs to one tab, and the same person in two tabs is two
   // different ends of the mesh.
@@ -587,6 +714,9 @@ function getOrCreateRoom(roomId: string): Room {
       pendingStart: null,
       createdAt: Date.now(),
       voice: new Map(),
+      autoplay: true,
+      played: [],
+      radioPending: false,
     };
     rooms.set(roomId, room);
   }
@@ -649,8 +779,17 @@ function beginPendingStart(roomId: string, room: Room) {
 // paused (video:prepare), collect their video:ready reports, and only then
 // broadcast the play. Without the barrier, each tab starts as soon as its own
 // buffering finishes — fast tabs run ahead while slow ones stall, then jump.
+const PLAYED_MEMORY = 60;
+
+function rememberPlayed(room: Room, videoId: string) {
+  if (room.played[room.played.length - 1] === videoId) return;
+  room.played.push(videoId);
+  if (room.played.length > PLAYED_MEMORY) room.played.shift();
+}
+
 function startVideoForRoom(roomId: string, room: Room, videoId: string) {
   cancelPendingStart(room);
+  rememberPlayed(room, videoId);
   room.state = { videoId, isPlaying: false, time: 0, updatedAt: Date.now() };
   room.pendingStart = {
     videoId,
@@ -741,6 +880,7 @@ io.on("connection", (socket) => {
       // when it *changes*, so without this an arrival sees "nobody in voice"
       // until the next person happens to join or leave one.
       if (room.voice.size > 0) socket.emit("voice:roster", voiceRoster(room));
+      socket.emit("radio:state", { autoplay: room.autoplay, available: radioAvailable() });
       io.to(roomId).emit("room:users", userList(room));
     },
   );
@@ -756,6 +896,9 @@ io.on("connection", (socket) => {
     // otherwise a resync landing in that gap sees a stale isPlaying:false
     // and force-pauses the loader's own already-playing video back to 0.
     room.state = { videoId, isPlaying: true, time: 0, updatedAt: Date.now() };
+    // Counts as heard, so the radio doesn't later offer back something the
+    // room chose for itself twenty minutes ago.
+    rememberPlayed(room, videoId);
     socket.to(socket.data.roomId).emit("video:load", { videoId });
   });
 
@@ -820,11 +963,51 @@ io.on("connection", (socket) => {
     // since paused mid-video back to the end).
     if (!room.state.isPlaying) return;
     room.state = { ...room.state, isPlaying: false, time, updatedAt: Date.now() };
+
     // Announce it. Without this, the end is invisible to everyone else until
     // their next resync, so for a few seconds they still believe the video is
     // playing — and anyone who hits replay in that window races clients whose
-    // idea of "now" is still running past the end of the video.
-    io.to(socket.data.roomId).emit("room:state", estimatedRoomState(room));
+    // idea of "now" is still running past the end of the video. Said before
+    // the radio runs, too: a lookup takes a moment, and a room that looks
+    // stuck during it is worse than one that looks finished.
+    const roomId = socket.data.roomId as string;
+    io.to(roomId).emit("room:state", estimatedRoomState(room));
+
+    // Nothing queued, but the room asked to keep going. Marking it in flight
+    // *before* awaiting is what stops the other clients' reports of this same
+    // ending from each starting their own lookup.
+    if (!room.autoplay || !radioAvailable() || !videoId || room.radioPending) return;
+    room.radioPending = true;
+    io.to(roomId).emit("radio:searching");
+    void radioPick(videoId, new Set(room.played))
+      .then((pick) => {
+        room.radioPending = false;
+        // Someone queued or played something while the lookup was out — their
+        // choice wins over the machine's, and so does turning autoplay off.
+        if (rooms.get(roomId) !== room) return;
+        if (!room.autoplay || room.state.videoId !== videoId || room.state.isPlaying) return;
+        if (!pick) return io.to(roomId).emit("radio:dry");
+        io.to(roomId).emit("radio:picked", { videoId: pick.videoId, title: pick.title });
+        startVideoForRoom(roomId, room, pick.videoId);
+      })
+      .catch(() => {
+        room.radioPending = false;
+      });
+  });
+
+  // Autoplay is the room's setting, not a personal one — everyone is listening
+  // to the same thing, so it has to be.
+  socket.on("radio:set", ({ on }: { on: boolean }) => {
+    const room = currentRoom(socket);
+    if (!room) return;
+    room.autoplay = Boolean(on);
+    // The same shape as the one sent on join. Dropping `available` here made
+    // the field mean two things — "off" and "not mentioned this time" — and a
+    // client that believed it would hide the control the moment anyone used it.
+    io.to(socket.data.roomId).emit("radio:state", {
+      autoplay: room.autoplay,
+      available: radioAvailable(),
+    });
   });
 
   socket.on("queue:add", ({ videoId, title }: { videoId: string; title?: string | null }) => {
@@ -1138,6 +1321,12 @@ if (dbEnabled()) {
       if (removed > 0) console.log(`pruned ${removed} message(s) older than ${DM_RETENTION_DAYS} days`);
     } catch (err) {
       console.error("message pruning failed:", (err as Error).message);
+    }
+    try {
+      const removed = await pruneOldReports();
+      if (removed > 0) console.log(`pruned ${removed} report(s) older than ${REPORT_RETENTION_DAYS} days`);
+    } catch (err) {
+      console.error("report pruning failed:", (err as Error).message);
     }
   };
   void prune();

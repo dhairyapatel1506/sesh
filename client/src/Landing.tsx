@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { generateRoomId } from "./roomId";
 import { SignInButton, useAuth } from "./auth";
 import { FriendsPanel, InviteToast } from "./Friends";
+import { ReportBug } from "./Report";
 import "./App.css";
 
 function Landing() {
@@ -66,6 +67,10 @@ function Landing() {
           )}
         </div>
       )}
+
+      <footer className="app-footer">
+        <ReportBug />
+      </footer>
     </div>
   );
 }

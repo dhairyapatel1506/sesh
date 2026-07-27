@@ -15,7 +15,29 @@ sesh F3K9QX          # join one
 
 A TUI with the now-playing track, the shared queue, room chat, YouTube search, and live sync stats. Audio plays through [mpv](https://mpv.io), which resolves streams via yt-dlp.
 
-Type to chat — `:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, and typing indicators work across both clients. `/help` lists the rest: `/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, `/emoji`.
+Type to chat — `:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, and typing indicators work across both clients.
+
+**You don't have to learn the commands.** Type `/` and the matching ones appear above the prompt with what they do, narrowing as you keep typing; `Tab` completes the highlighted one. `/help` shows the whole card at once.
+
+| Command | |
+|---|---|
+| `/search <query>` · `/pick <n>` · `/queue <n>` | find something and play or queue it |
+| `/add <url>` | queue a YouTube link (plays it if the room is idle) |
+| `/play` · `/pause` · `/seek <mm:ss>` · `/skip` · `/remove <n>` | control playback for everyone |
+| `/autoplay [on\|off]` | the room's radio — see below |
+| `/vol <0-130>` | your own volume, nobody else's |
+| `/emoji [query]` | browse emoji and their `:names:` |
+| `/bug <description>` | report something broken without leaving the terminal |
+
+### Autoplay
+
+When a video ends and the queue is empty, the room keeps going on YouTube's Mix radio for whatever just played — the same recommendations the site itself would give, minus anything the room already heard. It's **on by default** and **room-wide**: everyone hears the same thing, so it's one setting, not one per person.
+
+`/autoplay` says which way it's set, `/autoplay on|off` changes it for the room. The state sits under the now-playing track, along with "finding something to play next…" while a pick is in flight. On a server with no YouTube API key there's nothing to toggle, and the line is hidden rather than lying.
+
+### Bug reports
+
+`/bug the queue lost its order after a skip` files it against the room you're in. It works signed in or not, and whatever the server says back — including "you've filed three this hour" — is shown as it was written. Reports are kept 90 days.
 
 ## Signing in
 
@@ -36,6 +58,8 @@ The session is stored in `~/.config/sesh/auth.json` (`%APPDATA%\sesh\auth.json` 
 | `/invite <n>` | ask a friend to come to this room (only if they're online and not already here) |
 | `/join <n>` · `/accept` | go to a friend's room, or take an invite — no restart |
 | `/dms` · `/dm <n\|name>` | conversations and direct messages · `/room` (or Esc) goes back |
+
+These are the only commands that need an account, and the suggestion list marks them `(sign in)` while you're signed out — or `(off here)` on a server that doesn't do accounts at all — so you find out before running one rather than after.
 
 Direct messages are friends-only and deleted after 30 days. Voice chat is read-only here: the presence line shows who's in the call, but joining one needs the web client. None of this is required — without an account the CLI works exactly as before.
 

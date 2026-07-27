@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, render, Text, useInput } from "ink";
@@ -9,6 +10,18 @@ import { App } from "./ui.js";
 import type { Account } from "./types.js";
 
 const DEFAULT_SERVER = "https://sesh.dhairya.cloud";
+
+// Read from the manifest rather than hardcoded, so publishing a version can
+// never disagree with the version the thing reports. Relative to dist/, which
+// is where this file lives once built.
+function version(): string {
+  try {
+    const manifest = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    return (JSON.parse(manifest) as { version?: string }).version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 // WSL's audio relay (WSLg) wedges often enough that sesh won't play there.
 // Instead of failing mysteriously, hand the session off to the Windows-native
@@ -75,13 +88,16 @@ usage:
   sesh                                         # create a room
   sesh <ROOM-CODE> [--name <you>] [--server <url>]
   sesh login | logout | whoami                 # your sesh account
+  sesh --version
 
 examples:
   sesh
   sesh F3K9QX
   sesh F3K9QX --name dhairya
   sesh F3K9QX --server http://localhost:3001   # local dev server
-  sesh login                                   # friends, invites, DMs`);
+  sesh login                                   # friends, invites, DMs
+
+sesh ${version()}`);
   process.exit(1);
 }
 
@@ -101,6 +117,11 @@ function parseArgs(argv: string[]) {
     if (arg === "--name") name = argv[++i] ?? null;
     else if (arg === "--server") server = argv[++i] ?? server;
     else if (arg === "--help" || arg === "-h") usage();
+    else if (arg === "--version" || arg === "-v") {
+      // Bare, so `sesh --version` can be read by a script without parsing prose.
+      console.log(version());
+      process.exit(0);
+    }
     else if (!command && !roomId && (ACCOUNT_COMMANDS as readonly string[]).includes(arg.toLowerCase())) {
       command = arg.toLowerCase() as AccountCommand;
     } else if (!arg.startsWith("-") && !roomId && !command) roomId = arg;
@@ -220,25 +241,35 @@ if (isWsl() && !process.env.SESH_ALLOW_WSL) {
 
 // Account commands are plain terminal output — no TUI, and no mpv to start.
 if (command) {
-  const code =
+  // Set the code and let the loop drain instead of calling process.exit().
+  // These commands finish on the tail of an HTTP request, and tearing the
+  // process down while the connection is still closing trips an assertion
+  // inside libuv on Windows — the command's output is already printed, so it
+  // reads as a crash after a success. Node's fetch doesn't hold the loop open
+  // once a response is consumed, so exiting naturally costs nothing.
+  process.exitCode =
     command === "login"
       ? await runLogin(server)
       : command === "logout"
         ? runLogout()
         : await runWhoami(server);
-  process.exit(code);
+} else {
+  const instance = render(
+    <Root
+      roomId={roomId}
+      server={server}
+      // Signed in, your account's name is your name — the prompt only exists
+      // because anonymous users have to be asked for one. --name still wins.
+      initialName={name ?? stored?.user.name ?? null}
+      token={stored?.token ?? null}
+      account={stored?.user ?? null}
+    />,
+  );
+  await instance.waitUntilExit();
+  // The TUI does need a push: mpv and the socket can outlive the render. The
+  // timer is unref'd so a clean drain still exits immediately, and the delay
+  // keeps this out of the same teardown race as above.
+  process.exitCode = 0;
+  setTimeout(() => process.exit(0), 250).unref();
 }
 
-const instance = render(
-  <Root
-    roomId={roomId}
-    server={server}
-    // Signed in, your account's name is your name — the prompt only exists
-    // because anonymous users have to be asked for one. --name still wins.
-    initialName={name ?? stored?.user.name ?? null}
-    token={stored?.token ?? null}
-    account={stored?.user ?? null}
-  />,
-);
-await instance.waitUntilExit();
-process.exit(0);
