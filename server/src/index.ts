@@ -37,6 +37,7 @@ import {
 } from "./dm.js";
 import { approveLink, pollLink, startLink } from "./clilink.js";
 import { radioAvailable, radioPick } from "./radio.js";
+import { mailEnabled, sendReportMail } from "./mail.js";
 import {
   decodeDataUrl,
   hashIp,
@@ -392,16 +393,34 @@ app.post("/api/report", async (req, res) => {
   if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.error });
 
   try {
-    await saveReport({
+    const roomId = typeof req.body?.roomId === "string" ? req.body.roomId.slice(0, 12) : null;
+    const id = await saveReport({
       text,
       client: req.body?.client === "cli" ? "cli" : "web",
       ipHash,
       userId: req.userId ?? null,
-      roomId: typeof req.body?.roomId === "string" ? req.body.roomId.slice(0, 12) : null,
+      roomId,
       userAgent: req.headers["user-agent"] ?? null,
       image,
     });
     res.json({ ok: true });
+
+    // After the response, and never allowed to affect it: the report is
+    // already stored and the person has already been thanked, so a mail
+    // provider having a bad afternoon is not their problem.
+    if (mailEnabled()) {
+      const reporter = req.userId ? ((await getUser(req.userId).catch(() => null))?.name ?? null) : null;
+      void sendReportMail({
+        id,
+        text,
+        client: req.body?.client === "cli" ? "cli" : "web",
+        roomId,
+        reporter,
+        userAgent: (req.headers["user-agent"] as string | undefined) ?? null,
+        image,
+        dashboardUrl: statsToken() ? `${publicOrigin(req)}/admin?token=${statsToken()}` : null,
+      });
+    }
   } catch (err) {
     console.error("bug report failed:", (err as Error).message);
     res.status(500).json({ error: "couldn't file that — sorry" });
@@ -424,6 +443,15 @@ app.get("/api/report/limits", (_req, res) => {
 // contain screenshots of whatever someone had on screen.
 const statsToken = () =>
   String(process.env.STATS_TOKEN ?? "").trim().replace(/^["']|["']$/g, "");
+
+// The origin as the outside world sees it. Behind Render's proxy the socket
+// says http and a private host, so a link built from it would be unreachable
+// by the person reading the email.
+const publicOrigin = (req: express.Request): string => {
+  const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0] || req.protocol;
+  const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+  return `${proto}://${host}`;
+};
 
 const withStatsToken = (req: express.Request, res: express.Response): boolean => {
   const token = statsToken();
@@ -458,6 +486,71 @@ app.get("/api/reports/:id/image", async (req, res) => {
   } catch (err) {
     console.error("reading a report image failed:", (err as Error).message);
     res.status(500).json({ error: "couldn't read that" });
+  }
+});
+
+// Somewhere to actually read them. Server-rendered rather than a route in the
+// client, so it stays out of the public bundle entirely and needs no sign-in
+// machinery of its own — the token in the URL is the whole gate, which is the
+// same bargain /api/stats already makes.
+//
+// Everything interpolated below goes through escapeHtml first. It's all
+// attacker-controlled: a report body is a stranger's text, and the one page
+// certain to display it is this one.
+const escapeHtml = (value: unknown): string =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+app.get("/admin", async (req, res) => {
+  if (!withStatsToken(req, res)) return;
+  if (!dbEnabled()) return res.status(503).send("No database configured.");
+  const token = encodeURIComponent(statsToken());
+  try {
+    const reports = await listReports(200);
+    const rows = reports
+      .map((report) => {
+        const when = new Date(report.at).toISOString().replace("T", " ").slice(0, 16);
+        const meta = [
+          report.reporter ? escapeHtml(report.reporter) : "signed out",
+          escapeHtml(report.client),
+          report.roomId ? `room ${escapeHtml(report.roomId)}` : "no room",
+          when,
+        ].join(" · ");
+        return `<article>
+  <p class="meta">${meta}</p>
+  <p class="body">${escapeHtml(report.body)}</p>
+  ${report.hasImage ? `<a href="/api/reports/${encodeURIComponent(report.id)}/image?token=${token}"><img src="/api/reports/${encodeURIComponent(report.id)}/image?token=${token}" alt="screenshot"></a>` : ""}
+  <p class="ua">${escapeHtml(report.userAgent ?? "")}</p>
+</article>`;
+      })
+      .join("\n");
+
+    res.type("html").send(`<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sesh — bug reports</title>
+<style>
+  :root { color-scheme: light dark; --line: #8883; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.1rem; }
+  .empty { opacity: .7; }
+  article { border-top: 1px solid var(--line); padding: 1rem 0; }
+  .meta { font-size: .8rem; opacity: .7; margin: 0 0 .4rem; }
+  .body { margin: 0 0 .6rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ua { font-size: .7rem; opacity: .45; margin: .5rem 0 0; overflow-wrap: anywhere; }
+  img { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); }
+</style>
+</head><body>
+<h1>Bug reports <span class="meta">${reports.length} kept · deleted after ${REPORT_RETENTION_DAYS} days</span></h1>
+${rows || '<p class="empty">Nothing reported yet.</p>'}
+</body></html>`);
+  } catch (err) {
+    console.error("admin page failed:", (err as Error).message);
+    res.status(500).send("Couldn't read those.");
   }
 });
 

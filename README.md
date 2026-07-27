@@ -178,7 +178,22 @@ The repo includes a [`render.yaml`](render.yaml) blueprint — one web service t
 
 Optionally set a `STATS_TOKEN` env var to enable `GET /api/stats?token=…` — live connected sockets, active rooms (users, uptime, what's playing), and page views since the last deploy. Without the env var the endpoint stays off.
 
-The same token reads bug reports: `GET /api/reports?token=…` lists them (newest first, with the room and a hashed reporter address), and `GET /api/reports/:id/image?token=…` returns an attached screenshot. Gated because those screenshots are of whatever the reporter had on screen.
+The same token opens the bug-report inbox: **`/admin?token=…`** is a plain server-rendered page listing every report with its screenshot inline, and `GET /api/reports?token=…` is the same data as JSON. Gated because those screenshots are of whatever the reporter had on screen.
+
+### Getting told about reports (optional)
+
+Without this, reports land in the database and wait to be looked at. With it, each one is emailed as it arrives.
+
+```bash
+# server/.env (or the Render dashboard)
+RESEND_API_KEY=re_...                    # resend.com — 3,000 emails/month free
+REPORT_EMAIL_TO=you@example.com
+REPORT_EMAIL_FROM=Sesh <bugs@yourdomain> # optional; needs a domain verified with Resend
+```
+
+Leave `REPORT_EMAIL_FROM` unset and Resend's own `onboarding@resend.dev` sender is used, which can only deliver to the address that owns the Resend account — enough for an inbox of one, and no DNS to set up. Verifying your own domain lifts that.
+
+Screenshots ride along as attachments, and each email links back to `/admin`. Mail is capped at five an hour: past that you get one note saying the rest are waiting rather than an inbox full of them. A failing mail provider is logged and ignored — the report is already stored, and the person who filed it has already been thanked.
 
 ## Project structure
 
