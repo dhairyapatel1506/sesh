@@ -37,6 +37,12 @@ export const COMMANDS: readonly Command[] = [
   { name: "autoplay", args: "[on|off]", desc: "keep the room going when the queue empties" },
   { name: "vol", args: "<0-130>", desc: "local volume (only affects you)", hint: "e.g. /vol 80" },
   { name: "emoji", args: "[query]", desc: "browse/search emoji + their :names:" },
+  {
+    name: "copy",
+    args: "[code]",
+    desc: "copy the invite link (or just the room code)",
+    hint: "/copy for the link, /copy code for the code alone",
+  },
   { name: "bug", args: "<description>", desc: "tell us something's broken", hint: "say what happened" },
   // Everything below needs an account — `sesh login` in a shell sets one up.
   { name: "friends", desc: "toggle the friends pane (n = a row in it)" },
@@ -125,7 +131,7 @@ export function completion(line: string): string | null {
 
 // The two rows on the help card that aren't commands at all.
 const CHAT_ROW: [string, string] = ["<text>", "send a chat message (:name: inserts emoji)"];
-const KEYS_ROW: [string, string] = ["PgUp / PgDn", "scroll chat history"];
+const KEYS_ROW: [string, string] = ["PgUp / PgDn", "scroll chat history (or this card, while it's open)"];
 
 /** The help card's lines, generated so it can't drift from the table above. */
 export function helpRows(): [string, string][] {

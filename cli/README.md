@@ -17,7 +17,7 @@ A TUI with the now-playing track, the shared queue, room chat, YouTube search, a
 
 Type to chat — `:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, and typing indicators work across both clients.
 
-**You don't have to learn the commands.** Type `/` and the matching ones appear above the prompt with what they do, narrowing as you keep typing; `Tab` completes the highlighted one. `/help` shows the whole card at once.
+**You don't have to learn the commands.** Type `/` and the matching ones appear above the prompt with what they do, narrowing as you keep typing; `Tab` completes the highlighted one. `/help` opens the full card as a scrolling window — `↑`/`↓` a row, `PgUp`/`PgDn` a screenful, `Esc` closes it. Every pane says `Esc closes` in its own header.
 
 | Command | |
 |---|---|
@@ -27,6 +27,7 @@ Type to chat — `:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, and
 | `/autoplay [on\|off]` | the room's radio — see below |
 | `/vol <0-130>` | your own volume, nobody else's |
 | `/emoji [query]` | browse emoji and their `:names:` |
+| `/copy [code]` | put the invite link on your clipboard (`/copy code` for just the room code) |
 | `/bug <description>` | report something broken without leaving the terminal |
 
 ### Autoplay
@@ -36,6 +37,14 @@ When a video ends and the queue is empty, the room keeps going on YouTube's Mix 
 `/autoplay` says which way it's set, `/autoplay on|off` changes it for the room. The state sits under the now-playing track, along with "finding something to play next…" while a pick is in flight. On a server with no YouTube API key there's nothing to toggle, and the line is hidden rather than lying.
 
 ### Bug reports
+
+### Sharing the room
+
+`/copy` puts the invite link straight on your clipboard — no selecting text and guessing whether this terminal wants `Ctrl+C` or `Ctrl+Shift+C`. `/copy code` copies the six-character code alone.
+
+It works over SSH, which the obvious approach doesn't: shelling out to `pbcopy`/`clip.exe` would set the clipboard of whatever machine sesh is *running* on. So the link is also sent as an OSC 52 escape sequence, which asks your **terminal** to do the copying and therefore travels back to the computer you're sitting at (tmux and screen are wrapped for passthrough). A few terminals ignore OSC 52 and nothing acknowledges it either way, so the link is always printed alongside — and the one in the footer is an OSC 8 hyperlink, clickable to open wherever that's supported.
+
+### Reporting a bug
 
 `/bug the queue lost its order after a skip` files it against the room you're in. It works signed in or not, and whatever the server says back — including "you've filed three this hour" — is shown as it was written. Reports are kept 90 days.
 

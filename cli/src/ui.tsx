@@ -1,7 +1,8 @@
 import React, { useEffect, useReducer, useRef, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { Session } from "./session.js";
 import { completion, helpRows, label, matchCommands, subcommandsOf, usage } from "./commands.js";
+import { copyToClipboard, hyperlink } from "./clipboard.js";
 import { searchEmojis, type Emoji } from "./emoji.js";
 import { extractVideoId, fetchTitle, formatTime, parseTime, search } from "./youtube.js";
 import type { SearchResult } from "./types.js";
@@ -14,6 +15,18 @@ const SUGGESTIONS_VISIBLE = 5;
 // description — in the help card and in the suggestions, which have to line up
 // with each other to read as the same list.
 const COMMAND_COLUMN = 21;
+// The whole table at once is two dozen rows, which shoved the room off the top
+// of the screen — so the card is a window onto it that scrolls instead. Sized
+// to whatever the terminal can spare, but never so tall that it reintroduces
+// the problem and never so short that scrolling it is all anyone does.
+const HELP_VISIBLE_MIN = 5;
+const HELP_VISIBLE_MAX = 10;
+// Roughly what the rest of the interface occupies — header, player, the
+// queue/chat row, presence, the suggestions and the prompt — which the card
+// has to leave standing.
+const HELP_ROWS_RESERVED = 26;
+// Read once: it's derived from a table that can't change while we're running.
+const HELP_ROWS = helpRows();
 
 // "up 2h 14m" — coarse on purpose; nobody needs the seconds after an hour.
 function formatUptime(ms: number): string {
@@ -118,7 +131,8 @@ function InputLine({
     // The one non-printing key this input answers to: it finishes the command
     // highlighted in the list already on screen, which is the only thing Tab
     // could sensibly mean here. Arrows and ctrl stay swallowed — there is no
-    // cursor to move.
+    // cursor to move, and the arrows mean something elsewhere while the help
+    // card is up, so the line must never take them for text.
     if (key.tab) {
       setLine((prev) => completion(prev) ?? prev);
       return;
@@ -155,6 +169,7 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [emojiResults, setEmojiResults] = useState<Emoji[] | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [helpScroll, setHelpScroll] = useState(0);
   const [showFriends, setShowFriends] = useState(false);
   const [showDms, setShowDms] = useState(false);
   const [chatScroll, setChatScroll] = useState(0);
@@ -193,11 +208,29 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
     session.setStatus("new here? type / to see every command");
   }, [s.joined]);
 
+  // How tall the help card gets to be on this terminal, and therefore how far
+  // it can scroll. A terminal too short to spare the room still gets the
+  // minimum — a cramped card beats one with no rows in it.
+  const { stdout } = useStdout();
+  const helpVisible = Math.max(
+    HELP_VISIBLE_MIN,
+    Math.min(HELP_VISIBLE_MAX, (stdout?.rows ?? 24) - HELP_ROWS_RESERVED),
+  );
+  const helpMax = Math.max(0, HELP_ROWS.length - helpVisible);
+  const helpAt = Math.min(helpScroll, helpMax);
+
   // Escape clears whatever panel is taking up space; PgUp/PgDn walk the
-  // chat history (a windowed slice anchored to the newest message).
+  // chat history (a windowed slice anchored to the newest message) — unless
+  // the help card is up, in which case it has the keyboard.
   useInput((_input, key) => {
     if (key.escape) {
-      setShowHelp(false);
+      // The card is the one panel that takes keys of its own, so it takes the
+      // first Escape by itself: putting it away shouldn't also sweep away the
+      // search results or the conversation that were open behind it.
+      if (showHelp) {
+        setShowHelp(false);
+        return;
+      }
       setResults(null);
       setEmojiResults(null);
       setShowFriends(false);
@@ -205,6 +238,17 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
       // A conversation is a panel too, and leaving it puts typing back where
       // someone hitting Escape expects it: the room.
       session.closeDm();
+      return;
+    }
+    // Nobody is reading the chat through the card, so while it's open the
+    // scrolling keys move it instead — arrows a row, PgUp/PgDn a screenful.
+    // They go back to the history the moment it closes.
+    if (showHelp) {
+      if (key.downArrow) setHelpScroll((o) => Math.min(o + 1, helpMax));
+      if (key.upArrow) setHelpScroll((o) => Math.max(0, o - 1));
+      if (key.pageDown) setHelpScroll((o) => Math.min(o + helpVisible, helpMax));
+      if (key.pageUp) setHelpScroll((o) => Math.max(0, o - helpVisible));
+      return;
     }
     if (key.pageUp) {
       setChatScroll((o) => Math.min(o + 5, Math.max(0, s.messages.length - CHAT_VISIBLE)));
@@ -404,6 +448,23 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
           `voice needs the web client — open ${serverUrl.replace(/^https?:\/\//, "")}/room/${s.roomId}`,
         );
         break;
+      case "copy": {
+        // A terminal can't offer a click-to-copy button — capturing the mouse
+        // would take away the selection people already have — but it can put
+        // things on the clipboard directly, which is the thing they wanted.
+        const wantsCode = arg.trim().toLowerCase() === "code";
+        const value = wantsCode ? s.roomId : `${serverUrl}/room/${s.roomId}`;
+        void copyToClipboard(value).then(({ via }) => {
+          session.setStatus(
+            via === "helper"
+              ? `copied: ${value}`
+              : // Nothing acknowledges an OSC 52, so promising it landed would
+                // sometimes be a lie. Show the value either way.
+                `sent to your terminal's clipboard: ${value}`,
+          );
+        });
+        break;
+      }
       case "whoami":
         session.setStatus(
           s.account
@@ -412,7 +473,10 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         );
         break;
       case "help":
+        // Back to the top every time it's asked for: /help means "show me the
+        // commands", not "put me back where I left off reading them".
         setShowHelp((v) => !v);
+        setHelpScroll(0);
         break;
       case "quit":
       case "exit":
@@ -504,7 +568,7 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
       {results && (
         <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
           <Text color="cyan" bold>
-            results · /pick n plays · /queue n queues
+            results <Text color="gray">· /pick n plays · /queue n queues · Esc closes</Text>
           </Text>
           {results.map((r, i) => (
             <Text key={r.videoId} wrap="truncate">
@@ -522,7 +586,7 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
       {emojiResults && (
         <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
           <Text color="yellow" bold>
-            emoji · type :name: in a message · Esc closes
+            emoji <Text color="gray">· type :name: in a message · Esc closes</Text>
           </Text>
           {Array.from({ length: Math.ceil(emojiResults.length / 4) }, (_, row) => (
             <Text key={row}>
@@ -640,7 +704,7 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
           <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column" flexGrow={1}>
             <Text color="cyan" bold>
               dm · {dm.name}
-              <Text color="gray"> · /room goes back</Text>
+              <Text color="gray"> · /room goes back · Esc closes</Text>
             </Text>
             {s.dmMessages.length === 0 ? (
               <Text color="gray">nothing here yet — say something</Text>
@@ -711,7 +775,19 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
 
       {showHelp && (
         <Box borderStyle="round" borderColor="gray" paddingX={1} flexDirection="column">
-          {helpRows().map(([cmd, desc]) => (
+          <Text color="gray" bold>
+            help{" "}
+            <Text color="gray">
+              {/* Where in the list this window sits, and how to move it — but
+                  only when there's anything off the card. On a tall terminal
+                  the whole table fits and there is nothing to scroll. */}
+              {helpMax > 0
+                ? `· ${helpAt + 1}-${Math.min(helpAt + helpVisible, HELP_ROWS.length)} of ${HELP_ROWS.length} · ↑↓ scroll · PgUp/PgDn page `
+                : ""}
+              · Esc closes
+            </Text>
+          </Text>
+          {HELP_ROWS.slice(helpAt, helpAt + helpVisible).map(([cmd, desc]) => (
             <Text key={cmd}>
               <Text color="magenta">{cmd.padEnd(COMMAND_COLUMN)}</Text>
               <Text color="gray">{desc}</Text>
@@ -736,7 +812,14 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
       <Text color="gray">
         {dm
           ? `→ ${dm.name} · Esc or /room goes back to room chat`
-          : `type to chat · / lists commands as you type · ctrl+c to leave · share: ${serverUrl.replace(/^https?:\/\//, "")}/room/${s.roomId}`}
+          : // The link is an OSC 8 hyperlink, so terminals that support it make
+            // it clickable to open; the rest just show the text. /copy is
+            // named right beside it because clicking can't put it on a
+            // clipboard, only opening it can.
+            `type to chat · / lists commands · ctrl+c to leave · share: ${hyperlink(
+              `${serverUrl}/room/${s.roomId}`,
+              `${serverUrl.replace(/^https?:\/\//, "")}/room/${s.roomId}`,
+            )} (/copy)`}
       </Text>
     </Box>
   );
