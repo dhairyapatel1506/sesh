@@ -3,8 +3,17 @@ import crypto from "node:crypto";
 import { io, type Socket } from "socket.io-client";
 import { Mpv, probeAudioOutput } from "./mpv.js";
 import { applyShortcodes } from "./emoji.js";
+import { authedFetch, loadAuth } from "./auth.js";
 import { fetchTitle } from "./youtube.js";
-import type { ChatMessage, QueueItem, RoomState, RoomUser } from "./types.js";
+import type {
+  Account,
+  ChatMessage,
+  DirectMessage,
+  Friend,
+  QueueItem,
+  RoomState,
+  RoomUser,
+} from "./types.js";
 
 // Same drift-correction tiers as the web client (client/src/Room.tsx) — the
 // engine differs (mpv instead of the YouTube IFrame) but the sync math is a
@@ -18,6 +27,9 @@ const LOCAL_DRIFT_CHECK_MS = 750;
 
 export type UiState = {
   connected: boolean;
+  // The room is no longer fixed for the life of the process — /join and
+  // /accept move between them — so the header reads it from here.
+  roomId: string;
   // Membership is confirmed by the server (its room:state reply to our
   // join), not assumed — the UI must not render the room before this, or a
   // denied join looks like an empty-but-working room.
@@ -36,33 +48,40 @@ export type UiState = {
   driftMs: number | null;
   status: string | null;
   fatal: string | null;
+  // Who's in the room's voice call. The CLI can't join one (WebRTC wants a
+  // browser) but it can say a call is happening, which beats a terminal user
+  // wondering why nobody's typing.
+  voice: string[];
+
+  // ---- accounts ----
+  account: Account | null;
+  // Whether this server does accounts at all, so "sign in first" isn't said to
+  // someone who can't. Assumed true until /api/auth/config says otherwise:
+  // that's the common case, and it's the friendlier of the two wrong answers
+  // in the fraction of a second before the answer lands.
+  accountsEnabled: boolean;
+  friends: Friend[];
+  // The most recent "come watch this", which /accept acts on.
+  invite: { from: string; roomId: string } | null;
+  // The conversation on screen, if any — typed lines go here instead of the
+  // room while it's set.
+  dm: { id: string; name: string } | null;
+  dmMessages: DirectMessage[];
+  dmRetentionDays: number | null;
+  dmTyper: string | null;
 };
 
 export type SessionOptions = {
   serverUrl: string;
   roomId: string;
   name: string;
+  // Absent for anonymous use, which stays exactly as it was.
+  token?: string | null;
+  account?: Account | null;
 };
 
 export class Session extends EventEmitter {
-  readonly state: UiState = {
-    connected: false,
-    joined: false,
-    joinDenied: null,
-    roomCreatedAt: null,
-    typers: [],
-    users: [],
-    messages: [],
-    queue: [],
-    videoId: null,
-    title: null,
-    isPlaying: false,
-    position: null,
-    duration: null,
-    driftMs: null,
-    status: null,
-    fatal: null,
-  };
+  readonly state: UiState;
 
   readonly clientId = crypto.randomUUID();
   private opts: SessionOptions;
@@ -90,15 +109,55 @@ export class Session extends EventEmitter {
   // 3s after the last ping — no "stopped typing" event exists.
   private typersMap = new Map<string, { name: string; until: number }>();
   private lastTypingSent = 0;
+  // The same bookkeeping for direct messages, keyed by user id — a DM has one
+  // possible typer, so only the open conversation's entry is ever shown.
+  private dmTypers = new Map<string, number>();
+  private lastDmTypingSent = 0;
 
   constructor(opts: SessionOptions) {
     super();
     this.opts = opts;
+    this.state = {
+      connected: false,
+      roomId: opts.roomId,
+      joined: false,
+      joinDenied: null,
+      roomCreatedAt: null,
+      typers: [],
+      users: [],
+      messages: [],
+      queue: [],
+      videoId: null,
+      title: null,
+      isPlaying: false,
+      position: null,
+      duration: null,
+      driftMs: null,
+      status: null,
+      fatal: null,
+      voice: [],
+      account: opts.account ?? null,
+      accountsEnabled: true,
+      friends: [],
+      invite: null,
+      dm: null,
+      dmMessages: [],
+      dmRetentionDays: null,
+      dmTyper: null,
+    };
     // Created (but not connected) up front so user actions can never hit an
     // undefined socket — Socket.IO buffers emits made while disconnected and
     // flushes them on connect, which is exactly right for someone typing
     // during a slow startup.
-    this.socket = io(opts.serverUrl, { autoConnect: false, transports: ["websocket", "polling"] });
+    this.socket = io(opts.serverUrl, {
+      autoConnect: false,
+      transports: ["websocket", "polling"],
+      // A terminal has no cookie jar, so the saved session string travels in
+      // the handshake instead. The server reads both and ends up with the same
+      // identity either way — which is what makes presence, invites and DMs
+      // work here at all.
+      ...(opts.token ? { auth: { token: opts.token } } : {}),
+    });
   }
 
   private dbg(...args: unknown[]) {
@@ -166,7 +225,20 @@ export class Session extends EventEmitter {
       void this.onEofReached();
     });
 
+    // What this server can do about accounts, so a signed-out user is told the
+    // truth about why /friends won't work for them.
+    void fetch(`${this.opts.serverUrl}/api/auth/config`)
+      .then((res) => res.json() as Promise<{ enabled?: boolean }>)
+      .then((config) => this.update({ accountsEnabled: config?.enabled !== false }))
+      .catch(() => {
+        // Older server, or offline — leave the optimistic default alone.
+      });
+
     this.socket.on("connect", async () => {
+      // Before the clock sync, which takes the better part of a second: the
+      // friends list is the one thing the server won't push again on its own
+      // after a reconnect.
+      void this.refreshFriends();
       await this.syncClock();
       this.socket.emit("room:join", {
         roomId: this.opts.roomId,
@@ -196,6 +268,33 @@ export class Session extends EventEmitter {
       this.update({ messages: [...this.state.messages.slice(-99), message] }),
     );
     this.socket.on("queue:state", (queue: QueueItem[]) => this.update({ queue }));
+
+    // Everyone in the room hears the call's roster change even if they're not
+    // in it, which is the only way a terminal learns a call exists.
+    this.socket.on("voice:roster", (roster: { peerId: string; name: string }[]) =>
+      this.update({ voice: roster.map((peer) => peer.name) }),
+    );
+
+    // The server never sends the list itself, only a nudge that it changed.
+    this.socket.on("friends:changed", () => void this.refreshFriends());
+
+    this.socket.on("friend:invited", ({ from, roomId }: { from: string; roomId: string }) => {
+      if (roomId === this.state.roomId) {
+        this.setStatus(`${from} invited you here — you're already in`);
+        return;
+      }
+      this.bell();
+      // Sticky: an invite is something to act on, and four seconds is not long
+      // enough to notice one in a terminal you weren't looking at.
+      this.update({ invite: { from, roomId } });
+      this.setStatus(`${from} invited you to room ${roomId} — /accept to go`, { sticky: true });
+    });
+
+    this.socket.on("dm:message", (message: DirectMessage) => this.onDirectMessage(message));
+    this.socket.on("dm:typing", ({ from }: { from: string }) => {
+      this.dmTypers.set(from, Date.now() + 3000);
+      this.refreshTypers();
+    });
 
     this.socket.on("room:state", (state: RoomState) => {
       // The server only sends room state to members — receiving it IS the
@@ -533,6 +632,18 @@ export class Session extends EventEmitter {
     for (const [id, t] of this.typersMap) if (t.until <= now) this.typersMap.delete(id);
     const names = [...this.typersMap.values()].map((t) => t.name);
     if (names.join(",") !== this.state.typers.join(",")) this.update({ typers: names });
+
+    for (const [id, until] of this.dmTypers) if (until <= now) this.dmTypers.delete(id);
+    const dm = this.state.dm;
+    const dmTyper = dm && this.dmTypers.has(dm.id) ? dm.name : null;
+    if (dmTyper !== this.state.dmTyper) this.update({ dmTyper });
+  }
+
+  // The terminal's own notification. Anything that happened outside the room
+  // on screen — an invite, a message from someone you're not reading — is
+  // exactly what a bell is for: the window may not even be visible.
+  private bell() {
+    if (process.stdout.isTTY) process.stdout.write("\u0007");
   }
 
   // Called by the UI on every chat keystroke; throttled here so the wire
@@ -671,6 +782,245 @@ export class Session extends EventEmitter {
     if (!this.mpv) return;
     await this.mpv.setVolume(Math.max(0, Math.min(130, volume))).catch(() => {});
     this.setStatus(`volume ${volume}`);
+  }
+
+  // ---- friends ----
+
+  // Every account-only command asks this first, so someone who can't use one
+  // gets told which of the two reasons applies instead of an error.
+  requireAccount(): boolean {
+    if (this.state.account) return true;
+    this.setStatus(
+      this.state.accountsEnabled
+        ? "sign in with `sesh login` first"
+        : "this server doesn't do accounts — friends and DMs are off here",
+    );
+    return false;
+  }
+
+  // In a room first (they're watchable *now*), then online, then the rest —
+  // and alphabetical within each, so a name doesn't wander between refreshes.
+  acceptedFriends(): Friend[] {
+    const rank = (friend: Friend) => (friend.roomId ? 0 : friend.online ? 1 : 2);
+    return this.state.friends
+      .filter((friend) => friend.status === "accepted")
+      .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  }
+
+  friendRequests(): Friend[] {
+    return this.state.friends.filter((friend) => friend.status === "incoming");
+  }
+
+  outgoingRequests(): Friend[] {
+    return this.state.friends.filter((friend) => friend.status === "outgoing");
+  }
+
+  // Conversations, newest first. There's no separate list on the server — the
+  // friends payload carries each one's last line, which is all this needs.
+  conversations(): Friend[] {
+    return this.state.friends
+      .filter((friend) => friend.status === "accepted" && friend.lastMessage)
+      .sort((a, b) => b.lastMessage!.at - a.lastMessage!.at);
+  }
+
+  // "/dm 2" and "/dm pri" mean the same thing to a person, so they mean the
+  // same thing here. The number indexes the list /friends shows.
+  findFriend(raw: string): Friend | null {
+    const list = this.acceptedFriends();
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (/^\d+$/.test(trimmed)) return list[Number(trimmed) - 1] ?? null;
+    const needle = trimmed.toLowerCase();
+    return list.find((friend) => friend.name.toLowerCase().startsWith(needle)) ?? null;
+  }
+
+  async refreshFriends(): Promise<void> {
+    if (!loadAuth()) return;
+    try {
+      const res = await authedFetch(this.opts.serverUrl, "/api/friends");
+      if (res.status === 401) {
+        // The stored token outlived its session. Say so once rather than
+        // failing quietly every time the list is asked for.
+        this.update({ account: null, friends: [] });
+        this.setStatus("your sign-in expired — run `sesh login` again", { sticky: true });
+        return;
+      }
+      if (!res.ok) return;
+      const data = (await res.json()) as { friends?: Friend[] };
+      this.update({ friends: data.friends ?? [] });
+    } catch {
+      // Keep what's on screen; the next friends:changed or reconnect corrects it.
+    }
+  }
+
+  private async friendAction(endpoint: string, body: unknown, done: string): Promise<void> {
+    if (!this.requireAccount()) return;
+    try {
+      const res = await authedFetch(this.opts.serverUrl, endpoint, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) return this.setStatus(data.error ?? "that didn't work");
+      this.setStatus(done);
+      await this.refreshFriends();
+    } catch {
+      this.setStatus("couldn't reach the server");
+    }
+  }
+
+  addFriend(code: string): Promise<void> {
+    return this.friendAction("/api/friends/request", { code: code.trim().toUpperCase() }, "request sent");
+  }
+
+  acceptFriendRequest(friend: Friend): Promise<void> {
+    return this.friendAction("/api/friends/accept", { userId: friend.id }, `${friend.name} is a friend now`);
+  }
+
+  removeFriend(friend: Friend): Promise<void> {
+    return this.friendAction("/api/friends/remove", { userId: friend.id }, `removed ${friend.name}`);
+  }
+
+  // An invite that can't land is worse than no invite: nothing appears, and the
+  // sender has no way to tell. So the two cases where it would go nowhere are
+  // refused with the reason instead.
+  invite(friend: Friend): void {
+    if (!this.requireAccount()) return;
+    if (friend.roomId === this.state.roomId) return this.setStatus(`${friend.name} is already here`);
+    if (!friend.online) return this.setStatus(`${friend.name} is offline — they wouldn't see it`);
+    this.socket.emit("friend:invite", { toUserId: friend.id });
+    this.setStatus(`invited ${friend.name}`);
+  }
+
+  // Move to another room without restarting the process. Everything the sync
+  // engine knows describes the room being left, and any of it surviving shows
+  // up as the new room playing the old video or reporting impossible drift —
+  // so the rule here is that every field about a room is reset, and the only
+  // things that carry over are the ones about this machine (the clock offset,
+  // the title cache, who we are).
+  async switchRoom(roomId: string): Promise<void> {
+    const next = roomId.toUpperCase();
+    if (next === this.state.roomId) return this.setStatus(`you're already in ${next}`);
+
+    this.socket.emit("room:leave");
+    this.opts.roomId = next;
+
+    this.lastState = null;
+    this.currentVideo = null;
+    this.prepare = null;
+    this.pendingLocal = null;
+    this.loadFailures.clear();
+    this.stallTicks = 0;
+    this.typersMap.clear();
+    this.lastTypingSent = 0;
+
+    this.update({
+      roomId: next,
+      joined: false,
+      joinDenied: null,
+      roomCreatedAt: null,
+      typers: [],
+      users: [],
+      messages: [],
+      queue: [],
+      videoId: null,
+      title: null,
+      isPlaying: false,
+      position: null,
+      duration: null,
+      driftMs: null,
+      voice: [],
+      // The invite has been taken up (or abandoned by going somewhere else);
+      // either way it's no longer something to accept.
+      invite: null,
+    });
+
+    // Silence first, then the join — a half-second of the old room's audio
+    // leaking into the new one is the sort of thing people report as a bug.
+    await this.resetSpeed();
+    if (this.mpv) await this.mpv.stop().catch(() => {});
+
+    this.socket.emit("room:join", { roomId: next, name: this.opts.name, clientId: this.clientId });
+    this.setStatus(`joining ${next}…`);
+  }
+
+  // ---- direct messages ----
+
+  private onDirectMessage(message: DirectMessage) {
+    const me = this.state.account?.id;
+    const other = message.from === me ? message.to : message.from;
+    // Keep /dms honest without asking the server again: it only nudges the
+    // *recipient* that their list changed, so a line we sent would otherwise
+    // leave our own conversation preview showing the one before it.
+    this.update({
+      friends: this.state.friends.map((friend) =>
+        friend.id === other
+          ? { ...friend, lastMessage: { text: message.text, at: message.at, mine: message.from === me } }
+          : friend,
+      ),
+    });
+    if (this.state.dm?.id === other) {
+      this.update({ dmMessages: [...this.state.dmMessages.slice(-99), message] });
+      // Reading it as it arrives is still reading it — without this the badge
+      // comes back the moment anything else refetches the list.
+      if (message.from !== me) this.socket.emit("dm:read", { withUserId: other });
+      return;
+    }
+    if (message.from === me) return; // our own line, echoed to a conversation we're not looking at
+    const name = this.state.friends.find((friend) => friend.id === message.from)?.name ?? "someone";
+    this.bell();
+    // The unread count itself comes from the friends list — the server fires
+    // friends:changed alongside every message, so there's nothing to add up here.
+    this.setStatus(`${name} messaged you — /dms`, { sticky: true });
+  }
+
+  async openDm(friend: Friend): Promise<void> {
+    if (!this.requireAccount()) return;
+    this.update({ dm: { id: friend.id, name: friend.name }, dmMessages: [], dmTyper: null });
+    try {
+      const res = await authedFetch(this.opts.serverUrl, `/api/dm/${friend.id}`);
+      const data = (await res.json().catch(() => ({}))) as {
+        messages?: DirectMessage[];
+        retentionDays?: number;
+        error?: string;
+      };
+      if (!res.ok) {
+        this.update({ dm: null });
+        return this.setStatus(data.error ?? "couldn't open that conversation");
+      }
+      if (this.state.dm?.id !== friend.id) return; // they moved on while this was in flight
+      this.update({
+        dmMessages: data.messages ?? [],
+        dmRetentionDays: data.retentionDays ?? null,
+      });
+      // Fetching the history marked it read server-side; the badge on screen
+      // is from the last friends payload and doesn't know that yet.
+      void this.refreshFriends();
+    } catch {
+      this.update({ dm: null });
+      this.setStatus("couldn't reach the server");
+    }
+  }
+
+  closeDm(): void {
+    this.update({ dm: null, dmMessages: [], dmTyper: null });
+  }
+
+  sendDm(text: string): void {
+    const target = this.state.dm;
+    if (!target) return;
+    // No local append: the server's echo is the message, exactly as room chat
+    // already works.
+    this.socket.emit("dm:send", { toUserId: target.id, text: applyShortcodes(text) });
+  }
+
+  notifyDmTyping(): void {
+    const target = this.state.dm;
+    if (!target) return;
+    const now = Date.now();
+    if (now - this.lastDmTypingSent < 1500) return;
+    this.lastDmTypingSent = now;
+    this.socket.emit("dm:typing", { toUserId: target.id });
   }
 
   destroy() {

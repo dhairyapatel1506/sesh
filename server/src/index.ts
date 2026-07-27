@@ -9,8 +9,10 @@ import { parse as parseCookie } from "cookie";
 import { dbEnabled, env, migrate, query } from "./db.js";
 import {
   authEnabled,
+  bearerToken,
   clearSessionCookie,
   getUser,
+  issueSession,
   readSession,
   setSessionCookie,
   signInWithGoogle,
@@ -24,6 +26,16 @@ import {
   removeFriend,
   requestFriend,
 } from "./friends.js";
+import {
+  conversation,
+  DM_RETENTION_DAYS,
+  latestPerFriend,
+  markRead,
+  pruneOldMessages,
+  sendDirect,
+  unreadBySender,
+} from "./dm.js";
+import { approveLink, pollLink, startLink } from "./clilink.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -105,8 +117,16 @@ app.post("/api/auth/logout", (_req, res) => {
 // Which signed-in people are in which room, right now. In memory alongside the
 // rooms themselves, not in the database: it describes this process's live
 // connections, and a restart makes every word of it false.
+//
+// Two different questions live here, and conflating them was the original
+// mistake: `presence` answers "which room are they watching in", `userSockets`
+// answers "is Sesh open at all". Someone sitting on the homepage with nothing
+// playing is *online* — which is the whole point of a friends list, and what
+// makes it possible to message them or know an invite will land.
 const presence = new Map<string, string>(); // userId -> roomId
 const userSockets = new Map<string, Set<string>>(); // userId -> socket ids
+
+const isOnline = (userId: string) => userSockets.has(userId);
 
 // Tell a user's own tabs, and their friends' tabs, that something they render
 // has changed. The client refetches rather than being handed a patch — the
@@ -121,6 +141,47 @@ async function notifyFriends(userId: string): Promise<void> {
   for (const id of audience) {
     for (const socketId of userSockets.get(id) ?? []) {
       io.to(socketId).emit("friends:changed");
+    }
+  }
+}
+
+// Presence flaps. Signing in reconnects the socket on purpose, a laptop lid
+// closes and reopens, a phone hops from wi-fi to data, and a page navigation
+// between rooms is two events in quick succession. Announcing every edge as it
+// happens makes a friends list blink offline and back for no reason anyone
+// watching it could explain — so a presence change settles first, and one that
+// reverses inside the window is never sent at all.
+const PRESENCE_SETTLE_MS = 600;
+const presenceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const lastAnnounced = new Map<string, string>();
+
+const presenceShape = (userId: string) =>
+  `${isOnline(userId) ? "on" : "off"}:${presence.get(userId) ?? ""}`;
+
+function notifyPresence(userId: string): void {
+  clearTimeout(presenceTimers.get(userId));
+  presenceTimers.set(
+    userId,
+    setTimeout(() => {
+      presenceTimers.delete(userId);
+      const shape = presenceShape(userId);
+      // Offline-and-nowhere is the resting state, so it needs no stored entry —
+      // which also keeps this map from growing one row per person who ever
+      // connected.
+      if ((lastAnnounced.get(userId) ?? "off:") === shape) return;
+      if (shape === "off:") lastAnnounced.delete(userId);
+      else lastAnnounced.set(userId, shape);
+      void notifyFriends(userId);
+    }, PRESENCE_SETTLE_MS).unref(),
+  );
+}
+
+// Everyone who should be told about a message between two people: both ends,
+// on every tab and terminal either of them has open.
+function emitToUsers(userIds: string[], event: string, payload: unknown): void {
+  for (const id of new Set(userIds)) {
+    for (const socketId of userSockets.get(id) ?? []) {
+      io.to(socketId).emit(event, payload);
     }
   }
 }
@@ -141,14 +202,28 @@ app.get("/api/friends", async (req, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
   try {
-    const friends = await listFriends(userId);
+    const [friends, unread, latest] = await Promise.all([
+      listFriends(userId),
+      unreadBySender(userId),
+      latestPerFriend(userId),
+    ]);
     res.json({
-      friends: friends.map((friend) => ({
-        ...friend,
-        // Only settled friends reveal where they are. A pending request must
-        // not become a way to watch someone.
-        roomId: friend.status === "accepted" ? (presence.get(friend.id) ?? null) : null,
-      })),
+      friends: friends.map((friend) => {
+        // Only settled friends reveal anything about themselves. A pending
+        // request must not become a way to watch someone — not where they are,
+        // not whether they're at the keyboard.
+        const settled = friend.status === "accepted";
+        const last = latest.get(friend.id);
+        return {
+          ...friend,
+          online: settled && isOnline(friend.id),
+          roomId: settled ? (presence.get(friend.id) ?? null) : null,
+          unread: settled ? (unread.get(friend.id) ?? 0) : 0,
+          // Enough to sort the list by recency and show a one-line preview
+          // without fetching every conversation up front.
+          lastMessage: settled && last ? { text: last.text, at: last.at, mine: last.from === userId } : null,
+        };
+      }),
     });
   } catch (err) {
     console.error("friends list failed:", (err as Error).message);
@@ -211,6 +286,65 @@ app.post("/api/friends/remove", async (req, res) => {
   } catch (err) {
     console.error("friend remove failed:", (err as Error).message);
     res.status(500).json({ error: "couldn't do that" });
+  }
+});
+
+// ---- Direct messages ------------------------------------------------------
+// Sending and reading live on the socket (below) — this is only the scrollback
+// you get when you open a conversation, which is a request/response shape and
+// has no business being an event.
+app.get("/api/dm/:userId", async (req, res) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  const otherId = String(req.params.userId ?? "");
+  try {
+    // Friends only, checked here rather than assumed from the fact that you
+    // know someone's id — ids travel in every friends list you've ever been in.
+    if (!(await areFriends(userId, otherId))) {
+      return res.status(403).json({ error: "you two aren't friends" });
+    }
+    const before = req.query.before ? Number(req.query.before) : undefined;
+    const messages = await conversation(userId, otherId, Number.isFinite(before!) ? before : undefined);
+    // Opening a conversation is reading it.
+    if (await markRead(userId, otherId)) emitToUsers([userId], "friends:changed", undefined);
+    res.json({ messages, retentionDays: DM_RETENTION_DAYS });
+  } catch (err) {
+    console.error("dm history failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't load that conversation" });
+  }
+});
+
+// ---- Linking a terminal ---------------------------------------------------
+// The CLI shows a code; you approve it from a browser that's already signed in.
+// See server/src/clilink.ts for why it works this way.
+app.post("/api/auth/cli/start", (_req, res) => {
+  if (!authEnabled()) return res.status(503).json({ error: "accounts aren't configured" });
+  const { code, pollToken, expiresAt } = startLink();
+  res.json({ code, pollToken, expiresAt });
+});
+
+app.post("/api/auth/cli/approve", (req, res) => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+  if (!approveLink(String(req.body?.code ?? ""), userId)) {
+    return res.status(400).json({ error: "that code has expired or was already used" });
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/cli/poll", async (req, res) => {
+  if (!authEnabled()) return res.status(503).json({ error: "accounts aren't configured" });
+  const result = pollLink(String(req.body?.pollToken ?? ""));
+  if (result.status !== "approved") return res.json({ status: result.status });
+  try {
+    const user = await getUser(result.userId);
+    if (!user) return res.status(500).json({ error: "that account is gone" });
+    // The very same signed string the browser gets in a cookie. The terminal
+    // just has to store it itself.
+    res.json({ status: "approved", token: issueSession(result.userId), user });
+  } catch (err) {
+    console.error("cli poll failed:", (err as Error).message);
+    res.status(500).json({ error: "couldn't finish signing in" });
   }
 });
 
@@ -488,6 +622,9 @@ function userList(room: Room) {
   return Array.from(room.users, ([clientId, user]) => ({ id: clientId, name: user.name }));
 }
 
+const voiceRoster = (room: Room) =>
+  Array.from(room.voice, ([socketId, peer]) => ({ peerId: socketId, name: peer.name }));
+
 function cancelPendingStart(room: Room) {
   if (!room.pendingStart) return;
   clearTimeout(room.pendingStart.timer);
@@ -532,7 +669,13 @@ io.use((socket, next) => {
     try {
       const header = socket.handshake.headers.cookie;
       const parsed = header ? parseCookie(header) : {};
-      socket.data.userId = readSession(parsed["sesh_session"]) ?? undefined;
+      // The terminal has no cookie to send, so it puts the same signed string
+      // in the handshake's auth payload instead. Both roads, one identity.
+      const token =
+        parsed["sesh_session"] ??
+        (typeof socket.handshake.auth?.token === "string" ? socket.handshake.auth.token : undefined) ??
+        bearerToken(socket.handshake.headers.authorization);
+      socket.data.userId = readSession(token) ?? undefined;
     } catch {
       // Unsigned or unreadable — connect as anonymous, same as signed out.
     }
@@ -548,6 +691,9 @@ io.on("connection", (socket) => {
     let sockets = userSockets.get(userId);
     if (!sockets) userSockets.set(userId, (sockets = new Set()));
     sockets.add(socket.id);
+    // Having Sesh open at all is the thing friends want to know about — this
+    // fires whether or not a room is ever joined.
+    notifyPresence(userId);
   }
 
   socket.on(
@@ -577,7 +723,7 @@ io.on("connection", (socket) => {
       socket.data.roomId = roomId;
       if (socket.data.userId) {
         presence.set(socket.data.userId as string, roomId);
-        void notifyFriends(socket.data.userId as string);
+        notifyPresence(socket.data.userId as string);
       }
       socket.data.clientId = clientId;
       socket.join(roomId);
@@ -591,6 +737,10 @@ io.on("connection", (socket) => {
       // Late joiners (and reconnects) get what was said before they arrived.
       socket.emit("chat:history", room.messages);
       socket.emit("queue:state", room.queue);
+      // A call may already be going on in here. The roster is only broadcast
+      // when it *changes*, so without this an arrival sees "nobody in voice"
+      // until the next person happens to join or leave one.
+      if (room.voice.size > 0) socket.emit("voice:roster", voiceRoster(room));
       io.to(roomId).emit("room:users", userList(room));
     },
   );
@@ -820,7 +970,7 @@ io.on("connection", (socket) => {
       );
       if (!stillHere) {
         presence.delete(uid);
-        void notifyFriends(uid);
+        notifyPresence(uid);
       }
     }
   };
@@ -833,9 +983,6 @@ io.on("connection", (socket) => {
   // free instance would fall over, and the mesh costs each participant one
   // connection per other participant — fine for a room of friends, which is
   // all this is for.
-  const voiceRoster = (room: Room) =>
-    Array.from(room.voice, ([socketId, peer]) => ({ peerId: socketId, name: peer.name }));
-
   const leaveVoice = () => {
     const roomId = socket.data.roomId as string | undefined;
     const room = roomId ? rooms.get(roomId) : undefined;
@@ -896,6 +1043,54 @@ io.on("connection", (socket) => {
     }
   });
 
+  // ---- Direct messages ---------------------------------------------------
+  // Unlike room chat, these outlive the connection — so the socket's job is
+  // only delivery, and the row is written before anyone is told about it.
+  // Every message goes to both ends: the sender's other tabs are watching the
+  // same conversation, and rendering only the server's echo means one code
+  // path builds a message, exactly as room chat already does.
+  socket.on("dm:send", async ({ toUserId, text }: { toUserId: string; text: string }) => {
+    const fromId = socket.data.userId as string | undefined;
+    if (!fromId || !toUserId || typeof text !== "string") return;
+    try {
+      if (!(await areFriends(fromId, toUserId))) return;
+      const message = await sendDirect(fromId, toUserId, text);
+      if (!message) return;
+      emitToUsers([fromId, toUserId], "dm:message", message);
+      // The recipient's badge changed even if their conversation isn't open.
+      emitToUsers([toUserId], "friends:changed", undefined);
+    } catch (err) {
+      console.error("dm send failed:", (err as Error).message);
+    }
+  });
+
+  socket.on("dm:read", async ({ withUserId }: { withUserId: string }) => {
+    const userId = socket.data.userId as string | undefined;
+    if (!userId || !withUserId) return;
+    try {
+      if (await markRead(userId, withUserId)) {
+        // Only this person's own tabs: a read receipt is not something the
+        // other end gets told about.
+        emitToUsers([userId], "friends:changed", undefined);
+      }
+    } catch (err) {
+      console.error("dm read failed:", (err as Error).message);
+    }
+  });
+
+  // Same stateless relay as room typing: a ping while composing, expired by
+  // the receiver. Nothing is stored and nothing needs a "stopped" event.
+  socket.on("dm:typing", async ({ toUserId }: { toUserId: string }) => {
+    const fromId = socket.data.userId as string | undefined;
+    if (!fromId || !toUserId) return;
+    try {
+      if (!(await areFriends(fromId, toUserId))) return;
+      emitToUsers([toUserId], "dm:typing", { from: fromId });
+    } catch {
+      // Not worth logging — a dropped typing dot is invisible.
+    }
+  });
+
   socket.on("disconnect", () => {
     console.log(`client disconnected: ${socket.id}`);
     leaveRoom({ disconnecting: true });
@@ -904,6 +1099,9 @@ io.on("connection", (socket) => {
       const sockets = userSockets.get(uid);
       sockets?.delete(socket.id);
       if (sockets && sockets.size === 0) userSockets.delete(uid);
+      // Closing one tab of three isn't going offline; the settle window and the
+      // shape comparison make that a no-op rather than a false alarm.
+      notifyPresence(uid);
     }
   });
 });
@@ -931,6 +1129,19 @@ if (dbEnabled()) {
     console.error(err);
     process.exit(1);
   }
+
+  // Retention is a promise, so it runs on a timer rather than only at boot — a
+  // server that stays up for a month would otherwise never keep it.
+  const prune = async () => {
+    try {
+      const removed = await pruneOldMessages();
+      if (removed > 0) console.log(`pruned ${removed} message(s) older than ${DM_RETENTION_DAYS} days`);
+    } catch (err) {
+      console.error("message pruning failed:", (err as Error).message);
+    }
+  };
+  void prune();
+  setInterval(() => void prune(), 6 * 60 * 60 * 1000).unref();
 } else {
   console.log("no DATABASE_URL — running without accounts");
 }

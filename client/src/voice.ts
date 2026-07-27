@@ -25,9 +25,76 @@ const ICE_SERVERS: RTCIceServer[] = [
 ];
 
 // Opus defaults to around 32 kbps for a mono voice track, which is fine for
-// speech and audibly thin next to music. Doubling it is still nothing beside a
-// video stream and noticeably cleaner on consonants and laughter.
-const VOICE_BITRATE = 64_000;
+// speech and audibly thin next to music. This is still nothing beside a video
+// stream and noticeably cleaner on consonants and laughter. It's per *peer*,
+// so a mesh of six costs five times this upstream — around 0.5 Mbps, which any
+// connection that can stream YouTube already has.
+const VOICE_BITRATE = 96_000;
+
+// Opus is capable of far more than WebRTC asks of it by default, and the only
+// place to say so is the SDP — the fmtp line is the receiver telling the far
+// end's encoder what to send. So each side rewrites its *own* offers and
+// answers, and the result is that everyone encodes toward everyone at these
+// terms.
+//
+//   maxaveragebitrate  what we'll happily receive, matching the sender cap above
+//   maxplaybackrate    fullband, rather than being handed something narrower
+//   useinbandfec       carry a coarse copy of the previous frame, so a single
+//                      lost packet is a slight blur instead of a hole
+//   usedtx=0           don't stop transmitting during pauses; DTX saves
+//                      bandwidth nobody was short of and clips word onsets
+//   stereo=0           a microphone is one channel; saying so avoids spending
+//                      bitrate on a duplicate of it
+//   minptime=10        allow shorter packets, which lowers latency a little
+const OPUS_PARAMS = {
+  maxaveragebitrate: String(VOICE_BITRATE),
+  maxplaybackrate: "48000",
+  useinbandfec: "1",
+  usedtx: "0",
+  stereo: "0",
+  "sprop-stereo": "0",
+  minptime: "10",
+};
+
+// Rewrites the opus fmtp line in place, keeping whatever the browser already
+// put there and overriding only the keys above. Best-effort by design: an SDP
+// this doesn't recognise is returned untouched and the call still connects,
+// just at the browser's defaults.
+function tuneOpus(sdp: string): string {
+  const payload = sdp.match(/^a=rtpmap:(\d+) opus\/48000/im)?.[1];
+  if (!payload) return sdp;
+
+  const existing = sdp.match(new RegExp(`^a=fmtp:${payload} (.*)$`, "im"));
+  const params = new Map<string, string>();
+  for (const pair of existing?.[1]?.split(";") ?? []) {
+    const [key, value] = pair.split("=");
+    if (key?.trim()) params.set(key.trim(), value ?? "");
+  }
+  for (const [key, value] of Object.entries(OPUS_PARAMS)) params.set(key, value);
+  const line = `a=fmtp:${payload} ${[...params].map(([k, v]) => `${k}=${v}`).join(";")}`;
+
+  return existing
+    ? sdp.replace(new RegExp(`^a=fmtp:${payload} .*$`, "im"), line)
+    : sdp.replace(new RegExp(`^(a=rtpmap:${payload} opus/48000.*)$`, "im"), `$1\r\n${line}`);
+}
+
+// Everything we say about ourselves goes through here rather than straight to
+// setLocalDescription, so there's one place the tuning can't be forgotten.
+async function describeLocal(
+  connection: RTCPeerConnection,
+  description: RTCSessionDescriptionInit,
+): Promise<RTCSessionDescriptionInit> {
+  const tuned = { type: description.type, sdp: tuneOpus(description.sdp ?? "") };
+  try {
+    await connection.setLocalDescription(tuned);
+    return tuned;
+  } catch {
+    // A browser that won't take the rewrite gets the original — a call at
+    // default quality beats no call.
+    await connection.setLocalDescription(description);
+    return description;
+  }
+}
 
 // Speech is bursty and the meter is jumpy at the edges; these keep the ring
 // around someone's name from strobing on every syllable.
@@ -43,6 +110,13 @@ type Settings = {
   inputVolume: number;
   outputVolume: number;
   duckVideo: boolean;
+  // The browser's voice processing chain. All three are on by default because
+  // the default assumption is speakers — but they are also the single biggest
+  // reason a good microphone sounds like a phone call, so anyone on headphones
+  // can switch them off and hear the difference immediately.
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
 };
 
 const defaultSettings: Settings = {
@@ -53,6 +127,9 @@ const defaultSettings: Settings = {
   // On by default: the whole difficulty of talking over a video is that the
   // video doesn't stop for you.
   duckVideo: true,
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
 };
 
 function loadSettings(): Settings {
@@ -246,19 +323,47 @@ export function useVoice(roomId: string) {
   }, [settings.inputVolume]);
 
   // --- microphone ---------------------------------------------------------
-  const openMic = useCallback(async (deviceId: string) => {
-    // The room is playing audio out of the same speakers this mic is listening
-    // to, so cancellation isn't optional here the way it is in a call app.
+  // Takes the settings to open *with* rather than reading the ref, because
+  // every caller is changing one of them: React hasn't committed the new value
+  // by the time the microphone needs it, so the ref would still hold the old
+  // one and the toggle would appear to do nothing until the next change.
+  const openMic = useCallback(async (want: Settings) => {
+    const { inputDeviceId: deviceId, echoCancellation, noiseSuppression, autoGainControl } = want;
     const constraints: MediaStreamConstraints = {
       audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+        // The room is playing audio out of the same speakers this mic is
+        // listening to, which is why cancellation defaults on here in a way it
+        // wouldn't in a plain call app — but it's a choice, not a law, and
+        // headphones make it an expensive one.
+        echoCancellation,
+        noiseSuppression,
+        autoGainControl,
+        // Opus encodes at 48 kHz regardless; capturing there too means the
+        // audio isn't resampled on the way in, and one fewer resample is one
+        // fewer thing dulling it.
+        sampleRate: 48_000,
+        channelCount: 1,
         ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
       },
       video: false,
     };
-    return navigator.mediaDevices.getUserMedia(constraints);
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      // sampleRate and channelCount are advisory almost everywhere, but a
+      // device that refuses them outright would otherwise mean no microphone
+      // at all. Ask again for the part that matters.
+      if ((err as DOMException)?.name !== "OverconstrainedError") throw err;
+      return navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation,
+          noiseSuppression,
+          autoGainControl,
+          ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        },
+        video: false,
+      });
+    }
   }, []);
 
   const wireMic = useCallback(
@@ -275,20 +380,44 @@ export function useVoice(roomId: string) {
     [muted],
   );
 
-  const setInputDevice = useCallback(
-    async (deviceId: string) => {
-      setSettings((s) => ({ ...s, inputDeviceId: deviceId }));
+  // Any change to how the microphone is captured — which one, or what the
+  // browser does to it on the way through — means opening it again. The graph
+  // downstream is untouched, so peers never renegotiate: they're still being
+  // sent the destination's track, which is now fed by a different source.
+  const reopenMic = useCallback(
+    async (want: Settings, whatFailed: string) => {
+      const previous = settingsRef.current;
+      setSettings(want);
       if (!inVoiceRef.current) return;
       try {
-        const stream = await openMic(deviceId);
+        const stream = await openMic(want);
         for (const track of micStream.current?.getTracks() ?? []) track.stop();
         wireMic(stream);
       } catch {
-        setError("Couldn't switch to that microphone.");
+        // The old microphone is still open and still wired up, so put the
+        // setting back to match what's actually happening. A checkbox that
+        // stays flipped while nothing changed is worse than the failure.
+        setSettings(previous);
+        setError(whatFailed);
       }
     },
     [openMic, wireMic],
   );
+
+  const setInputDevice = (deviceId: string) =>
+    void reopenMic(
+      { ...settingsRef.current, inputDeviceId: deviceId },
+      "Couldn't switch to that microphone.",
+    );
+
+  const setProcessing = (
+    key: "echoCancellation" | "noiseSuppression" | "autoGainControl",
+    on: boolean,
+  ) =>
+    void reopenMic(
+      { ...settingsRef.current, [key]: on },
+      "Your microphone wouldn't reopen with that setting — it's been left as it was.",
+    );
 
   const setOutputDevice = (deviceId: string) =>
     setSettings((s) => ({ ...s, outputDeviceId: deviceId }));
@@ -376,8 +505,7 @@ export function useVoice(roomId: string) {
       for (const { peerId } of existing) {
         const peer = createPeer(peerId);
         try {
-          const offer = await peer.connection.createOffer();
-          await peer.connection.setLocalDescription(offer);
+          const offer = await describeLocal(peer.connection, await peer.connection.createOffer());
           socket.emit("voice:signal", { to: peerId, data: { description: offer } });
         } catch {
           setError("Couldn't start the call.");
@@ -401,8 +529,10 @@ export function useVoice(roomId: string) {
             await peer.connection.addIceCandidate(candidate).catch(() => {});
           }
           if (data.description.type === "offer") {
-            const answer = await peer.connection.createAnswer();
-            await peer.connection.setLocalDescription(answer);
+            const answer = await describeLocal(
+              peer.connection,
+              await peer.connection.createAnswer(),
+            );
             socket.emit("voice:signal", { to: from, data: { description: answer } });
           }
         } else if (data.candidate) {
@@ -477,10 +607,18 @@ export function useVoice(roomId: string) {
     setConnecting(true);
     setError(null);
     try {
-      const stream = await openMic(settingsRef.current.inputDeviceId);
+      const stream = await openMic(settingsRef.current);
 
       if (!graph.current) {
-        const context = new AudioContext();
+        // Matching the capture and encode rate end to end: anything else and
+        // the browser quietly resamples twice on the way to the far side.
+        // Some platforms refuse the hint, which is what the fallback is for.
+        let context: AudioContext;
+        try {
+          context = new AudioContext({ sampleRate: 48_000, latencyHint: "interactive" });
+        } catch {
+          context = new AudioContext();
+        }
         const gain = context.createGain();
         const destination = context.createMediaStreamDestination();
         gain.connect(destination);
@@ -586,6 +724,7 @@ export function useVoice(roomId: string) {
     toggleDeafen,
     togglePeerMute,
     setInputDevice,
+    setProcessing,
     setOutputDevice,
     setInputVolume,
     setOutputVolume,

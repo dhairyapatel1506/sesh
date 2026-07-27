@@ -26,7 +26,10 @@ Create a room, share the code, and everyone's player stays locked together — p
 - 👥 **Presence** — see who's in the room with you; names are first-come-first-served per room (no impersonating whoever's already there)
 - 🔑 **Optional sign-in** — Sesh works with no account at all: open a link, type a name, you're in. Signing in with Google only adds a friends list, and carries your name into rooms so you stop typing it
 - 🎙️ **Voice chat** — talk over the video, Discord-style: a row of everyone in the call, a green ring around whoever's speaking, mute and deafen (and mute any one person, just for you), and cues for joining, leaving and muting. Pick your microphone and speakers, set input and output levels, and let the video duck itself while someone's talking. Audio goes browser-to-browser and never touches the server. Best for a handful of people — every participant connects to every other, so it gets expensive past five or six. Some strict networks (symmetric NAT, corporate Wi-Fi) can't be connected without a relay server, which Sesh doesn't run; those show "couldn't reach someone" rather than failing silently
-- 🫂 **Friends** — swap 6-character friend codes to connect. Your list shows who's in a room right now, with one click to join them; from inside a sesh, one click invites them to yours. Presence is live (no polling) and only ever visible to settled friends — a pending request reveals nothing
+  - Tuned past WebRTC's defaults, which are built for a phone call on a bad line: 96 kbps fullband Opus with error correction on and discontinuous transmission off (it clips the starts of words), captured and encoded at 48 kHz so nothing is resampled on the way
+  - Echo cancellation, noise suppression and automatic gain are each a checkbox. All on by default, because most people are on speakers and the room is playing audio into the same microphone — but they're also why a good mic can sound like a phone, so on headphones you can switch them off
+- 🫂 **Friends** — swap 6-character friend codes to connect. Your list shows who's **online**, who's **in a room** (one click to join them), and who's away; from inside a sesh, one click invites anyone who's actually around. Presence is live (no polling) and only ever visible to settled friends — a pending request reveals nothing
+- 💌 **Direct messages** — message a friend outside any room, from the same friends list. Unread counts, typing indicators, and a sound when something arrives while you're not looking. Conversations are kept for 30 days and then deleted — long enough to pick a thread back up, short enough that Sesh isn't an archive
 - ⏱️ **Room uptime** — every room shows how long it's been going
 - 🔇 **Tap for sound** — browsers only autoplay a muted video, so anyone who didn't press play themselves lands in the room silently. A one-tap prompt over the player turns the sound on (which also keeps the browser from suspending the tab in the background)
 - 📱 **Mobile-friendly** — responsive UI, picture-in-picture hint for listening on the go
@@ -104,6 +107,8 @@ SESSION_SECRET=...                   # openssl rand -hex 32
 
 The Google client is an **OAuth client ID of type "Web application"** with your origins (e.g. `http://localhost:5173`) listed as authorized JavaScript origins and *no* redirect URIs — sign-in happens in the page, so nothing ever redirects. Only the default `email`/`profile`/`openid` scopes are used, which is why the consent screen needs no verification review.
 
+The terminal signs in differently, because Google hands its credential to a *page*: `sesh login` prints a short code, you approve it at `/link` in a browser that's already signed in, and the terminal receives the same signed session the browser holds. Nothing else is needed to enable it.
+
 Tables are created on boot: `server/migrations/*.sql` are applied in filename order, each in a transaction, tracked in a `_migrations` table. A database that's configured but unreachable stops the server rather than letting it serve a broken sign-in.
 
 ## Terminal client
@@ -157,7 +162,11 @@ npm install && npm run build --workspace cli
 npm link --workspace cli    # puts your build's `sesh` on your PATH
 ```
 
-Type to chat (`:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, typing indicators included); `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, `/emoji`, …). The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
+Type to chat (`:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, typing indicators included); `/help` lists commands (`/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, `/emoji`, …).
+
+Sign in with `sesh login` (`sesh whoami`, `sesh logout`) and the terminal gets the account features too: `/friends` shows who's online and who's in a room, `/invite <n>` pulls one here, `/join <n>` and `/accept` move you into their room without restarting, and `/dms` / `/dm <n|name>` are direct messages, with `/room` (or Esc) going back to room chat. Voice is read-only there — the roster shows in the presence line, but joining a call needs the browser. Without signing in the CLI behaves exactly as it always has.
+
+The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
 
 ## Deploying
 

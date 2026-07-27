@@ -69,6 +69,20 @@ export const playChatPing = () =>
     0.32,
   );
 
+// A direct message is the same news as chat — someone said something — so it
+// borrows chat's shape and inverts its direction. Falling where the room ping
+// rises tells the two apart without a second listen, which matters because
+// they can arrive seconds apart and mean entirely different things: one is the
+// room you're looking at, the other is someone who isn't in it.
+export const playDmPing = () =>
+  play(
+    [
+      { freq: 1174.66, at: 0, dur: 0.1 }, // D6
+      { freq: 739.99, at: 0.085, dur: 0.17 }, // F#5
+    ],
+    0.28,
+  );
+
 // Rising for arrivals, falling for departures — the direction carries the
 // meaning, so nobody has to learn which sound is which.
 export const playVoiceJoin = () =>

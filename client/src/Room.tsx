@@ -4,7 +4,7 @@ import { API_BASE, socket } from "./socket";
 import { applyShortcodes, searchEmojis } from "./emoji";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import { useAuth } from "./auth";
-import { FriendsPanel, InviteToast, useFriends } from "./Friends";
+import { FriendsPanel, InviteToast, totalUnread, useFriends } from "./Friends";
 import { useVoice } from "./voice";
 import { playChatPing, warmAudio } from "./sounds";
 import { VoiceBar } from "./Voice";
@@ -586,10 +586,16 @@ function Room() {
   const [friendsOpen, setFriendsOpen] = useState(false);
   const friendsMenuRef = useRef<HTMLDivElement>(null);
   const { friends } = useFriends();
-  const friendsOnline = friends.filter((f) => f.status === "accepted" && f.roomId).length;
+  // Around, not watching: anyone with Sesh open counts, whether or not they're
+  // in a room. Counting only the latter meant a badge of zero while three
+  // friends sat on the homepage, which is exactly the moment you'd want to know.
+  const friendsOnline = friends.filter((f) => f.status === "accepted" && f.online).length;
   // The count is the point of the menu being closed — you can see someone's
   // around without opening anything.
   const friendsPending = friends.some((f) => f.status === "incoming");
+  // Same argument for unread messages, more so: a message nobody can see until
+  // they open a menu is a message that goes unanswered.
+  const friendsUnread = totalUnread(friends);
 
   useEffect(() => {
     if (!friendsOpen) return;
@@ -1413,7 +1419,16 @@ function Room() {
                 onClick={() => setFriendsOpen((open) => !open)}
               >
                 Friends
-                {friendsOnline > 0 && <span className="friends-badge">{friendsOnline}</span>}
+                {friendsOnline > 0 && (
+                  <span className="friends-badge" title={`${friendsOnline} online`}>
+                    {friendsOnline}
+                  </span>
+                )}
+                {friendsUnread > 0 && (
+                  <span className="friends-badge unread" title="Unread messages">
+                    {friendsUnread}
+                  </span>
+                )}
                 {friendsPending && <span className="friends-dot" title="Someone wants to be friends" />}
               </button>
               {friendsOpen && (

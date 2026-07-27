@@ -150,6 +150,7 @@ export function VoiceBar({ voice, myName }: { voice: Voice; myName: string }) {
     toggleDeafen,
     togglePeerMute,
     setInputDevice,
+    setProcessing,
     setOutputDevice,
     setInputVolume,
     setOutputVolume,
@@ -253,7 +254,48 @@ export function VoiceBar({ voice, myName }: { voice: Voice; myName: string }) {
             // useful, and worth labelling, because pushed far enough it will
             // clip rather than just get louder.
             maxVolume={2}
-          />
+          >
+            {/* The three filters between a microphone and the call. They're on
+                by default because most people are on speakers, where echo
+                cancellation is the difference between a call and a howl — but
+                they're also what makes a good microphone sound like a phone,
+                so anyone on headphones should be able to switch them off and
+                hear what they paid for. */}
+            <p className="voice-section">Microphone processing</p>
+            <label className="voice-check">
+              <input
+                type="checkbox"
+                checked={settings.echoCancellation}
+                onChange={(e) => setProcessing("echoCancellation", e.target.checked)}
+              />
+              <span className="voice-check-text">
+                Echo cancellation
+                <em>Stops the room hearing itself back. Leave on unless you're on headphones.</em>
+              </span>
+            </label>
+            <label className="voice-check">
+              <input
+                type="checkbox"
+                checked={settings.noiseSuppression}
+                onChange={(e) => setProcessing("noiseSuppression", e.target.checked)}
+              />
+              <span className="voice-check-text">
+                Noise suppression
+                <em>Removes fans and traffic — and some of your voice with them.</em>
+              </span>
+            </label>
+            <label className="voice-check">
+              <input
+                type="checkbox"
+                checked={settings.autoGainControl}
+                onChange={(e) => setProcessing("autoGainControl", e.target.checked)}
+              />
+              <span className="voice-check-text">
+                Automatic gain
+                <em>Evens out how loud you are. Off gives a truer sound if your level is steady.</em>
+              </span>
+            </label>
+          </DevicePanel>
         </ControlWithMenu>
 
         <ControlWithMenu

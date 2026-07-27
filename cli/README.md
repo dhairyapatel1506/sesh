@@ -17,6 +17,28 @@ A TUI with the now-playing track, the shared queue, room chat, YouTube search, a
 
 Type to chat — `:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, and typing indicators work across both clients. `/help` lists the rest: `/search`, `/pick`, `/queue`, `/play`, `/pause`, `/seek`, `/skip`, `/vol`, `/emoji`.
 
+## Signing in
+
+Google hands its credential to a *page*, so the terminal borrows a browser for one step:
+
+```bash
+sesh login     # prints a code — approve it at /link in a signed-in browser
+sesh whoami
+sesh logout
+```
+
+The session is stored in `~/.config/sesh/auth.json` (`%APPDATA%\sesh\auth.json` on Windows), owner-readable only. Signed in, your account name is your name in every room, and these work:
+
+| Command | |
+|---|---|
+| `/friends` | who's in a room, who's online, who's offline · your friend code |
+| `/friends add <CODE>` · `accept <n>` · `remove <n>` | manage the list |
+| `/invite <n>` | ask a friend to come to this room (only if they're online and not already here) |
+| `/join <n>` · `/accept` | go to a friend's room, or take an invite — no restart |
+| `/dms` · `/dm <n\|name>` | conversations and direct messages · `/room` (or Esc) goes back |
+
+Direct messages are friends-only and deleted after 30 days. Voice chat is read-only here: the presence line shows who's in the call, but joining one needs the web client. None of this is required — without an account the CLI works exactly as before.
+
 ## Requirements
 
 Node.js ≥ 20.12, plus the playback engine — **all three pieces are required** (deno is what solves YouTube's throttling challenges):
@@ -42,9 +64,10 @@ curl -fsSL https://deno.land/install.sh | sh
 
 ```
 sesh <ROOM-CODE> [--name <you>] [--server <url>]
+sesh login | logout | whoami
 ```
 
-Names are picked fresh each run and are first-come-first-served within a room — nothing is stored anywhere.
+Names are first-come-first-served within a room. Signed in, your account name is used unless `--name` says otherwise; signed out, you're asked each run and nothing is stored anywhere.
 
 ## How the sync works
 

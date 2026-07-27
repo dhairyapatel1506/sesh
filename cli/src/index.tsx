@@ -3,8 +3,10 @@ import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, render, Text, useInput } from "ink";
+import { loadAuth, runLogin, runLogout, runWhoami } from "./auth.js";
 import { Session } from "./session.js";
 import { App } from "./ui.js";
+import type { Account } from "./types.js";
 
 const DEFAULT_SERVER = "https://sesh.dhairya.cloud";
 
@@ -29,7 +31,7 @@ function windowsHas(command: string): boolean {
   }
 }
 
-function handOffToWindows(args: string[]): never {
+function handOffToWindows(args: string[], reason: string): never {
   if (!windowsHas("sesh")) {
     console.error(
       "sesh can't play audio reliably under WSL, and no Windows-side install was found to hand off to.\n" +
@@ -46,10 +48,10 @@ function handOffToWindows(args: string[]): never {
   const opts = { cwd: "/mnt/c", detached: true, stdio: "ignore" as const };
   if (windowsHas("wt")) {
     spawn("wt.exe", ["new-tab", "--title", "Sesh", "cmd", "/c", winCmd], opts).unref();
-    console.log("sesh doesn't play audio reliably under WSL — opened it in a new Windows Terminal tab instead.");
+    console.log(`${reason} — opened it in a new Windows Terminal tab instead.`);
   } else {
     spawn("cmd.exe", ["/c", "start", "Sesh", "cmd", "/c", winCmd], opts).unref();
-    console.log("sesh doesn't play audio reliably under WSL — opened it in a Windows console instead.");
+    console.log(`${reason} — opened it in a Windows console instead.`);
   }
   process.exit(0);
 }
@@ -72,30 +74,41 @@ function usage(): never {
 usage:
   sesh                                         # create a room
   sesh <ROOM-CODE> [--name <you>] [--server <url>]
+  sesh login | logout | whoami                 # your sesh account
 
 examples:
   sesh
   sesh F3K9QX
   sesh F3K9QX --name dhairya
-  sesh F3K9QX --server http://localhost:3001   # local dev server`);
+  sesh F3K9QX --server http://localhost:3001   # local dev server
+  sesh login                                   # friends, invites, DMs`);
   process.exit(1);
 }
+
+// The account commands read as room codes otherwise. They can't collide: room
+// codes are six characters from an alphabet that has no lowercase in it, and
+// nothing here is six characters long anyway.
+const ACCOUNT_COMMANDS = ["login", "logout", "whoami"] as const;
+type AccountCommand = (typeof ACCOUNT_COMMANDS)[number];
 
 function parseArgs(argv: string[]) {
   let roomId: string | null = null;
   let name: string | null = null;
   let server = DEFAULT_SERVER;
+  let command: AccountCommand | null = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--name") name = argv[++i] ?? null;
     else if (arg === "--server") server = argv[++i] ?? server;
     else if (arg === "--help" || arg === "-h") usage();
-    else if (!arg.startsWith("-") && !roomId) roomId = arg;
+    else if (!command && !roomId && (ACCOUNT_COMMANDS as readonly string[]).includes(arg.toLowerCase())) {
+      command = arg.toLowerCase() as AccountCommand;
+    } else if (!arg.startsWith("-") && !roomId && !command) roomId = arg;
     else usage();
   }
   // No room code (or the explicit "new") means "start a fresh room".
   if (!roomId || roomId.toLowerCase() === "new") roomId = generateRoomId();
-  return { roomId: roomId.toUpperCase(), name, server: server.replace(/\/$/, "") };
+  return { command, roomId: roomId.toUpperCase(), name, server: server.replace(/\/$/, "") };
 }
 
 function NamePrompt({ error, onDone }: { error: string | null; onDone: (name: string) => void }) {
@@ -127,12 +140,28 @@ function NamePrompt({ error, onDone }: { error: string | null; onDone: (name: st
   );
 }
 
-function Root({ roomId, server, initialName }: { roomId: string; server: string; initialName: string | null }) {
+function Root({
+  roomId: initialRoomId,
+  server,
+  initialName,
+  token,
+  account,
+}: {
+  roomId: string;
+  server: string;
+  initialName: string | null;
+  token: string | null;
+  account: Account | null;
+}) {
   const [name, setName] = useState(initialName);
   const [nameError, setNameError] = useState<string | null>(null);
+  // /join and /accept move rooms inside one session; this only changes when a
+  // session has to be rebuilt (a name collision), and then it has to be the
+  // room we were actually in, not the one this process started in.
+  const [roomId, setRoomId] = useState(initialRoomId);
   const session = useMemo(() => {
     if (!name) return null;
-    const s = new Session({ serverUrl: server, roomId, name });
+    const s = new Session({ serverUrl: server, roomId, name, token, account });
     void s.start();
     return s;
   }, [name, server, roomId]);
@@ -152,6 +181,7 @@ function Root({ roomId, server, initialName }: { roomId: string; server: string;
     const check = () => {
       if (session.state.joinDenied) {
         setNameError(session.state.joinDenied);
+        setRoomId(session.state.roomId);
         setName(null);
       }
     };
@@ -165,21 +195,50 @@ function Root({ roomId, server, initialName }: { roomId: string; server: string;
   if (!name) {
     return <NamePrompt error={nameError} onDone={(picked) => setName(picked)} />;
   }
-  return <App session={session!} roomId={roomId} serverUrl={server} />;
+  return <App session={session!} serverUrl={server} />;
 }
 
-const { roomId, name, server } = parseArgs(process.argv.slice(2));
+const { command, roomId, name, server } = parseArgs(process.argv.slice(2));
+const stored = loadAuth();
 
 if (isWsl() && !process.env.SESH_ALLOW_WSL) {
   // Reconstruct clean args (the generated room code included, so the tab
-  // that opens joins the room this invocation named).
-  handOffToWindows([
-    roomId,
-    ...(name ? ["--name", name] : []),
-    ...(server !== DEFAULT_SERVER ? ["--server", server] : []),
-  ]);
+  // that opens joins the room this invocation named). The account commands
+  // go over too: a token saved here would sit in a config file belonging to a
+  // machine that never actually runs sesh.
+  handOffToWindows(
+    [
+      command ?? roomId,
+      ...(name && !command ? ["--name", name] : []),
+      ...(server !== DEFAULT_SERVER ? ["--server", server] : []),
+    ],
+    command
+      ? "sesh runs on the Windows side under WSL, so it signs in there"
+      : "sesh doesn't play audio reliably under WSL",
+  );
 }
 
-const instance = render(<Root roomId={roomId} server={server} initialName={name} />);
+// Account commands are plain terminal output — no TUI, and no mpv to start.
+if (command) {
+  const code =
+    command === "login"
+      ? await runLogin(server)
+      : command === "logout"
+        ? runLogout()
+        : await runWhoami(server);
+  process.exit(code);
+}
+
+const instance = render(
+  <Root
+    roomId={roomId}
+    server={server}
+    // Signed in, your account's name is your name — the prompt only exists
+    // because anonymous users have to be asked for one. --name still wins.
+    initialName={name ?? stored?.user.name ?? null}
+    token={stored?.token ?? null}
+    account={stored?.user ?? null}
+  />,
+);
 await instance.waitUntilExit();
 process.exit(0);

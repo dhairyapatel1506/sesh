@@ -425,6 +425,148 @@ button:disabled {
   font-size: 0.8rem;
 }
 
+/* The name is a button — the way into a conversation — but it has to keep
+   reading as a name, so nothing about it looks pressable until you're over it. */
+.friend-open {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin-left: -0.35rem;
+  padding: 0.15rem 0.35rem;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.friend-open:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.friend-open .friend-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Three states at a glance, which is the entire reason to keep a friends list
+   open. Green for a room you could join, cyan for reachable-but-idle, grey for
+   nothing to be done — the dot carries it and the word confirms it. */
+.friend-status {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  align-self: center;
+  background: #94a3b8;
+}
+
+.friend-status.in-room {
+  background: #22c55e;
+}
+
+.friend-status.online {
+  background: #22d3ee;
+}
+
+/* Still listed — you can still message them, and they'll read it later — but
+   not competing with the friends who are actually around. */
+.friend-row.offline {
+  opacity: 0.55;
+}
+
+.friend-row.offline:hover {
+  opacity: 1;
+}
+
+.friend-unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  padding: 0 0.28rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  align-self: center;
+}
+
+/* ---- Direct messages --------------------------------------------------- */
+/* The conversation replaces the list in place rather than opening a second
+   floating thing over the first. Everything inside borrows room chat's
+   classes: it's the same act, and two chat looks in one app is one too many. */
+.friends.dm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dm-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.dm-back {
+  background: none;
+  border: 0;
+  padding: 0.1rem 0.45rem;
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 1.1rem;
+  line-height: 1.2;
+}
+
+.dm-back:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.dm-with {
+  font-weight: 600;
+  color: var(--text-h);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dm-retention {
+  margin: 0;
+  font-size: 0.72rem;
+  opacity: 0.7;
+}
+
+.dm-messages {
+  max-height: 15rem;
+  min-height: 5rem;
+  padding-right: 0.15rem;
+}
+
+.dm-bar {
+  margin-bottom: 0;
+}
+
+.dm-bar input {
+  font-size: 0.9rem;
+  padding: 0.4rem 0.7rem;
+}
+
+.dm-bar button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
 /* ---- Voice ------------------------------------------------------------ */
 
 .voice {
@@ -811,6 +953,19 @@ button:disabled {
   opacity: 0.65;
 }
 
+/* Three related checkboxes in a menu that already has a device picker and a
+   slider need something to say where one subject ends and the next begins. */
+.voice-section {
+  margin: 0.15rem 0 -0.1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .voice-avatar {
     transition: none;
@@ -868,6 +1023,13 @@ button:disabled {
   line-height: 1;
 }
 
+/* Unread messages get their own badge rather than joining the count beside
+   it: "two friends are watching something" and "two people are waiting on a
+   reply" are different news, and only one of them is owed an answer. */
+.friends-badge.unread {
+  background: #ef4444;
+}
+
 .friends-dot {
   width: 0.45rem;
   height: 0.45rem;
@@ -894,6 +1056,20 @@ button:disabled {
 @media (prefers-color-scheme: dark) {
   .friends-popover {
     background: var(--bg, #16161a);
+  }
+}
+
+/* On a phone the toolbar wraps, so its right edge is nowhere near the page's
+   and a panel hung off it lands half off the screen. Narrow enough, this stops
+   being a dropdown and becomes a sheet against the viewport — the only box
+   that's certain to fit it, wherever the toolbar happened to end up. */
+@media (max-width: 640px) {
+  .friends-popover {
+    position: fixed;
+    inset: auto 0.75rem 0.75rem;
+    width: auto;
+    max-height: 70vh;
+    box-sizing: border-box;
   }
 }
 
@@ -1419,4 +1595,62 @@ button:disabled {
 .copy-link:hover:not(:disabled) {
   background: var(--accent-bg);
   filter: none;
+}
+
+/* ---- Linking a terminal ------------------------------------------------ */
+
+.link-page {
+  max-width: 34rem;
+  text-align: left;
+}
+
+.link-page header {
+  justify-content: flex-start;
+}
+
+.link-lead {
+  margin: 0.75rem 0 1.25rem;
+  font-size: 0.95rem;
+}
+
+/* Framed and kept above the button, because this is the one thing on the page
+   somebody could get badly wrong, and a sentence of body text next to a
+   confirm button is a sentence that gets skipped. */
+.link-warning {
+  margin: 0 0 1.25rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--text-h);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.link-code {
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.link-bar {
+  margin-bottom: 0.75rem;
+}
+
+.link-note {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.link-done {
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  border-radius: 12px;
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.link-done .link-lead {
+  margin: 0;
 }

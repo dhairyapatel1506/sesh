@@ -41,7 +41,7 @@ function sign(payload: string): string {
   return crypto.createHmac("sha256", secret).update(payload).digest("base64url");
 }
 
-function issueSession(userId: string): string {
+export function issueSession(userId: string): string {
   const expiresAt = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
   const payload = `${userId}.${expiresAt}`;
   return `${payload}.${sign(payload)}`;
@@ -150,13 +150,28 @@ export async function signInWithGoogle(credential: string): Promise<User> {
   throw new Error("could not allocate a friend code");
 }
 
+// The terminal has no cookie jar and no browser to put one in, so it carries
+// the same signed session string as an Authorization header instead. A cookie
+// wins where both are present: that's a browser, and its cookie is the thing
+// the rest of the session flow maintains.
+//
+// Nothing about accepting a bearer here weakens the cookie path — browsers
+// never attach an Authorization header on their own, which is precisely why
+// cross-site requests can't forge one.
+export const bearerToken = (header: string | undefined): string | undefined => {
+  if (!header) return undefined;
+  const [scheme, value] = header.split(" ");
+  return scheme?.toLowerCase() === "bearer" && value ? value : undefined;
+};
+
 // Attaches req.userId when the request carries a valid session. Never rejects:
 // almost everything in Sesh works signed out, so routes decide for themselves
 // whether they need a user.
 export function withUser(req: Request, _res: Response, next: NextFunction): void {
   if (authEnabled()) {
     try {
-      req.userId = readSession(req.cookies?.[COOKIE_NAME]) ?? undefined;
+      const token = req.cookies?.[COOKIE_NAME] ?? bearerToken(req.headers.authorization);
+      req.userId = readSession(token) ?? undefined;
     } catch {
       // No SESSION_SECRET configured — treat as signed out rather than 500.
     }
