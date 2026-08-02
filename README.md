@@ -186,12 +186,12 @@ Without this, reports land in the database and wait to be looked at. With it, ea
 
 ```bash
 # server/.env (or the Render dashboard)
-RESEND_API_KEY=re_...                    # resend.com — 3,000 emails/month free
+BREVO_API_KEY=xkeysib-...                # brevo.com — 300 emails/day free
 REPORT_EMAIL_TO=you@example.com
-REPORT_EMAIL_FROM=Sesh <bugs@yourdomain> # optional; needs a domain verified with Resend
+REPORT_EMAIL_FROM=Sesh <bugs@yourdomain> # must be a sender (or on a domain) verified with Brevo
 ```
 
-Leave `REPORT_EMAIL_FROM` unset and Resend's own `onboarding@resend.dev` sender is used, which can only deliver to the address that owns the Resend account — enough for an inbox of one, and no DNS to set up. Verifying your own domain lifts that.
+All three are required for mail to turn on — Brevo has no house fallback sender, so the from-address has to be one your Brevo account is allowed to send as: either an individual sender you've verified by email, or any address on a domain you've authenticated with DNS records.
 
 Screenshots ride along as attachments, and each email links back to `/admin`. Mail is capped at five an hour: past that you get one note saying the rest are waiting rather than an inbox full of them. A failing mail provider is logged and ignored — the report is already stored, and the person who filed it has already been thanked.
 

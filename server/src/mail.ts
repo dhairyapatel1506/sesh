@@ -7,21 +7,28 @@ import { env } from "./db.js";
 // that, and a report sat unread until somebody thought to go looking. So a
 // report now sends mail.
 //
-// Resend over its HTTP API rather than SMTP or a library: it's one fetch with
+// Brevo over its HTTP API rather than SMTP or a library: it's one fetch with
 // an API key, which means no dependency, no connection pooling, and nothing to
 // go wrong at boot on a free instance that sleeps.
 
-const RESEND_ENDPOINT = "https://api.resend.com/emails";
+const BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
 
-// Everything here is optional. With no key configured, reports still land in
+// Everything here is optional. With nothing configured, reports still land in
 // the database and the dashboard still shows them — the app just doesn't send
-// mail, exactly as it behaved before.
-export const mailEnabled = () => Boolean(env("RESEND_API_KEY") && env("REPORT_EMAIL_TO"));
+// mail, exactly as it behaved before. All three are needed because Brevo has
+// no house sender to fall back on: it only sends from an address (or domain)
+// verified in the account, so the from-address is part of being configured.
+export const mailEnabled = () =>
+  Boolean(env("BREVO_API_KEY") && env("REPORT_EMAIL_TO") && env("REPORT_EMAIL_FROM"));
 
-// Resend will only send from a domain you've verified. Until that's done its
-// own onboarding sender works, but only to the address that owns the account —
-// which is fine for a report inbox of one.
-const from = () => env("REPORT_EMAIL_FROM") ?? "Sesh <onboarding@resend.dev>";
+// "Sesh <bugs@example.com>" or a bare address — Brevo wants the two halves
+// separately.
+function sender(): { name: string; email: string } {
+  const raw = env("REPORT_EMAIL_FROM") ?? "";
+  const match = raw.match(/^\s*(.*?)\s*<(.+)>\s*$/);
+  if (match) return { name: match[1] || "Sesh", email: match[2] };
+  return { name: "Sesh", email: raw.trim() };
+}
 
 // A burst shouldn't turn an inbox into a denial of service against its owner.
 // The rate limits on the endpoint make this unlikely, but "unlikely" is not a
@@ -49,18 +56,26 @@ type ReportMail = {
   dashboardUrl: string | null;
 };
 
-async function post(payload: Record<string, unknown>): Promise<void> {
-  const res = await fetch(RESEND_ENDPOINT, {
+type Attachment = { name: string; content: string };
+
+async function post(subject: string, text: string, attachment?: Attachment[]): Promise<void> {
+  const res = await fetch(BREVO_ENDPOINT, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${env("RESEND_API_KEY")}`,
+      "api-key": env("BREVO_API_KEY") ?? "",
       "content-type": "application/json",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      sender: sender(),
+      to: [{ email: env("REPORT_EMAIL_TO") }],
+      subject,
+      textContent: text,
+      ...(attachment?.length ? { attachment } : {}),
+    }),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`resend responded ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`brevo responded ${res.status}: ${body.slice(0, 200)}`);
   }
 }
 
@@ -77,15 +92,12 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
 
   try {
     if (state === "last") {
-      await post({
-        from: from(),
-        to: [env("REPORT_EMAIL_TO")],
-        subject: "Sesh — more bug reports than usual",
-        text:
-          `That's ${BURST_PER_HOUR} reports in an hour, so the rest aren't being emailed ` +
+      await post(
+        "Sesh — more bug reports than usual",
+        `That's ${BURST_PER_HOUR} reports in an hour, so the rest aren't being emailed ` +
           `until it settles down.\n\n` +
           (report.dashboardUrl ? `They're all here: ${report.dashboardUrl}\n` : ""),
-      });
+      );
       return;
     }
 
@@ -100,24 +112,20 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
       report.dashboardUrl ? `all reports: ${report.dashboardUrl}` : null,
     ].filter(Boolean);
 
-    await post({
-      from: from(),
-      to: [env("REPORT_EMAIL_TO")],
+    await post(
       // The first line of the report itself, so the inbox is scannable without
       // opening anything.
-      subject: `Sesh bug: ${report.text.replace(/\s+/g, " ").slice(0, 70)}`,
-      text: lines.join("\n"),
-      ...(report.image
-        ? {
-            attachments: [
-              {
-                filename: `screenshot.${report.image.mime.split("/")[1] ?? "png"}`,
-                content: report.image.data.toString("base64"),
-              },
-            ],
-          }
-        : {}),
-    });
+      `Sesh bug: ${report.text.replace(/\s+/g, " ").slice(0, 70)}`,
+      lines.join("\n"),
+      report.image
+        ? [
+            {
+              name: `screenshot.${report.image.mime.split("/")[1] ?? "png"}`,
+              content: report.image.data.toString("base64"),
+            },
+          ]
+        : undefined,
+    );
   } catch (err) {
     console.error("couldn't email that bug report:", (err as Error).message);
   }
