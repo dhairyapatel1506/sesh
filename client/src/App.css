@@ -416,6 +416,20 @@ button:disabled {
   opacity: 0.85;
 }
 
+/* Floating controls behave like YouTube's chrome: awake on pointer activity,
+   faded out after a beat of stillness. */
+.player-fs-toggle,
+.fs-chat-toggle {
+  opacity: 1;
+  transition: opacity 0.25s ease;
+}
+
+.player-frame.controls-idle .player-fs-toggle,
+.player-frame.controls-idle .fs-chat-toggle {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .fs-chat-badge {
   position: absolute;
   top: -0.35rem;
@@ -501,6 +515,17 @@ button:disabled {
 /* "Up next" pill during the last seconds — top-left, clear of the player's
    bottom controls and our bottom-right buttons. Display only, so it must
    not eat clicks meant for the video. */
+/* Between the iframe and every overlay: catches all clicks on the video body
+   (YouTube's title bar, paused-wall and end-screen tiles all open youtube.com)
+   and turns them into play/pause. Stops short of the bottom so YouTube's own
+   control bar — pause, seek, volume, captions — stays fully usable. */
+.click-shield {
+  position: absolute;
+  inset: 0 0 3.5rem 0;
+  z-index: 1;
+  cursor: pointer;
+}
+
 .upnext-banner {
   position: absolute;
   top: 0.75rem;
@@ -508,15 +533,21 @@ button:disabled {
   z-index: 2;
   max-width: min(70%, 26rem);
   padding: 0.4rem 0.75rem;
+  border: 0;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.75);
   color: #fff;
+  font: inherit;
   font-size: 0.8rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  pointer-events: none;
+  cursor: pointer;
   backdrop-filter: blur(4px);
+}
+
+.upnext-banner:hover {
+  background: rgba(0, 0, 0, 0.9);
 }
 
 .upnext-label {

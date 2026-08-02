@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { API_BASE, socket } from "./socket";
 import { applyShortcodes, searchEmojis } from "./emoji";
@@ -1300,6 +1300,23 @@ function Room() {
     }
   };
 
+  // The floating buttons behave like YouTube's own chrome: awake while the
+  // pointer moves over the video, gone after a beat of stillness. A control
+  // that never leaves is a control drawn on top of someone's film.
+  const [controlsAwake, setControlsAwake] = useState(true);
+  const controlsTimerRef = useRef<number | null>(null);
+  const wakeControls = useCallback(() => {
+    setControlsAwake(true);
+    if (controlsTimerRef.current !== null) window.clearTimeout(controlsTimerRef.current);
+    controlsTimerRef.current = window.setTimeout(() => setControlsAwake(false), 2800);
+  }, []);
+  useEffect(() => {
+    wakeControls();
+    return () => {
+      if (controlsTimerRef.current !== null) window.clearTimeout(controlsTimerRef.current);
+    };
+  }, [videoId, wakeControls]);
+
   // Unread badge for the fullscreen chat toggle: everything past fsSeenCount
   // is unread. Entering fullscreen or having the panel open marks all read.
   useEffect(() => {
@@ -1777,10 +1794,39 @@ function Room() {
           {videoId ? (
             <>
               <div
-                className={isFullscreen ? "player-frame is-fullscreen" : "player-frame"}
+                className={[
+                  "player-frame",
+                  isFullscreen && "is-fullscreen",
+                  !controlsAwake && "controls-idle",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 ref={playerFrameRef}
+                onPointerMove={wakeControls}
+                onPointerDown={wakeControls}
               >
                 <div id="yt-player" ref={playerContainerRef} />
+                {/* Every click on the video body goes through us, never
+                    YouTube. The iframe is full of exits — the title bar, the
+                    paused "More videos" wall, creator end-screens in the last
+                    seconds — and every one of them opens youtube.com over the
+                    room. The shield stops at the control bar, so pausing,
+                    seeking and volume stay YouTube's; a click on the body
+                    itself toggles play/pause, which is what a video player's
+                    body does anyway. Never on an ENDED player: play would
+                    restart it from 0 (sharp edge #1) — and the end overlay is
+                    covering this shield by then anyway. */}
+                <div
+                  className="click-shield"
+                  onClick={() => {
+                    const player = readyPlayer();
+                    if (!player) return;
+                    const state = player.getPlayerState();
+                    if (state === PlayerState.ENDED) return;
+                    if (state === PlayerState.PLAYING) player.pauseVideo();
+                    else player.playVideo();
+                  }}
+                />
                 {needsUnmute && (
                   <button className="unmute-nudge" onClick={enableSound}>
                     🔇 Tap for sound
@@ -1790,10 +1836,17 @@ function Room() {
                     Only during the last moments of playback, and never on top
                     of the end overlay. */}
                 {nearEnd && !ended && upNextDisplay && (
-                  <div className="upnext-banner">
+                  <button
+                    className="upnext-banner"
+                    title="Play it now"
+                    onClick={() => {
+                      if (queue.length > 0) socket.emit("queue:play", { id: queue[0].id });
+                      else if (upnext) loadVideo(upnext.videoId);
+                    }}
+                  >
                     <span className="upnext-label">Up next:</span> {upNextDisplay.title}
                     {upNextDisplay.channel && ` — ${upNextDisplay.channel}`}
-                  </div>
+                  </button>
                 )}
                 {/* Our end screen, fully covering the iframe so YouTube's
                     recommendation wall underneath can't be clicked. Tiles play
@@ -1946,6 +1999,14 @@ function Room() {
                         {upnext.channel ? ` · ${upnext.channel}` : ""}
                       </span>
                     </span>
+                    <button
+                      className="queue-action"
+                      title="Play now"
+                      aria-label="Play now"
+                      onClick={() => loadVideo(upnext.videoId)}
+                    >
+                      ▶
+                    </button>
                   </li>
                 </ul>
               )}
