@@ -832,9 +832,27 @@ function Room() {
             }
             // Reaching PLAYING/PAUSED proves the video is actually working.
             setPlayerError(null);
-            // ...and that it's no longer sitting at the end (covers a replay
-            // of the same video, where videoId never changes).
-            setEnded(false);
+            // ...and PLAYING that it's no longer sitting at the end (covers a
+            // replay of the same video, where videoId never changes). PAUSED
+            // is trickier: the room's "everyone pause" that follows an ending
+            // parks an ENDED player at paused-on-the-last-frame — same wall,
+            // same moment, still ended as far as the UI is concerned. Clearing
+            // on that pause dropped our end screen and exposed YouTube's
+            // recommendation wall underneath, whose tiles all open youtube.com.
+            if (event.data === PlayerState.PLAYING) {
+              setEnded(false);
+            } else {
+              // A pause parked hard against the end IS the ended state, even
+              // though ENDED never fired on this player: in a room, whichever
+              // client finishes first flips the room to "not playing", and the
+              // stragglers get paused a breath before their own ENDED — leaving
+              // them, without this, staring at YouTube's paused-recommendations
+              // wall (whose every tile opens youtube.com) instead of our end
+              // screen. A pause anywhere else clears ended, covering replays.
+              const duration = playerRef.current.getDuration();
+              const position = playerRef.current.getCurrentTime();
+              setEnded(duration > 0 && duration - position <= 2);
+            }
             if ("mediaSession" in navigator) {
               navigator.mediaSession.playbackState =
                 event.data === PlayerState.PLAYING ? "playing" : "paused";
@@ -1908,6 +1926,28 @@ function Room() {
                 <p className="radio-status is-dry">
                   Couldn't find anything to play next — the room has stopped.
                 </p>
+              )}
+              {/* An empty queue with the radio armed isn't "nothing up next" —
+                  the pick is announced the moment a video starts, so show it
+                  where the queue would be, or this panel contradicts the
+                  banner over the video. */}
+              {queue.length === 0 && radio.autoplay && upnext && (
+                <ul className="queue-list">
+                  <li className="queue-item queue-radio">
+                    <img
+                      src={`https://i.ytimg.com/vi/${upnext.videoId}/default.jpg`}
+                      alt=""
+                      loading="lazy"
+                    />
+                    <span className="queue-info">
+                      <span className="queue-title">{upnext.title}</span>
+                      <span className="queue-meta">
+                        📻 picked by autoplay
+                        {upnext.channel ? ` · ${upnext.channel}` : ""}
+                      </span>
+                    </span>
+                  </li>
+                </ul>
               )}
               {queue.length > 0 && (
                 <ul className="queue-list">
