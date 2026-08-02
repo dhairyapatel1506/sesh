@@ -36,7 +36,7 @@ import {
   unreadBySender,
 } from "./dm.js";
 import { approveLink, pollLink, startLink } from "./clilink.js";
-import { radioAvailable, radioPick, radioRelated, type RadioPick } from "./radio.js";
+import { embedPlayable, radioAvailable, radioPick, radioRelated, type RadioPick, type VideoDetails } from "./radio.js";
 import { mailEnabled, sendReportMail } from "./mail.js";
 import {
   decodeDataUrl,
@@ -689,17 +689,13 @@ app.get("/api/search", async (req, res) => {
       if (videosRes.ok) {
         vetted = true;
         const videosData = (await videosRes.json()) as {
-          items?: {
-            id: string;
-            contentDetails: { duration: string };
-            status?: { embeddable?: boolean; privacyStatus?: string };
-          }[];
+          items?: ({ id: string; contentDetails: { duration: string } } & VideoDetails)[];
         };
         for (const video of videosData.items ?? []) {
           durations.set(video.id, formatDuration(video.contentDetails.duration));
-          if (video.status?.embeddable === true && video.status?.privacyStatus === "public") {
-            playable.add(video.id);
-          }
+          // The same bar the radio holds its picks to — see embedPlayable for
+          // the two ways status.embeddable alone turned out to be a lie.
+          if (embedPlayable(video)) playable.add(video.id);
         }
       }
     }

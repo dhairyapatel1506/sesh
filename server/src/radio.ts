@@ -86,6 +86,34 @@ async function mixFor(seed: string): Promise<string[]> {
   return ids;
 }
 
+// What videos.list has to be asked before believing a video will embed.
+// status.embeddable alone lies twice over: an age-restricted video reports
+// embeddable:true and then refuses to play embedded, and a region-locked one
+// plays only in its allowed countries — the failing search result that
+// prompted this was "public, embeddable", and watchable in exactly 4
+// countries. Both failures show the same misleading "owner has disabled
+// playback" error on screen, so they have to be caught here, before display.
+export type VideoDetails = {
+  status?: { embeddable?: boolean; privacyStatus?: string };
+  contentDetails?: {
+    contentRating?: { ytRating?: string };
+    regionRestriction?: { allowed?: string[]; blocked?: string[] };
+  };
+};
+
+// "Will this play embedded, for a general audience?" A room's viewers can be
+// in different countries, so a video locked down to a small allowed-list is a
+// broken tile for nearly everyone — the thresholds just separate "worldwide
+// minus the odd dispute" from "four countries only".
+export function embedPlayable(video: VideoDetails): boolean {
+  if (video.status?.embeddable !== true || video.status?.privacyStatus !== "public") return false;
+  if (video.contentDetails?.contentRating?.ytRating === "ytAgeRestricted") return false;
+  const region = video.contentDetails?.regionRestriction;
+  if (region?.allowed && region.allowed.length < 60) return false;
+  if (region?.blocked && region.blocked.length > 130) return false;
+  return true;
+}
+
 // One call covers up to 50 ids, so checking a whole mix is a single unit.
 async function detailsFor(ids: string[]): Promise<void> {
   const missing = ids.filter((id) => !detailCache.has(id));
@@ -95,7 +123,7 @@ async function detailsFor(ids: string[]): Promise<void> {
 
   const url = new URL("https://www.googleapis.com/youtube/v3/videos");
   url.search = new URLSearchParams({
-    part: "snippet,status",
+    part: "snippet,status,contentDetails",
     id: missing.slice(0, 50).join(","),
     key,
   }).toString();
@@ -103,19 +131,17 @@ async function detailsFor(ids: string[]): Promise<void> {
   const res = await fetch(url);
   if (!res.ok) return;
   const data = (await res.json()) as {
-    items?: {
+    items?: ({
       id: string;
       snippet: { title: string; channelTitle?: string; liveBroadcastContent?: string };
-      status: { embeddable?: boolean; privacyStatus?: string };
-    }[];
+    } & VideoDetails)[];
   };
   for (const item of data.items ?? []) {
     remember(detailCache, item.id, {
       title: decodeEntities(item.snippet.title),
       channel: decodeEntities(item.snippet.channelTitle ?? ""),
       playable:
-        item.status.embeddable === true &&
-        item.status.privacyStatus === "public" &&
+        embedPlayable(item) &&
         // A live stream has no end, so it would pin the room to one video
         // forever and quietly break the thing that called this.
         (item.snippet.liveBroadcastContent ?? "none") === "none",

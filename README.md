@@ -15,7 +15,7 @@ Create a room, share the code, and everyone's player stays locked together — p
 ## Features
 
 - 🔗 **Instant rooms** — create a room, share the link or 6-character code, done
-- 🔍 **Built-in YouTube search** — search by title or just paste any YouTube link. Results are double-checked against YouTube before they're shown, so a video that can't play in an embedded player never appears as an option
+- 🔍 **Built-in YouTube search** — search by title or just paste any YouTube link. Results are double-checked against YouTube before they're shown, so a video that can't play in an embedded player never appears as an option — including the ones YouTube itself mislabels, like age-restricted uploads and tracks locked to a handful of countries, which claim to be embeddable and then refuse on screen
 - ⏭️ **Shared queue** — everyone sees the same "Up next" list; add videos from search (**+**) or a pasted link, auto-play when the current one ends, play-now or remove anytime
 - ⚡ **Tight sync** — playback stays within tens of milliseconds across viewers
 - 💬 **Room chat** — side-by-side with the video on desktop, stacked below on mobile; as ephemeral as the room itself (history lives only while someone's in the room)
