@@ -1,9 +1,9 @@
 import React, { useEffect, useReducer, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { Session } from "./session.js";
-import { completion, helpRows, label, matchCommands, subcommandsOf, usage } from "./commands.js";
+import { helpRows, label, matchCommands, subcommandsOf, usage, type Command } from "./commands.js";
 import { copyToClipboard, hyperlink } from "./clipboard.js";
-import { searchEmojis, type Emoji } from "./emoji.js";
+import { emojiToken, matchEmojis, searchEmojis } from "./emoji.js";
 import { extractVideoId, fetchTitle, formatTime, parseTime, search } from "./youtube.js";
 import type { SearchResult } from "./types.js";
 
@@ -39,48 +39,73 @@ function formatUptime(ms: number): string {
   return `${s}s`;
 }
 
-// What the half-typed line could become. Learning this TUI used to mean
-// running /help and trying commands one at a time; the list narrowing under
-// the cursor teaches the same thing without anyone having to ask for it.
+// What the half-typed line could become — a "/" opening a command, or a ":"
+// opening an emoji code mid-message. Learning this TUI used to mean running
+// /help and trying commands one at a time; the list narrowing under the
+// cursor teaches the same thing without anyone having to ask for it. Both
+// kinds share one look and one interaction: ↑↓ picks a row, Tab (and Enter,
+// for emoji) takes it.
 function Suggestions({
   line,
+  commands,
+  emojis,
+  hidden,
+  selected,
   signedIn,
   accountsEnabled,
 }: {
   line: string;
+  commands: Command[];
+  emojis: EmojiSuggestion[];
+  hidden: number;
+  selected: number;
   signedIn: boolean;
   accountsEnabled: boolean;
 }) {
+  if (emojis.length > 0) {
+    return (
+      <Box flexDirection="column">
+        {emojis.map((e, i) => (
+          <Text key={e.char}>
+            <Text color={i === selected ? "yellow" : "gray"} bold={i === selected}>
+              {`${e.char}  :${e.name}:`.padEnd(COMMAND_COLUMN)}
+            </Text>
+            {e.aliases.length > 0 && <Text color="gray">also :{e.aliases.join(": :")}:</Text>}
+          </Text>
+        ))}
+        <Text color="gray">
+          {hidden > 0 ? `… ${hidden} more · ` : ""}↑↓ pick · Tab/Enter inserts · /emoji browses all
+        </Text>
+      </Box>
+    );
+  }
   // Only ever while a command is being written. The moment the line is chat
   // again — or empty — this is just clutter in front of the room.
   if (!line.startsWith("/")) return null;
-  const matches = matchCommands(line.slice(1));
-  if (matches.length === 0) {
+  if (commands.length === 0) {
     return (
       <Text color="gray">
         no command matches <Text color="yellow">{line.split(" ")[0]}</Text> — /help lists them all
       </Text>
     );
   }
-  const shown = matches.slice(0, SUGGESTIONS_VISIBLE);
-  const hidden = matches.length - shown.length;
-  const finished = completion(line);
+  const finished = completionOf(commands[selected], line);
   const footer = [
     hidden > 0 ? `… ${hidden} more` : "",
     // Says what Tab will actually put on the line — the argument hint beside
     // it is a description, not something Tab is about to type for you. And
     // there's nothing to offer once the name is written out in full.
     finished && finished.trim() !== line ? `Tab completes ${finished.trim()}` : "",
+    commands.length > 1 ? "↑↓ pick" : "",
   ]
     .filter(Boolean)
     .join(" · ");
   return (
     <Box flexDirection="column">
-      {shown.map((cmd, i) => (
+      {commands.map((cmd, i) => (
         <Text key={cmd.name}>
-          {/* The first row is the one Tab would take, so it's the one that
-              looks picked. */}
-          <Text color={i === 0 ? "magenta" : "gray"} bold={i === 0}>
+          {/* The highlighted row is the one Tab would take. */}
+          <Text color={i === selected ? "magenta" : "gray"} bold={i === selected}>
             {label(cmd).padEnd(COMMAND_COLUMN)}
           </Text>
           <Text color="gray">{cmd.desc}</Text>
@@ -98,57 +123,118 @@ function Suggestions({
   );
 }
 
+// An emoji row in the suggestion list: the name that matched what was typed
+// up front, the rest as also-known-as.
+type EmojiSuggestion = { char: string; name: string; aliases: string[] };
+
+// What Tab would put on the line for this command — or null when the name is
+// already written out and the cursor is into the arguments, where completing
+// would only mangle what's been typed.
+function completionOf(cmd: Command | undefined, line: string): string | null {
+  if (!cmd) return null;
+  const typed = line.slice(1).toLowerCase();
+  if (!cmd.name.startsWith(typed)) return null;
+  return `/${cmd.name}${cmd.args ? " " : ""}`;
+}
+
 function InputLine({
+  line,
+  onChange,
   onSubmit,
-  onType,
+  active,
+  arrowsOwned,
   to,
   signedIn,
   accountsEnabled,
 }: {
+  line: string;
+  onChange: (line: string) => void;
   onSubmit: (line: string) => void;
-  onType: (line: string) => void;
+  /** False while a modal panel (the emoji picker) owns the keyboard outright. */
+  active: boolean;
+  /** True while another panel (the help card) owns the arrow keys. */
+  arrowsOwned: boolean;
   /** Whose DM the next line goes to, if it isn't going to the room. */
   to: string | null;
   signedIn: boolean;
   accountsEnabled: boolean;
 }) {
-  const [line, setLine] = useState("");
+  // Which suggestion row is picked. Lives and dies with the current line —
+  // any edit reshuffles the list, so the selection starts over at the top.
+  const [sel, setSel] = useState(0);
+  useEffect(() => setSel(0), [line]);
+
+  // The two kinds of suggestion this line can be growing: a "/" command, or a
+  // ":code" emoji anywhere mid-message.
+  const commandMatches = line.startsWith("/") ? matchCommands(line.slice(1)) : [];
+  const commands = commandMatches.slice(0, SUGGESTIONS_VISIBLE);
+  const token = line.startsWith("/") ? null : emojiToken(line);
+  const emojiMatches = token ? matchEmojis(token) : [];
+  const emojis: EmojiSuggestion[] = emojiMatches.slice(0, SUGGESTIONS_VISIBLE).map((e) => {
+    const name = e.names.find((n) => n.includes(token!.toLowerCase())) ?? e.names[0];
+    return { char: e.char, name, aliases: e.names.filter((n) => n !== name) };
+  });
+  const rows = emojis.length || commands.length;
+  const selected = Math.min(sel, Math.max(0, rows - 1));
+
+  // Swaps the half-typed :code for the picked emoji, leaving the rest of the
+  // message exactly as it was.
+  const acceptEmoji = (e: EmojiSuggestion) => {
+    onChange(line.slice(0, line.length - token!.length - 1) + e.char);
+  };
+
   useInput((input, key) => {
+    if (!active) return;
     if (key.return) {
+      // With an emoji list on offer, Enter takes the picked one — sending the
+      // half-typed ":hea" as chat is never what anyone meant. The next Enter
+      // sends the message, emoji and all.
+      if (emojis.length > 0) return acceptEmoji(emojis[selected]);
       const value = line.trim();
-      setLine("");
+      onChange("");
       if (value) onSubmit(value);
       return;
     }
     if (key.backspace || key.delete) {
-      setLine((prev) => {
-        const next = prev.slice(0, -1);
-        onType(next);
-        return next;
-      });
+      // By code point, not code unit — emoji land on this line now (picker,
+      // suggestions), and a bare slice(-1) would shear a surrogate pair in
+      // half and leave � behind.
+      onChange([...line].slice(0, -1).join(""));
       return;
     }
-    // The one non-printing key this input answers to: it finishes the command
-    // highlighted in the list already on screen, which is the only thing Tab
-    // could sensibly mean here. Arrows and ctrl stay swallowed — there is no
-    // cursor to move, and the arrows mean something elsewhere while the help
-    // card is up, so the line must never take them for text.
+    // Tab finishes whichever row is highlighted in the list already on screen
+    // — the emoji it names, or the command it spells out.
     if (key.tab) {
-      setLine((prev) => completion(prev) ?? prev);
+      if (emojis.length > 0) return acceptEmoji(emojis[selected]);
+      const finished = completionOf(commands[selected], line);
+      if (finished) onChange(finished);
       return;
     }
-    if (key.ctrl || key.meta || key.escape || key.upArrow || key.downArrow || key.leftArrow || key.rightArrow) {
+    // The arrows move the pick while there's a list to move it through —
+    // unless the help card is up, which is what the arrows scroll then. There
+    // is no cursor to move, so they never mean anything to the text itself.
+    if (key.upArrow || key.downArrow) {
+      if (!arrowsOwned && rows > 1) {
+        setSel(key.downArrow ? (selected + 1) % rows : (selected - 1 + rows) % rows);
+      }
       return;
     }
-    setLine((prev) => {
-      const next = prev + input;
-      onType(next);
-      return next;
-    });
+    if (key.ctrl || key.meta || key.escape || key.leftArrow || key.rightArrow) {
+      return;
+    }
+    onChange(line + input);
   });
   return (
     <Box flexDirection="column">
-      <Suggestions line={line} signedIn={signedIn} accountsEnabled={accountsEnabled} />
+      <Suggestions
+        line={line}
+        commands={commands}
+        emojis={emojis}
+        hidden={Math.max(commandMatches.length, emojiMatches.length) - rows}
+        selected={selected}
+        signedIn={signedIn}
+        accountsEnabled={accountsEnabled}
+      />
       <Box>
         {/* The prompt itself says where the line is going — mistaking a DM for
             room chat is not a mistake anyone should be able to make quietly. */}
@@ -167,7 +253,12 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
   const { exit } = useApp();
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   const [results, setResults] = useState<SearchResult[] | null>(null);
-  const [emojiResults, setEmojiResults] = useState<Emoji[] | null>(null);
+  // The line being typed lives here rather than in InputLine so the emoji
+  // picker's Enter can drop its pick into it.
+  const [line, setLine] = useState("");
+  // The emoji picker: which subset it's showing and which row is on. Modal —
+  // while it's open the arrows, Enter and Esc are its.
+  const [picker, setPicker] = useState<{ query: string; index: number } | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [helpScroll, setHelpScroll] = useState(0);
   const [showFriends, setShowFriends] = useState(false);
@@ -224,20 +315,39 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
   // the help card is up, in which case it has the keyboard.
   useInput((_input, key) => {
     if (key.escape) {
-      // The card is the one panel that takes keys of its own, so it takes the
-      // first Escape by itself: putting it away shouldn't also sweep away the
-      // search results or the conversation that were open behind it.
+      // The picker and the card are the panels that take keys of their own,
+      // so each takes the first Escape by itself: putting one away shouldn't
+      // also sweep away the search results or the conversation behind it.
+      if (picker) {
+        setPicker(null);
+        return;
+      }
       if (showHelp) {
         setShowHelp(false);
         return;
       }
       setResults(null);
-      setEmojiResults(null);
       setShowFriends(false);
       setShowDms(false);
       // A conversation is a panel too, and leaving it puts typing back where
       // someone hitting Escape expects it: the room.
       session.closeDm();
+      return;
+    }
+    // The picker is the same kind of reader as the help card — arrows a row,
+    // PgUp/PgDn a screenful — plus Enter, which drops the highlighted emoji
+    // onto the input line where the message is being written.
+    if (picker) {
+      const list = searchEmojis(picker.query);
+      const last = list.length - 1;
+      if (key.downArrow) setPicker({ ...picker, index: Math.min(picker.index + 1, last) });
+      else if (key.upArrow) setPicker({ ...picker, index: Math.max(0, picker.index - 1) });
+      else if (key.pageDown) setPicker({ ...picker, index: Math.min(picker.index + helpVisible, last) });
+      else if (key.pageUp) setPicker({ ...picker, index: Math.max(0, picker.index - helpVisible) });
+      else if (key.return && list[picker.index]) {
+        setLine((prev) => prev + list[picker.index].char);
+        setPicker(null);
+      }
       return;
     }
     // Nobody is reading the chat through the card, so while it's open the
@@ -372,9 +482,12 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         break;
       }
       case "emoji": {
-        const found = searchEmojis(arg);
-        if (!found.length) return session.setStatus(`no emoji match "${arg}"`);
-        setEmojiResults(found.slice(0, 24));
+        // The whole set (or the matching slice of it), in the navigable
+        // picker — not a dump that assumes the :codes: are already known.
+        if (arg && searchEmojis(arg).length === 0) {
+          return session.setStatus(`no emoji match "${arg}" — /emoji browses everything`);
+        }
+        setPicker({ query: arg, index: 0 });
         break;
       }
       case "friends": {
@@ -582,24 +695,46 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         </Box>
       )}
 
-      {/* Emoji browser */}
-      {emojiResults && (
-        <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
-          <Text color="yellow" bold>
-            emoji <Text color="gray">· type :name: in a message · Esc closes</Text>
-          </Text>
-          {Array.from({ length: Math.ceil(emojiResults.length / 4) }, (_, row) => (
-            <Text key={row}>
-              {emojiResults.slice(row * 4, row * 4 + 4).map((e) => (
-                <Text key={e.char}>
-                  {e.char}
-                  <Text color="gray"> :{e.names[0]}:{" ".repeat(Math.max(1, 16 - e.names[0].length))}</Text>
+      {/* Emoji picker — the same kind of window-onto-a-list as the help card,
+          but with a pick: Enter drops the highlighted emoji into the line. */}
+      {picker &&
+        (() => {
+          const list = searchEmojis(picker.query);
+          const index = Math.min(picker.index, list.length - 1);
+          // The window follows the highlight: top-pinned until the pick walks
+          // off the bottom, then sliding a row at a time.
+          const top = Math.min(Math.max(0, index - helpVisible + 1), Math.max(0, list.length - helpVisible));
+          return (
+            <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+              <Text color="yellow" bold>
+                emoji{picker.query ? ` matching “${picker.query}”` : ""}{" "}
+                <Text color="gray">
+                  {list.length > helpVisible
+                    ? `· ${top + 1}-${Math.min(top + helpVisible, list.length)} of ${list.length} · ↑↓ pick · PgUp/PgDn page `
+                    : "· ↑↓ pick "}
+                  · Enter inserts · Esc closes
                 </Text>
-              ))}
-            </Text>
-          ))}
-        </Box>
-      )}
+              </Text>
+              {list.slice(top, top + helpVisible).map((e, i) => {
+                const on = top + i === index;
+                return (
+                  <Text key={e.char}>
+                    <Text color={on ? "yellow" : undefined} bold={on}>
+                      {on ? "▸ " : "  "}
+                      {e.char}
+                      {"  "}
+                    </Text>
+                    <Text color={on ? "yellow" : "gray"} bold={on}>
+                      {`:${e.names[0]}:`.padEnd(COMMAND_COLUMN - 5)}
+                    </Text>
+                    {e.names.length > 1 && <Text color="gray">also :{e.names.slice(1).join(": :")}:</Text>}
+                  </Text>
+                );
+              })}
+              <Text color="gray">these work typed out too — :{list[index]?.names[0]}: in a message</Text>
+            </Box>
+          );
+        })()}
 
       {/* Friends */}
       {showFriends && (
@@ -797,14 +932,18 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
       )}
 
       <InputLine
+        line={line}
+        active={!picker}
+        arrowsOwned={showHelp}
         to={dm?.name ?? null}
         signedIn={!!s.account}
         accountsEnabled={s.accountsEnabled}
         onSubmit={handle}
-        onType={(line) => {
+        onChange={(next) => {
+          setLine(next);
           // Only real chat text counts as "typing" — commands don't. Which end
           // hears about it follows wherever the line is headed.
-          if (!line || line.startsWith("/")) return;
+          if (!next || next.startsWith("/")) return;
           if (dm) session.notifyDmTyping();
           else session.notifyTyping();
         }}

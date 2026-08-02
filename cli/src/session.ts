@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
 import { io, type Socket } from "socket.io-client";
-import { Mpv, probeAudioOutput } from "./mpv.js";
+import { classifyPlaybackError, Mpv, probeAudioOutput } from "./mpv.js";
 import { applyShortcodes } from "./emoji.js";
 import { authedFetch, loadAuth } from "./auth.js";
 import { fetchTitle } from "./youtube.js";
@@ -24,6 +24,13 @@ const NUDGE_MAX_SECONDS = 1.2;
 const NUDGE_RATE_DELTA = 0.25;
 const RESYNC_INTERVAL_MS = 5000;
 const LOCAL_DRIFT_CHECK_MS = 750;
+
+// How long a load may sit silent before it's declared dead instead of "trying
+// to play" forever. Generous, because when YouTube drip-throttles an IP the
+// extraction + container probe can take tens of seconds while playback still
+// works once started. Overridable so tests can fake a hang without waiting
+// half a minute for it.
+const LOAD_TIMEOUT_MS = Number(process.env.SESH_LOAD_TIMEOUT_MS ?? "") || 30000;
 
 export type UiState = {
   connected: boolean;
@@ -494,14 +501,14 @@ export class Session extends EventEmitter {
     const mpv = this.mpv;
     if (!mpv) return Promise.reject(new Error("mpv not ready"));
     return new Promise((resolve, reject) => {
-      // When YouTube drip-throttles an IP, extraction + the initial container
-      // probe can take tens of seconds while playback still works once
-      // started. Failing fast here triggers retries, and every retry is
-      // another yt-dlp extraction — which deepens the throttle. Be patient.
+      // Patient (see LOAD_TIMEOUT_MS) — failing fast triggers retries, and
+      // every retry is another yt-dlp extraction, which deepens a throttle.
+      // But it must END: a video that never starts has to time out with a
+      // reason, not sit on "loading…" forever.
       const timeout = setTimeout(() => {
         cleanup();
         reject(new Error("load timed out"));
-      }, 40000);
+      }, LOAD_TIMEOUT_MS);
       const slowNotice = setTimeout(() => this.setStatus("still loading — stream is slow…"), 8000);
       const onLoaded = () => {
         cleanup();
@@ -563,28 +570,50 @@ export class Session extends EventEmitter {
     this.dbg("noteLoadFailure", video, kind);
     if (!video) return;
     this.lastFailureKind = kind;
-    const failures = (this.loadFailures.get(video) ?? 0) + 1;
-    this.loadFailures.set(video, failures);
     this.currentVideo = null;
     this.update({ isPlaying: false });
+    // What yt-dlp/mpv actually said, not a guess — mpv relays yt-dlp's stderr
+    // over its log stream, and most failures name their reason in it. A video
+    // that's gone, age-walled, geo-blocked or unextractable won't be any less
+    // so on the third try: say why now, and pin the failure count so the
+    // resync loop doesn't keep reloading it.
+    const verdict = classifyPlaybackError(this.mpv?.recentLog() ?? "");
+    this.dbg("classified", verdict.kind);
+    if (verdict.kind !== "unknown" && verdict.kind !== "network") {
+      this.loadFailures.set(video, 3);
+      this.setStatus(verdict.message, { sticky: true });
+      return;
+    }
+    // Unknown and network failures are the transient kinds — those retry.
+    const failures = (this.loadFailures.get(video) ?? 0) + 1;
+    this.loadFailures.set(video, failures);
     if (failures >= 3) {
       void this.diagnoseGiveUp();
     } else {
-      this.setStatus(`playback failed — retrying (${failures}/3)`);
+      this.setStatus(
+        kind === "timeout"
+          ? `video is taking too long to start — retrying (${failures}/3)`
+          : `playback failed — retrying (${failures}/3)`,
+      );
     }
   }
 
   // Three strikes — figure out WHICH problem this machine has before
-  // pointing the user somewhere useless.
+  // pointing the user somewhere useless. ("Check your yt-dlp version" lives
+  // inside classifyPlaybackError now, and only for genuine extraction
+  // failures — the one case where it's the right advice.)
   private async diagnoseGiveUp() {
     this.setStatus("playback keeps failing — diagnosing…", { sticky: true });
     const audioOk = await probeAudioOutput();
+    const verdict = classifyPlaybackError(this.mpv?.recentLog() ?? "");
     this.setStatus(
       !audioOk
         ? "your audio output is broken (WSLg hiccup) — PowerShell: wsl --shutdown, reopen terminal, relaunch sesh"
-        : this.lastFailureKind === "timeout"
-          ? "loads keep timing out — YouTube may be throttling this network; wait a while, then retry"
-          : "this video won't play here — /skip it? (is yt-dlp up to date?)",
+        : verdict.kind !== "unknown"
+          ? verdict.message
+          : this.lastFailureKind === "timeout"
+            ? "gave up — the video never started (timed out). YouTube may be slow or throttling this network; wait a bit, or /skip"
+            : "this video won't play here — /skip it or try another one",
       { sticky: true },
     );
   }

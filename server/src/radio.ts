@@ -11,7 +11,7 @@ import { env } from "./db.js";
 // *one* quota unit against the 10,000/day allowance where a search costs a
 // hundred. Autoplay would have been unaffordable the other way.
 
-export type RadioPick = { videoId: string; title: string };
+export type RadioPick = { videoId: string; title: string; channel: string };
 
 const MIX_SIZE = 25;
 // Mixes are personalised-ish and change slowly; a day is well inside how long
@@ -26,7 +26,7 @@ const mixCache = new Map<string, Mix>();
 // Whether a video can actually be played in an embedded player, which a mix
 // makes no promise about. Cached forever within a process — it's a property of
 // the video, not of when you asked.
-type Details = { title: string; playable: boolean };
+type Details = { title: string; channel: string; playable: boolean };
 const detailCache = new Map<string, Details>();
 
 function remember<T>(cache: Map<string, T>, key: string, value: T): void {
@@ -105,13 +105,14 @@ async function detailsFor(ids: string[]): Promise<void> {
   const data = (await res.json()) as {
     items?: {
       id: string;
-      snippet: { title: string; liveBroadcastContent?: string };
+      snippet: { title: string; channelTitle?: string; liveBroadcastContent?: string };
       status: { embeddable?: boolean; privacyStatus?: string };
     }[];
   };
   for (const item of data.items ?? []) {
     remember(detailCache, item.id, {
       title: decodeEntities(item.snippet.title),
+      channel: decodeEntities(item.snippet.channelTitle ?? ""),
       playable:
         item.status.embeddable === true &&
         item.status.privacyStatus === "public" &&
@@ -123,7 +124,7 @@ async function detailsFor(ids: string[]): Promise<void> {
   // Anything the API didn't return at all is gone; record that so it isn't
   // asked about again on the next track.
   for (const id of missing) {
-    if (!detailCache.has(id)) remember(detailCache, id, { title: "", playable: false });
+    if (!detailCache.has(id)) remember(detailCache, id, { title: "", channel: "", playable: false });
   }
 }
 
@@ -133,20 +134,37 @@ async function detailsFor(ids: string[]): Promise<void> {
  * should stop rather than invent something.
  */
 export async function radioPick(seed: string, exclude: Set<string>): Promise<RadioPick | null> {
+  const picks = await radioRelated(seed, exclude, 1);
+  return picks[0] ?? null;
+}
+
+/**
+ * The same lookup, but the whole shortlist: every playable video from the
+ * seed's mix, in mix order. This is what "recommended after this video"
+ * means here — YouTube's own answer, minus anything that can't actually play
+ * in an embedded player, so nothing on screen is a dead end.
+ */
+export async function radioRelated(
+  seed: string,
+  exclude: Set<string>,
+  limit: number,
+): Promise<RadioPick[]> {
   try {
     const candidates = (await mixFor(seed)).filter((id) => !exclude.has(id));
-    if (candidates.length === 0) return null;
+    if (candidates.length === 0) return [];
     await detailsFor(candidates);
+    const picks: RadioPick[] = [];
     for (const id of candidates) {
       const details = detailCache.get(id);
-      if (details?.playable) return { videoId: id, title: details.title };
+      if (details?.playable) picks.push({ videoId: id, title: details.title, channel: details.channel });
+      if (picks.length >= limit) break;
     }
-    return null;
+    return picks;
   } catch (err) {
     // A radio that fails is a room that stops, which is exactly where it would
     // have been without this. Never worth throwing over.
     console.error("radio lookup failed:", (err as Error).message);
-    return null;
+    return [];
   }
 }
 

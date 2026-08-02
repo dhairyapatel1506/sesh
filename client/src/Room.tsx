@@ -30,6 +30,19 @@ type SearchResult = {
   duration: string;
 };
 
+type RelatedResult = {
+  videoId: string;
+  title: string;
+  channel: string;
+  thumbnail: string;
+};
+
+type UpNextPick = {
+  videoId: string;
+  title: string;
+  channel: string;
+};
+
 type ChatMessage = {
   id: string;
   senderId: string;
@@ -231,6 +244,26 @@ function Room() {
   const playerRef = useRef<YTPlayer | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const pendingStateRef = useRef<RoomState | null>(null);
+
+  // The wrapper that goes fullscreen: iframe plus every overlay we draw over
+  // it (end screen, up-next banner, fullscreen chat). Element fullscreen on
+  // this node — with YouTube's own fullscreen button disabled via fs:0 — is
+  // what lets our UI exist inside fullscreen at all.
+  const playerFrameRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fsChatOpen, setFsChatOpen] = useState(false);
+  // How many chat messages were already seen when the fullscreen chat panel
+  // was last open (or fullscreen entered) — anything beyond it is the badge.
+  const [fsSeenCount, setFsSeenCount] = useState(0);
+
+  // Feature state for our own end-of-video experience: whether the current
+  // video has ended (drives the overlay), what /api/related suggested for it,
+  // and the radio's announced next pick (radio:upnext).
+  const [ended, setEnded] = useState(false);
+  const [related, setRelated] = useState<RelatedResult[] | null>(null);
+  const [upnext, setUpnext] = useState<UpNextPick | null>(null);
+  // True during the last ~12s of playback — shows the up-next banner.
+  const [nearEnd, setNearEnd] = useState(false);
 
   // Latest authoritative playback state (from the server or our own emits),
   // used by the local drift-check loop between server resyncs.
@@ -700,6 +733,10 @@ function Room() {
         videoId,
         width: "640",
         height: "390",
+        // fs:0 hides YouTube's own fullscreen button — its native fullscreen
+        // contains only the iframe, which would strand every overlay we draw
+        // (chat, end screen, up-next). Our own button fullscreens the wrapper.
+        playerVars: { fs: 0 },
         events: {
           onReady: () => {
             // The YouTube API sets width/height as HTML attributes, and in
@@ -742,6 +779,9 @@ function Room() {
             // No hidden/suppress guards here: ending isn't a user action, it
             // happens on every client at once, and reporting it is idempotent.
             if (event.data === PlayerState.ENDED) {
+              // Our own end screen replaces YouTube's recommendation wall.
+              // Pure UI — the sync reporting below is unchanged.
+              setEnded(true);
               if ("mediaSession" in navigator) {
                 navigator.mediaSession.playbackState = "paused";
               }
@@ -792,6 +832,9 @@ function Room() {
             }
             // Reaching PLAYING/PAUSED proves the video is actually working.
             setPlayerError(null);
+            // ...and that it's no longer sitting at the end (covers a replay
+            // of the same video, where videoId never changes).
+            setEnded(false);
             if ("mediaSession" in navigator) {
               navigator.mediaSession.playbackState =
                 event.data === PlayerState.PLAYING ? "playing" : "paused";
@@ -1156,12 +1199,106 @@ function Room() {
     };
   }, []);
 
-  // Keep the newest message in view.
-  const chatListRef = useRef<HTMLDivElement | null>(null);
+  // The radio's announced pick for "what plays when this ends". The server
+  // resets it to null at every video start and re-announces once its (cached)
+  // lookup lands; null can also mean "nothing suitable".
   useEffect(() => {
-    const el = chatListRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    const onUpnext = (pick: UpNextPick | null) => setUpnext(pick);
+    socket.on("radio:upnext", onUpnext);
+    return () => {
+      socket.off("radio:upnext", onUpnext);
+    };
+  }, []);
+
+  // A video change resets everything end-of-video: the overlay, its tiles,
+  // the banner, and the previous video's radio pick (the server re-announces
+  // for the new one, but don't show a stale pick in the gap).
+  useEffect(() => {
+    setEnded(false);
+    setRelated(null);
+    setUpnext(null);
+    setNearEnd(false);
+  }, [videoId]);
+
+  // When the video ends, fetch our own recommendations for the overlay.
+  // A 503 (no key) or an error just means an overlay without tiles.
+  useEffect(() => {
+    if (!ended || !videoId) {
+      setRelated(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`${API_BASE}/api/related?videoId=${videoId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { results?: RelatedResult[] } | null) => {
+        if (!cancelled) setRelated(data?.results ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setRelated([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ended, videoId]);
+
+  // Tick down toward the end of playback: the up-next banner shows during the
+  // final ~12 seconds. readyPlayer() guards every read — a player that isn't
+  // ready yet has no getCurrentTime to call.
+  useEffect(() => {
+    if (!videoId) return;
+    const interval = window.setInterval(() => {
+      const player = readyPlayer();
+      if (!player) return;
+      const duration = player.getDuration();
+      if (!(duration > 0)) {
+        setNearEnd(false);
+        return;
+      }
+      const remaining = duration - player.getCurrentTime();
+      setNearEnd(
+        player.getPlayerState() === PlayerState.PLAYING && remaining > 0 && remaining <= 12,
+      );
+    }, 500);
+    return () => window.clearInterval(interval);
+  }, [videoId]);
+
+  // Track whether our wrapper is the fullscreen element (Esc exits natively,
+  // so state has to follow the document, not our button).
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const fs = document.fullscreenElement === playerFrameRef.current;
+      setIsFullscreen(fs);
+      if (!fs) setFsChatOpen(false);
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void playerFrameRef.current?.requestFullscreen();
+    }
+  };
+
+  // Unread badge for the fullscreen chat toggle: everything past fsSeenCount
+  // is unread. Entering fullscreen or having the panel open marks all read.
+  useEffect(() => {
+    if (isFullscreen && !fsChatOpen) return;
+    setFsSeenCount(messages.length);
+  }, [isFullscreen, fsChatOpen, messages.length]);
+  const fsUnread = Math.max(0, messages.length - fsSeenCount);
+
+  // Keep the newest message in view — in both renderings of the chat (the
+  // page panel and the fullscreen overlay; same messages, two scroll boxes).
+  const chatListRef = useRef<HTMLDivElement | null>(null);
+  const fsChatListRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    for (const el of [chatListRef.current, fsChatListRef.current]) {
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, fsChatOpen]);
 
   const sendChat = () => {
     const text = applyShortcodes(chatInput.trim());
@@ -1170,6 +1307,55 @@ function Room() {
     setChatInput("");
     setEmojiOpen(false);
   };
+
+  // One handler for both chat inputs (page + fullscreen): update the shared
+  // draft and ping "typing" at most every 1.5s; receivers expire it 3s after
+  // the last ping.
+  const handleChatInputChange = (value: string) => {
+    setChatInput(value);
+    if (value && Date.now() - lastTypingSentRef.current > 1500) {
+      lastTypingSentRef.current = Date.now();
+      socket.emit("chat:typing");
+    }
+  };
+
+  // The message list, rendered identically wherever the chat appears. Both
+  // views read the same messages array — one state, two views.
+  const renderChatMessages = () =>
+    messages.length === 0 ? (
+      <p className="chat-empty">No messages yet — say hi 👋</p>
+    ) : (
+      messages.map((m, i) => {
+        const own = m.senderId === clientIdRef.current;
+        // Same sender, close in time → visually one continuous group:
+        // name once, bubbles tucked together.
+        const prev = messages[i - 1];
+        const grouped =
+          prev !== undefined && prev.senderId === m.senderId && m.at - prev.at < CHAT_GROUP_WINDOW_MS;
+        const classes = ["chat-msg", own && "own", grouped && "grouped"].filter(Boolean).join(" ");
+        return (
+          <div key={m.id} className={classes}>
+            {!own && !grouped && <span className="chat-name">{m.name}</span>}
+            <span
+              className={isEmojiOnly(m.text) ? "chat-bubble emoji-only" : "chat-bubble"}
+              title={new Date(m.at).toLocaleTimeString()}
+            >
+              {m.text}
+            </span>
+          </div>
+        );
+      })
+    );
+
+  // What the up-next banner should show, per the room's rules: the queue's
+  // head always wins; otherwise the radio's pick, but only if autoplay is on
+  // (off means playback simply stops, so there is no "next").
+  const upNextDisplay =
+    queue.length > 0
+      ? { title: queue[0].title ?? "YouTube video", channel: null as string | null }
+      : radio.autoplay && upnext
+        ? { title: upnext.title, channel: upnext.channel as string | null }
+        : null;
 
   // Sync corrections and background tabs don't mix. Browsers throttle a hidden
   // tab's timers to about once a second, and after a few minutes to once a
@@ -1572,16 +1758,110 @@ function Room() {
         <div className="room-video">
           {videoId ? (
             <>
-              <div className="player-frame">
+              <div
+                className={isFullscreen ? "player-frame is-fullscreen" : "player-frame"}
+                ref={playerFrameRef}
+              >
                 <div id="yt-player" ref={playerContainerRef} />
                 {needsUnmute && (
                   <button className="unmute-nudge" onClick={enableSound}>
                     🔇 Tap for sound
                   </button>
                 )}
+                {/* Up next: the queue's head, or the radio's announced pick.
+                    Only during the last moments of playback, and never on top
+                    of the end overlay. */}
+                {nearEnd && !ended && upNextDisplay && (
+                  <div className="upnext-banner">
+                    <span className="upnext-label">Up next:</span> {upNextDisplay.title}
+                    {upNextDisplay.channel && ` — ${upNextDisplay.channel}`}
+                  </div>
+                )}
+                {/* Our end screen, fully covering the iframe so YouTube's
+                    recommendation wall underneath can't be clicked. Tiles play
+                    in the room via the same path as a search-result click. */}
+                {ended && (
+                  <div className="end-overlay">
+                    <p className="end-overlay-head">Video ended</p>
+                    {related && related.length > 0 && (
+                      <>
+                        <p className="end-overlay-sub">Keep the sesh going:</p>
+                        <div className="end-overlay-grid">
+                          {related.map((r) => (
+                            <button
+                              key={r.videoId}
+                              className="end-tile"
+                              onClick={() => loadVideo(r.videoId)}
+                            >
+                              <img src={r.thumbnail} alt="" loading="lazy" />
+                              <span className="end-tile-title">{r.title}</span>
+                              <span className="end-tile-channel">{r.channel}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+                {/* Our fullscreen control (YouTube's own is disabled via
+                    fs:0): fullscreens the wrapper, so every overlay above
+                    comes along. */}
+                <button
+                  className="player-fs-toggle"
+                  onClick={toggleFullscreen}
+                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                >
+                  {isFullscreen ? (
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                      <path d="M8 3H6v3H3v2h5V3zm8 0h2v3h3v2h-5V3zM8 21H6v-3H3v-2h5v5zm8 0h2v-3h3v-2h-5v5z" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                      <path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4z" />
+                    </svg>
+                  )}
+                </button>
+                {/* Chat inside fullscreen: a toggle with an unread badge, and
+                    a compact panel over the right edge — the same messages
+                    and the same draft/send as the page chat. */}
+                {isFullscreen && (
+                  <button
+                    className="fs-chat-toggle"
+                    onClick={() => setFsChatOpen((open) => !open)}
+                    title={fsChatOpen ? "Hide chat" : "Show chat"}
+                    aria-label={fsChatOpen ? "Hide chat" : "Show chat"}
+                  >
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                      <path d="M4 3h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h-1z" />
+                    </svg>
+                    {fsUnread > 0 && <span className="fs-chat-badge">{fsUnread}</span>}
+                  </button>
+                )}
+                {isFullscreen && fsChatOpen && (
+                  <div className="fs-chat">
+                    <div className="chat-messages" ref={fsChatListRef}>
+                      {renderChatMessages()}
+                    </div>
+                    <div className="fs-chat-bar">
+                      <input
+                        value={chatInput}
+                        onChange={(e) => handleChatInputChange(e.target.value)}
+                        placeholder="Send a message..."
+                        maxLength={500}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") sendChat();
+                        }}
+                      />
+                      <button onClick={sendChat}>Send</button>
+                    </div>
+                  </div>
+                )}
               </div>
               {playerError && (
-                <p className="load-error">{playerError} Try pasting a different link.</p>
+                <p className="load-error player-error">
+                  {playerError} Try pasting a different link.
+                </p>
               )}
               <p className="pip-hint">
                 Tip: go fullscreen, then press home — the video pops out and keeps playing while
@@ -1683,34 +1963,7 @@ function Room() {
               </button>
             </div>
             <div className="chat-messages" ref={chatListRef}>
-              {messages.length === 0 ? (
-                <p className="chat-empty">No messages yet — say hi 👋</p>
-              ) : (
-                messages.map((m, i) => {
-                  const own = m.senderId === clientIdRef.current;
-                  // Same sender, close in time → visually one continuous
-                  // group: name once, bubbles tucked together.
-                  const prev = messages[i - 1];
-                  const grouped =
-                    prev !== undefined &&
-                    prev.senderId === m.senderId &&
-                    m.at - prev.at < CHAT_GROUP_WINDOW_MS;
-                  const classes = ["chat-msg", own && "own", grouped && "grouped"]
-                    .filter(Boolean)
-                    .join(" ");
-                  return (
-                    <div key={m.id} className={classes}>
-                      {!own && !grouped && <span className="chat-name">{m.name}</span>}
-                      <span
-                        className={isEmojiOnly(m.text) ? "chat-bubble emoji-only" : "chat-bubble"}
-                        title={new Date(m.at).toLocaleTimeString()}
-                      >
-                        {m.text}
-                      </span>
-                    </div>
-                  );
-                })
-              )}
+              {renderChatMessages()}
             </div>
             {typers.length > 0 && (
               <p className="typing-line">
@@ -1755,15 +2008,7 @@ function Room() {
                 <input
                   ref={chatInputRef}
                   value={chatInput}
-                  onChange={(e) => {
-                    setChatInput(e.target.value);
-                    // Composing → ping "typing" at most every 1.5s; receivers
-                    // expire it 3s after the last ping.
-                    if (e.target.value && Date.now() - lastTypingSentRef.current > 1500) {
-                      lastTypingSentRef.current = Date.now();
-                      socket.emit("chat:typing");
-                    }
-                  }}
+                  onChange={(e) => handleChatInputChange(e.target.value)}
                   placeholder="Send a message..."
                   maxLength={500}
                   onKeyDown={(e) => {

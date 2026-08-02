@@ -15,7 +15,7 @@ Create a room, share the code, and everyone's player stays locked together — p
 ## Features
 
 - 🔗 **Instant rooms** — create a room, share the link or 6-character code, done
-- 🔍 **Built-in YouTube search** — search by title or just paste any YouTube link
+- 🔍 **Built-in YouTube search** — search by title or just paste any YouTube link. Results are double-checked against YouTube before they're shown, so a video that can't play in an embedded player never appears as an option
 - ⏭️ **Shared queue** — everyone sees the same "Up next" list; add videos from search (**+**) or a pasted link, auto-play when the current one ends, play-now or remove anytime
 - ⚡ **Tight sync** — playback stays within tens of milliseconds across viewers
 - 💬 **Room chat** — side-by-side with the video on desktop, stacked below on mobile; as ephemeral as the room itself (history lives only while someone's in the room)
@@ -31,6 +31,9 @@ Create a room, share the code, and everyone's player stays locked together — p
 - 🫂 **Friends** — swap 6-character friend codes to connect. Your list shows who's **online**, who's **in a room** (one click to join them), and who's away; from inside a sesh, one click invites anyone who's actually around. Presence is live (no polling) and only ever visible to settled friends — a pending request reveals nothing
 - 💌 **Direct messages** — message a friend outside any room, from the same friends list. Unread counts, typing indicators, and a sound when something arrives while you're not looking. Conversations are kept for 30 days and then deleted — long enough to pick a thread back up, short enough that Sesh isn't an archive
 - 📻 **Autoplay** — when the queue runs out, the room keeps going on its own instead of falling silent, using YouTube's own Mix radio for whatever just played. Room-wide (everyone's hearing the same thing), on by default, and it only ever engages on an empty queue after a video genuinely ends — so it never overrides anything anyone chose. Videos the room already played are skipped, so it doesn't circle
+- ⏭️ **Up next, like YouTube's** — the next pick is decided while the current video is still playing and shown as a small banner over its last few seconds (the queue's head when there is one, the radio's pick when there isn't) — and because the answer is ready in advance, the handoff between videos is instant
+- 🎬 **Our own end screen** — when a video ends without anything to follow it, the player shows Sesh's recommendations (YouTube's mix, pre-filtered to videos that actually play embedded) instead of YouTube's wall of tiles that open youtube.com in a new tab. One click plays it in the room, for everyone
+- 🖥️ **Fullscreen with chat** — Sesh's own fullscreen button, with a chat panel you can toggle over the video: same conversation as the room chat, plus an unread badge while it's closed. No more choosing between the video filling the screen and knowing what everyone's saying
 - 🐞 **Report a bug** — from the web or the terminal, signed in or not. The web form takes a screenshot by file, paste or drag-and-drop, downscaled in the browser before it's sent. Rate-limited with a global ceiling, so an open endpoint stays an open endpoint — counted against your account where you have one, and only against your address when you don't, since one address is a household rather than a person. Reports are kept 90 days
 - ⏱️ **Room uptime** — every room shows how long it's been going
 - 🔇 **Tap for sound** — browsers only autoplay a muted video, so anyone who didn't press play themselves lands in the room silently. A one-tap prompt over the player turns the sound on (which also keeps the browser from suspending the tab in the background)
@@ -166,7 +169,9 @@ npm install && npm run build --workspace cli
 npm link --workspace cli    # puts your build's `sesh` on your PATH
 ```
 
-Type to chat (`:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, typing indicators included). **Type `/` and the commands appear as you go**, each with a one-line description, narrowing with every keystroke — `Tab` completes the best match. `/help` still lists everything, as a scrolling card you walk with `↑`/`↓` (or `PgUp`/`PgDn`) and close with `Esc` — as every pane's header says. `sesh --version` reports the installed version. `/copy` puts the invite link on your clipboard rather than making you select it — and it works over SSH, because the link is also sent as an OSC 52 escape sequence, which asks your terminal to do the copying instead of the machine sesh happens to be running on.
+Type to chat (`:shortcodes:` become emoji, `PgUp`/`PgDn` scrolls history, typing indicators included). **Type `/` and the commands appear as you go**, each with a one-line description, narrowing with every keystroke — `Tab` completes the best match. The same live suggestions work for emoji: type `:` and a couple of letters mid-message (`:hea`) and matching emoji appear, arrow keys to pick, `Tab`/`Enter` to insert. `/emoji` opens the full picker — 150 emoji, scrollable the same way the `/help` card is, `Enter` drops the highlighted one into your message, `Esc` closes (`/emoji <query>` filters it). `/help` still lists everything, as a scrolling card you walk with `↑`/`↓` (or `PgUp`/`PgDn`) and close with `Esc` — as every pane's header says. `sesh --version` reports the installed version. `/copy` puts the invite link on your clipboard rather than making you select it — and it works over SSH, because the link is also sent as an OSC 52 escape sequence, which asks your terminal to do the copying instead of the machine sesh happens to be running on.
+
+When a video won't play, the CLI now tells you *why* instead of guessing: it reads the actual error out of mpv's log (where yt-dlp's complaints end up) and says plainly whether the video is unavailable, age-restricted, blocked in your region, or just slow to arrive — retrying only the cases where retrying can help, and giving a video 30 seconds to start before calling it. "Update yt-dlp" advice appears only when the error genuinely is an extraction failure, the one case where it's true.
 
 Sign in with `sesh login` (`sesh whoami`, `sesh logout`) and the terminal gets the account features too: `/friends` shows who's online and who's in a room, `/invite <n>` pulls one here, `/join <n>` and `/accept` move you into their room without restarting, and `/dms` / `/dm <n|name>` are direct messages, with `/room` (or Esc) going back to room chat. `/autoplay [on|off]` controls the room's radio, and `/bug <description>` files a report without leaving the terminal. Voice is read-only there — the roster shows in the presence line, but joining a call needs the browser. Without signing in the CLI behaves exactly as it always has.
 
@@ -194,6 +199,33 @@ REPORT_EMAIL_FROM=Sesh <bugs@yourdomain> # must be a sender (or on a domain) ver
 All three are required for mail to turn on — Brevo has no house fallback sender, so the from-address has to be one your Brevo account is allowed to send as: either an individual sender you've verified by email, or any address on a domain you've authenticated with DNS records.
 
 Screenshots ride along as attachments, and each email links back to `/admin`. Mail is capped at five an hour: past that you get one note saying the rest are waiting rather than an inbox full of them. A failing mail provider is logged and ignored — the report is already stored, and the person who filed it has already been thanked.
+
+### Every URL the server answers
+
+The whole surface in one place. **Open** means anyone who can reach the site. **Signed in** means a valid session — the cookie in a browser, or the same signed token the terminal sends. **Token** means `?token=…` matching the `STATS_TOKEN` env var.
+
+| URL | What it is | Who can use it |
+|---|---|---|
+| `GET /` (any page) | the web app itself — rooms, and `/link` where terminal sign-in is approved | open |
+| `GET /api/health` | "is the server up" — `{ok:true}`, what uptime checks ping | open |
+| `GET /api/search?q=…` | YouTube search behind the search box | open |
+| `GET /api/related?videoId=…` | the end-screen recommendations — YouTube's mix for that video, filtered down to videos that actually play in an embedded player | open |
+| `POST /api/report` | files a bug report (rate-limited, optional screenshot) | open |
+| `GET /api/report/limits` | the report rules (min/max length, screenshot size cap) so clients can say no before the server has to | open |
+| `GET /api/auth/config` | whether Google sign-in is set up, and its public client id | open |
+| `POST /api/auth/google` | signs in with a Google credential, sets the session cookie | open |
+| `POST /api/auth/logout` | signs out | open |
+| `POST /api/auth/cli/start` → `approve` → `poll` | the terminal's sign-in dance: `start` mints the code the terminal shows, `approve` is what the `/link` page calls, `poll` hands the terminal its session | start/poll open; approve signed in |
+| `GET /api/auth/me` | who the session belongs to | signed in |
+| `GET /api/friends` | your friends, with online / in-a-room state | signed in |
+| `POST /api/friends/request` / `accept` / `remove` | managing that list | signed in |
+| `GET /api/dm/…` | your message history with one friend | signed in |
+| `GET /api/stats?token=…` | live numbers — connected people, rooms, what's playing | token |
+| `GET /admin?token=…` | the bug-report inbox as a readable page, screenshots inline | token |
+| `GET /api/reports?token=…` | the same reports as raw JSON | token |
+| `GET /api/reports/…/image?token=…` | one report's screenshot | token |
+
+Everything else — playback sync, chat, the queue, presence, voice, autoplay — travels over the Socket.IO connection, not URLs.
 
 ## Project structure
 

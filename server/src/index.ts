@@ -36,7 +36,7 @@ import {
   unreadBySender,
 } from "./dm.js";
 import { approveLink, pollLink, startLink } from "./clilink.js";
-import { radioAvailable, radioPick } from "./radio.js";
+import { radioAvailable, radioPick, radioRelated, type RadioPick } from "./radio.js";
 import { mailEnabled, sendReportMail } from "./mail.js";
 import {
   decodeDataUrl,
@@ -667,28 +667,48 @@ app.get("/api/search", async (req, res) => {
     const searchData = (await searchRes.json()) as { items?: YouTubeSearchItem[] };
     const items = (searchData.items ?? []).filter((item) => item.id?.videoId);
 
-    // One extra unit fetches durations for all results at once.
+    // One extra unit fetches durations for all results at once — and, since
+    // the same call can carry `status`, whether each result can actually play
+    // in an embedded player. search.list's own videoEmbeddable filter is
+    // famously leaky: embed-blocked uploads sail through it and then die on
+    // screen with "the owner has disabled playback on other sites". videos.list
+    // is the authority, so anything it marks unembeddable (or non-public) is
+    // dropped here rather than shown as a result that can't work.
     const durations = new Map<string, string>();
+    const playable = new Set<string>();
+    let vetted = false;
     const ids = items.map((item) => item.id.videoId).join(",");
     if (ids) {
       const videosUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
       videosUrl.search = new URLSearchParams({
-        part: "contentDetails",
+        part: "contentDetails,status",
         id: ids,
         key: YOUTUBE_API_KEY,
       }).toString();
       const videosRes = await fetch(videosUrl);
       if (videosRes.ok) {
+        vetted = true;
         const videosData = (await videosRes.json()) as {
-          items?: { id: string; contentDetails: { duration: string } }[];
+          items?: {
+            id: string;
+            contentDetails: { duration: string };
+            status?: { embeddable?: boolean; privacyStatus?: string };
+          }[];
         };
         for (const video of videosData.items ?? []) {
           durations.set(video.id, formatDuration(video.contentDetails.duration));
+          if (video.status?.embeddable === true && video.status?.privacyStatus === "public") {
+            playable.add(video.id);
+          }
         }
       }
     }
 
-    const results: SearchResult[] = items.map((item) => ({
+    // Only filter on an answer actually received — if videos.list failed,
+    // unvetted results beat no results.
+    const kept = vetted ? items.filter((item) => playable.has(item.id.videoId)) : items;
+
+    const results: SearchResult[] = kept.map((item) => ({
       videoId: item.id.videoId,
       title: decodeEntities(item.snippet.title),
       channel: decodeEntities(item.snippet.channelTitle),
@@ -706,6 +726,32 @@ app.get("/api/search", async (req, res) => {
     console.error("search failed:", err);
     res.status(502).json({ error: "YouTube search failed — try again in a moment." });
   }
+});
+
+// What YouTube would play after this video — the same mix the radio draws
+// from, already filtered down to videos that can actually play embedded. The
+// client's end screen shows these instead of YouTube's own wall, whose tiles
+// can only open youtube.com in another tab. Thumbnails come straight off
+// YouTube's image CDN by id: no API call, no quota.
+app.get("/api/related", async (req, res) => {
+  const videoId = String(req.query.videoId ?? "").trim();
+  if (!/^[\w-]{11}$/.test(videoId)) {
+    res.status(400).json({ error: "That doesn't look like a YouTube video id." });
+    return;
+  }
+  if (!radioAvailable()) {
+    res.status(503).json({ error: "Recommendations aren't set up on this server." });
+    return;
+  }
+  const picks = await radioRelated(videoId, new Set(), 8);
+  res.json({
+    results: picks.map((pick) => ({
+      videoId: pick.videoId,
+      title: pick.title,
+      channel: pick.channel,
+      thumbnail: `https://i.ytimg.com/vi/${pick.videoId}/mqdefault.jpg`,
+    })),
+  });
 });
 
 type RoomState = {
@@ -765,6 +811,12 @@ type Room = {
   // Without this, three reports become three lookups and the room starts the
   // third one's answer.
   radioPending: boolean;
+  // What radio would play after the current video, decided when the video
+  // *starts* rather than when it ends — so clients can show "up next" the way
+  // YouTube does, and the end-of-video handoff doesn't wait on a lookup. The
+  // seed records which video the pick was made for: a stale pick (the room
+  // moved on mid-lookup) must never be trusted at the next ending.
+  upnext: { seed: string; pick: RadioPick } | null;
   // Who's in the voice call, keyed by socket id rather than clientId: a peer
   // connection belongs to one tab, and the same person in two tabs is two
   // different ends of the mesh.
@@ -810,6 +862,7 @@ function getOrCreateRoom(roomId: string): Room {
       autoplay: true,
       played: [],
       radioPending: false,
+      upnext: null,
     };
     rooms.set(roomId, room);
   }
@@ -890,6 +943,24 @@ function startVideoForRoom(roomId: string, room: Room, videoId: string) {
     timer: setTimeout(() => beginPendingStart(roomId, room), PREPARE_TIMEOUT_MS),
   };
   io.to(roomId).emit("video:prepare", { videoId });
+  prepareUpnext(roomId, room, videoId);
+}
+
+// Decide "up next" while the current video is still playing. rememberPlayed
+// has already run, so this pick and the one an ending would compute see the
+// same exclude set — same mix, same cache, same answer. That's what lets the
+// ending reuse it without a lookup.
+function prepareUpnext(roomId: string, room: Room, videoId: string) {
+  room.upnext = null;
+  io.to(roomId).emit("radio:upnext", null);
+  if (!room.autoplay || !radioAvailable()) return;
+  void radioPick(videoId, new Set(room.played)).then((pick) => {
+    // The room may have moved on (or been torn down) while the lookup was out.
+    if (rooms.get(roomId) !== room || room.state.videoId !== videoId) return;
+    if (!pick) return;
+    room.upnext = { seed: videoId, pick };
+    io.to(roomId).emit("radio:upnext", pick);
+  });
 }
 
 // A socket carries the same session cookie the page does — the handshake is a
@@ -974,6 +1045,8 @@ io.on("connection", (socket) => {
       // until the next person happens to join or leave one.
       if (room.voice.size > 0) socket.emit("voice:roster", voiceRoster(room));
       socket.emit("radio:state", { autoplay: room.autoplay, available: radioAvailable() });
+      // Broadcast only on change, so an arrival has to be told what's up next.
+      socket.emit("radio:upnext", room.upnext?.pick ?? null);
       io.to(roomId).emit("room:users", userList(room));
     },
   );
@@ -993,6 +1066,9 @@ io.on("connection", (socket) => {
     // room chose for itself twenty minutes ago.
     rememberPlayed(room, videoId);
     socket.to(socket.data.roomId).emit("video:load", { videoId });
+    // This path doesn't go through startVideoForRoom, so it has to arrange
+    // its own "up next" or directly-loaded videos would end with nothing ready.
+    prepareUpnext(socket.data.roomId, room, videoId);
   });
 
   socket.on("video:play", ({ time }: { time: number }) => {
@@ -1070,6 +1146,17 @@ io.on("connection", (socket) => {
     // *before* awaiting is what stops the other clients' reports of this same
     // ending from each starting their own lookup.
     if (!room.autoplay || !radioAvailable() || !videoId || room.radioPending) return;
+
+    // The usual case: the pick was made when this video started and the room
+    // has been showing it as "up next" ever since. Playing that exact pick
+    // keeps the promise and skips the lookup — the handoff is instant.
+    const ready = room.upnext && room.upnext.seed === videoId ? room.upnext.pick : null;
+    if (ready) {
+      io.to(roomId).emit("radio:picked", { videoId: ready.videoId, title: ready.title });
+      startVideoForRoom(roomId, room, ready.videoId);
+      return;
+    }
+
     room.radioPending = true;
     io.to(roomId).emit("radio:searching");
     void radioPick(videoId, new Set(room.played))
@@ -1101,6 +1188,12 @@ io.on("connection", (socket) => {
       autoplay: room.autoplay,
       available: radioAvailable(),
     });
+    // Turning autoplay on mid-video: the pre-pick was skipped when this video
+    // started, so make it now or the room reaches the end with nothing ready.
+    const videoId = room.state.videoId;
+    if (room.autoplay && videoId && room.upnext?.seed !== videoId) {
+      prepareUpnext(socket.data.roomId, room, videoId);
+    }
   });
 
   socket.on("queue:add", ({ videoId, title }: { videoId: string; title?: string | null }) => {

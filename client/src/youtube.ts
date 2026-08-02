@@ -32,6 +32,7 @@ interface YTNamespace {
       videoId: string;
       width?: string | number;
       height?: string | number;
+      playerVars?: Record<string, string | number>;
       events?: {
         onReady?: () => void;
         onStateChange?: (event: { data: number }) => void;

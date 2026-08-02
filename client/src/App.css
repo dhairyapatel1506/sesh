@@ -318,6 +318,273 @@ button:disabled {
   border-radius: 12px;
 }
 
+/* Player error below the frame, not over it: the default .load-error pulls
+   itself up with a negative margin (styled for the load bar), which drew the
+   message across the bottom of the video. Compound selector so this beats
+   .load-error regardless of declaration order. */
+.load-error.player-error {
+  margin: 0.75rem auto 0;
+  max-width: 640px;
+}
+
+/* ---- Fullscreen (our own, on the wrapper — YouTube's is disabled) ---- */
+
+/* The wrapper as the fullscreen element: black stage, video centered and as
+   large as the screen allows, overlays free to sit on top. The iframe's
+   inline width/height/aspect-ratio (set on ready) are overridden here —
+   !important because inline styles win otherwise. */
+.player-frame.is-fullscreen {
+  max-width: none;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.player-frame.is-fullscreen #yt-player {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+}
+
+.player-frame.is-fullscreen #yt-player iframe {
+  width: 100% !important;
+  height: 100% !important;
+  aspect-ratio: auto !important;
+  border-radius: 0;
+}
+
+/* Bottom-right, raised clear of YouTube's own control bar. */
+.player-fs-toggle {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 3.25rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  cursor: pointer;
+}
+
+.player-fs-toggle:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.fs-chat-toggle {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 6.25rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  cursor: pointer;
+}
+
+.fs-chat-toggle:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.fs-chat-badge {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.1rem;
+  text-align: center;
+}
+
+/* Compact chat over the right edge of the fullscreen video. Dark and
+   semi-transparent so the video stays visible behind it; its own column
+   catches pointer events, the rest of the video surface stays clickable. */
+.fs-chat {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  bottom: 9.5rem;
+  width: 320px;
+  max-width: 80vw;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
+  text-align: left;
+}
+
+.fs-chat .chat-messages {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Bubbles need to read on top of video, whatever the app theme is. */
+.fs-chat .chat-bubble {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.fs-chat .chat-msg.own .chat-bubble {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+.fs-chat .chat-empty {
+  color: #fff;
+}
+
+.fs-chat-bar {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.fs-chat-bar input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.fs-chat-bar button {
+  padding: 0.45rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+/* ---- End-of-video ---- */
+
+/* "Up next" pill during the last seconds — top-left, clear of the player's
+   bottom controls and our bottom-right buttons. Display only, so it must
+   not eat clicks meant for the video. */
+.upnext-banner {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 2;
+  max-width: min(70%, 26rem);
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+}
+
+.upnext-label {
+  font-weight: 700;
+  opacity: 0.85;
+}
+
+/* Fully covers the iframe so YouTube's own recommendation wall (links to
+   youtube.com) can't be clicked underneath. */
+.end-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow-y: auto;
+  padding: 1rem;
+  border-radius: 12px;
+  background: rgba(10, 10, 14, 0.97);
+  color: #fff;
+  text-align: center;
+}
+
+.player-frame.is-fullscreen .end-overlay {
+  border-radius: 0;
+}
+
+.end-overlay-head {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.end-overlay-sub {
+  margin: 0 0 0.9rem;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.end-overlay-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+  max-width: 56rem;
+  margin: 0 auto;
+}
+
+.end-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.4rem;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.end-tile:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.end-tile img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.end-tile-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.end-tile-channel {
+  font-size: 0.72rem;
+  opacity: 0.7;
+}
+
 /* Sign-in on the landing page: present, but clearly secondary to the two
    buttons above it — nothing here is required to use Sesh. */
 .landing-account {

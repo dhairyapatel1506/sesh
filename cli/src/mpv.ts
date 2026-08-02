@@ -34,10 +34,84 @@ function mpvBinary(): string {
 
 // mpv is controlled over its JSON IPC socket: newline-delimited JSON both
 // ways. Requests carry a request_id that the matching response echoes back;
-// everything else that arrives is an event broadcast.
-type MpvResponse = { request_id?: number; error?: string; data?: unknown; event?: string };
+// everything else that arrives is an event broadcast. log-message events
+// (requested at spawn) additionally carry prefix/text.
+type MpvResponse = {
+  request_id?: number;
+  error?: string;
+  data?: unknown;
+  event?: string;
+  prefix?: string;
+  text?: string;
+};
 
 export class MpvError extends Error {}
+
+// ---- honest playback errors ----
+// What actually went wrong, read out of yt-dlp/mpv's own words, so the TUI can
+// say "that video is gone" when it's gone instead of blaming yt-dlp's version
+// for everything. Order matters: YouTube phrases region blocks as "Video
+// unavailable … in your country" and private videos as "Private video. Sign
+// in if …", so the more specific readings must run before the generic ones.
+export type PlaybackErrorKind =
+  | "region-blocked"
+  | "unavailable"
+  | "sign-in"
+  | "network"
+  | "extraction"
+  | "unknown";
+
+export type PlaybackVerdict = { kind: PlaybackErrorKind; message: string };
+
+export function classifyPlaybackError(output: string): PlaybackVerdict {
+  const text = output.toLowerCase();
+  if (/in your country|region.?lock|geo.?(restrict|block)/.test(text)) {
+    return {
+      kind: "region-blocked",
+      message: "that video is blocked in your country — try another one",
+    };
+  }
+  if (
+    /private video|video unavailable|no longer available|has been removed|video is not available|account .{0,60}terminated/.test(
+      text,
+    )
+  ) {
+    return {
+      kind: "unavailable",
+      message: "that video is unavailable (removed or private) — try another one",
+    };
+  }
+  if (
+    /confirm your age|age.?restrict|inappropriate for some users|sign in to confirm|login required|sign in to view/.test(
+      text,
+    )
+  ) {
+    return {
+      kind: "sign-in",
+      message:
+        "that video wants a YouTube sign-in (age-restricted or bot check) — the terminal player can't do that; try another one",
+    };
+  }
+  if (
+    /timed? ?out|connection (refused|reset)|network is unreachable|getaddrinfo|name resolution|failed to resolve|unable to download webpage|http error 5\d\d/.test(
+      text,
+    )
+  ) {
+    return {
+      kind: "network",
+      message: "network trouble reaching YouTube — check your connection and try again",
+    };
+  }
+  if (/unable to extract|signature|nsig|cipher|player response|failed to parse json/.test(text)) {
+    // The one case where the old reflex is right: extraction breaks when
+    // YouTube changes something and yt-dlp hasn't caught up yet.
+    return {
+      kind: "extraction",
+      message: "yt-dlp couldn't decode this video — it's likely out of date; update it: yt-dlp -U",
+    };
+  }
+  return { kind: "unknown", message: "this video won't play here — try another one or /skip" };
+}
 
 // Plays 0.2s of silence through the real audio output — no network involved.
 // Distinguishes "this video is broken" from "this machine's audio is broken"
@@ -141,7 +215,12 @@ export class Mpv extends EventEmitter {
     })();
 
     const ipc = await Promise.race([connect, spawnError]);
-    return new Mpv(proc, ipc);
+    const mpv = new Mpv(proc, ipc);
+    // With --really-quiet on, the IPC log stream is the only place mpv's
+    // complaints — including yt-dlp's stderr, which ytdl_hook re-logs — come
+    // out. warn level catches the ERROR lines without drowning in debug spam.
+    await mpv.command("request_log_messages", "warn").catch(() => {});
+    return mpv;
   }
 
   private onData(chunk: Buffer) {
@@ -163,6 +242,10 @@ export class Mpv extends EventEmitter {
         if (msg.error && msg.error !== "success") reject(new MpvError(msg.error));
         else resolve(msg.data);
       } else if (msg.event) {
+        if (msg.event === "log-message" && msg.text?.trim()) {
+          this.logTail.push(`[${msg.prefix ?? "?"}] ${msg.text.trim()}`);
+          if (this.logTail.length > 50) this.logTail.shift();
+        }
         this.emit(msg.event, msg);
       }
     }
@@ -197,10 +280,22 @@ export class Mpv extends EventEmitter {
     });
   }
 
+  // Rolling tail of mpv's warn/error log lines. Kept so a failed load can be
+  // diagnosed from what mpv and yt-dlp actually said, not guessed at.
+  private logTail: string[] = [];
+
+  /** Everything mpv (and, through ytdl_hook, yt-dlp) has complained about since the last load. */
+  recentLog(): string {
+    return this.logTail.join("\n");
+  }
+
   // Loads (replacing anything playing) and leaves the decision to play to
   // the caller — pause state is set *before* the load so not a single frame
   // of audio slips out when preparing silently.
   async load(videoId: string, opts: { paused: boolean }): Promise<void> {
+    // A fresh load answers for its own failures only — yesterday's complaints
+    // must not colour today's diagnosis.
+    this.logTail = [];
     await this.setPause(opts.paused);
     await this.command("loadfile", `https://www.youtube.com/watch?v=${videoId}`, "replace");
   }
