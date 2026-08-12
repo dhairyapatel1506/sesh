@@ -784,6 +784,7 @@ type PendingStart = {
   videoId: string;
   waiting: Set<string>; // clientIds yet to report ready
   timer: ReturnType<typeof setTimeout>;
+  startedAt: number; // for the ceiling on extensions — see video:preparing
 };
 
 type Room = {
@@ -841,6 +842,9 @@ setInterval(() => {
 }, 30_000).unref();
 // How long a synchronized start waits for stragglers to finish buffering.
 const PREPARE_TIMEOUT_MS = 8000;
+// ...unless a client keeps saying it's still loading (video:preparing), which
+// extends the wait a window at a time up to this ceiling.
+const PREPARE_MAX_WAIT_MS = 45000;
 
 const rooms = new Map<string, Room>();
 
@@ -905,6 +909,21 @@ function cancelPendingStart(room: Room) {
 
 // The barrier opens: every tab (hopefully) has the video buffered and paused
 // at 0, so one broadcast starts them all at the same instant.
+// When a play/pause actually happened, as opposed to when its packet arrived.
+// Clients send the moment on the server's own clock (they run an NTP-style
+// sync at join), because stamping on arrival buries one-way latency in the
+// room's anchor: everyone then reads the room as being that far behind, and
+// their drift correction dutifully slows the video down to "catch up" with a
+// past that never existed. Clamped both ways, so a wrong clock — or a client
+// making things up — can shift the room by at most a moment.
+const CLAIM_WINDOW_MS = 2000;
+
+function stampedAt(claimed?: number): number {
+  const now = Date.now();
+  if (typeof claimed !== "number" || !Number.isFinite(claimed)) return now;
+  return Math.min(now, Math.max(now - CLAIM_WINDOW_MS, claimed));
+}
+
 function beginPendingStart(roomId: string, room: Room) {
   const pending = room.pendingStart;
   if (!pending) return;
@@ -937,6 +956,7 @@ function startVideoForRoom(roomId: string, room: Room, videoId: string) {
     videoId,
     waiting: new Set(room.users.keys()),
     timer: setTimeout(() => beginPendingStart(roomId, room), PREPARE_TIMEOUT_MS),
+    startedAt: Date.now(),
   };
   io.to(roomId).emit("video:prepare", { videoId });
   prepareUpnext(roomId, room, videoId);
@@ -1067,12 +1087,12 @@ io.on("connection", (socket) => {
     prepareUpnext(socket.data.roomId, room, videoId);
   });
 
-  socket.on("video:play", ({ time }: { time: number }) => {
+  socket.on("video:play", ({ time, at: clientAt }: { time: number; at?: number }) => {
     const room = currentRoom(socket);
     if (!room) return;
     // Someone hit play themselves mid-prepare — the barrier is moot.
     cancelPendingStart(room);
-    const at = Date.now();
+    const at = stampedAt(clientAt);
     room.state = { ...room.state, isPlaying: true, time, updatedAt: at };
     // videoId rides along so a tab that missed a video:load (brief
     // disconnect) notices it's playing the wrong video instead of applying
@@ -1080,10 +1100,10 @@ io.on("connection", (socket) => {
     socket.to(socket.data.roomId).emit("video:play", { time, at, videoId: room.state.videoId });
   });
 
-  socket.on("video:pause", ({ time }: { time: number }) => {
+  socket.on("video:pause", ({ time, at: clientAt }: { time: number; at?: number }) => {
     const room = currentRoom(socket);
     if (!room) return;
-    const at = Date.now();
+    const at = stampedAt(clientAt);
     room.state = { ...room.state, isPlaying: false, time, updatedAt: at };
     socket.to(socket.data.roomId).emit("video:pause", { time, at, videoId: room.state.videoId });
   });
@@ -1099,6 +1119,29 @@ io.on("connection", (socket) => {
     if (room.pendingStart.waiting.size === 0) {
       beginPendingStart(socket.data.roomId, room);
     }
+  });
+
+  // "I'm still working on it." A browser tab buffers in a second or two, but
+  // the terminal has to run yt-dlp to resolve a stream before mpv can buffer
+  // a frame at all, and on a cold or throttled extraction that routinely
+  // outlasts the barrier — so the room started without it and it arrived
+  // seconds into a video everyone else was already watching. Rather than
+  // making every room wait for the slowest client that could ever join, a
+  // client that is genuinely still loading says so and the barrier waits.
+  // A client that dies stops saying it, and the ordinary timeout applies.
+  socket.on("video:preparing", ({ videoId }: { videoId: string }) => {
+    const room = currentRoom(socket);
+    const pending = room?.pendingStart;
+    const clientId = socket.data.clientId as string | undefined;
+    if (!room || !pending || !clientId) return;
+    if (pending.videoId !== videoId || !pending.waiting.has(clientId)) return;
+    // The ceiling: no amount of "still working" holds a room forever.
+    if (Date.now() - pending.startedAt >= PREPARE_MAX_WAIT_MS) return;
+    clearTimeout(pending.timer);
+    pending.timer = setTimeout(
+      () => beginPendingStart(socket.data.roomId, room),
+      PREPARE_TIMEOUT_MS,
+    );
   });
 
   // NTP-style probe: the client measures round-trip time and uses it to

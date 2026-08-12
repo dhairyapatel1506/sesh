@@ -354,10 +354,37 @@ button:disabled {
   border-radius: 0;
 }
 
+/* Windowed, the fullscreen control is a normal button under the player —
+   out of YouTube's way entirely. */
+.player-controls {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 640px;
+  margin: 0.5rem auto 0;
+}
+
+.player-fs-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.player-fs-button:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--accent);
+  filter: none;
+}
+
 /* Bottom-right, raised clear of YouTube's control bar — including the
    progress bar riding above it (~4.6rem up), whose grab area reaches higher
-   than the bar looks. Same offsets in fullscreen: YouTube's chrome sits at
-   the same distance from the bottom edge however large the player is. */
+   than the bar looks. Only rendered in fullscreen, where floating is the
+   only option. */
 .player-fs-toggle {
   position: absolute;
   right: 0.75rem;
@@ -541,38 +568,6 @@ button:disabled {
 
 .player-frame.is-fullscreen .click-shield.shield-top {
   right: 11rem;
-}
-
-/* Bottom-left, above the progress bar — where a viewer already looks for
-   "what's next", and clear of both YouTube's top-right controls and our own
-   buttons on the other side. */
-.upnext-banner {
-  position: absolute;
-  bottom: 6.5rem;
-  left: 0.75rem;
-  z-index: 2;
-  max-width: min(60%, 24rem);
-  padding: 0.4rem 0.75rem;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.75);
-  color: #fff;
-  font: inherit;
-  font-size: 0.8rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  backdrop-filter: blur(4px);
-}
-
-.upnext-banner:hover {
-  background: rgba(0, 0, 0, 0.9);
-}
-
-.upnext-label {
-  font-weight: 700;
-  opacity: 0.85;
 }
 
 /* Fully covers the iframe so YouTube's own recommendation wall (links to

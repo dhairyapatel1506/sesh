@@ -155,10 +155,28 @@ function setFaviconBadge(on: boolean) {
 // tolerance nothing happens; up to the nudge ceiling we briefly run the
 // player fast/slow (pitch-preserved, barely perceptible) to glide back into
 // sync; beyond it a hard seek is less disruptive than a long nudge.
-const DRIFT_TOLERANCE_SECONDS = 0.06;
+//
+// The tolerance has to sit above the noise floor of the measurement, not at
+// the precision we'd like. getCurrentTime() only updates a few times a
+// second, so every reading between updates is an extrapolation, and on a real
+// connection the error in it swings ±250ms. At the old 60ms the corrector was
+// reacting to that swing rather than to drift — nudging fast, then slow, then
+// fast again, which is audible as the video speeding up and slowing down for
+// no reason. 300ms apart is imperceptible to people watching together;
+// chasing noise is not.
+const DRIFT_TOLERANCE_SECONDS = 0.3;
+// Once a nudge is running it keeps running until the gap is genuinely closed,
+// rather than stopping the instant it re-enters tolerance and starting again
+// on the next reading. Hysteresis, so the corrector settles instead of
+// hunting around its own threshold.
+const DRIFT_SETTLE_SECONDS = 0.1;
 const NUDGE_MAX_SECONDS = 1.2;
 // A ±25% rate closes the gap at 0.25 video-seconds per real second.
 const NUDGE_RATE_DELTA = 0.25;
+// A playhead discontinuity this big can only be someone moving it: no stall
+// runs the video backwards, and nothing makes it run forwards faster than the
+// clock (a rate nudge is only ±25%, which is accounted for separately).
+const SEEK_JUMP_SECONDS = 0.7;
 // Authoritative pull from the server (also re-anchors after stalls)...
 const RESYNC_INTERVAL_MS = 5000;
 // ...but drift correction itself runs locally far more often, against the
@@ -225,6 +243,9 @@ function Room() {
   const [emojiQuery, setEmojiQuery] = useState("");
   const lastTypingSentRef = useRef(0);
   const [users, setUsers] = useState<User[]>([]);
+  // Read by the drift loop, which closes over its own effect and would
+  // otherwise be looking at the roster as it was when the video started.
+  const usersRef = useRef<User[]>([]);
   const [linkCopied, setLinkCopied] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -262,8 +283,6 @@ function Room() {
   const [ended, setEnded] = useState(false);
   const [related, setRelated] = useState<RelatedResult[] | null>(null);
   const [upnext, setUpnext] = useState<UpNextPick | null>(null);
-  // True during the last ~12s of playback — shows the up-next banner.
-  const [nearEnd, setNearEnd] = useState(false);
 
   // Latest authoritative playback state (from the server or our own emits),
   // used by the local drift-check loop between server resyncs.
@@ -398,6 +417,7 @@ function Room() {
   // Gradual drift correction: run the player slightly fast or slow just long
   // enough to close the gap, instead of a visible/audible seek stutter.
   const rateNudgeTimerRef = useRef<number | undefined>(undefined);
+  const nudgingRef = useRef(false);
 
   const setRate = (rate: number) => {
     playbackRateRef.current = rate;
@@ -406,6 +426,21 @@ function Room() {
 
   const correctDrift = (target: number) => {
     const player = playerRef.current!;
+    // Alone in the room there is nothing to be in sync *with*. The room's
+    // anchor is only a record of what this tab last said, so correcting
+    // towards it can't improve anything — it can only fight what the person
+    // just did (a seek, a pause and resume) with the room's memory of a
+    // moment ago, which is what made a seek leave the video speeding up and
+    // slowing down behind it. Whoever joins later syncs to us instead: see
+    // the re-anchor on the 1→2 transition.
+    if (usersRef.current.length <= 1) {
+      if (nudgingRef.current) {
+        window.clearTimeout(rateNudgeTimerRef.current);
+        nudgingRef.current = false;
+        setRate(1);
+      }
+      return;
+    }
     const drift = target - estimatedPosition(); // positive = we're behind
     const gap = Math.abs(drift);
 
@@ -419,22 +454,79 @@ function Room() {
       recoveringRef.current = false;
     }
 
-    if (gap < DRIFT_TOLERANCE_SECONDS) {
+    if (gap < (nudgingRef.current ? DRIFT_SETTLE_SECONDS : DRIFT_TOLERANCE_SECONDS)) {
       // In sync — make sure no stale nudge keeps running.
       window.clearTimeout(rateNudgeTimerRef.current);
+      nudgingRef.current = false;
       setRate(1);
       return;
     }
     if (gap > NUDGE_MAX_SECONDS) {
       window.clearTimeout(rateNudgeTimerRef.current);
+      nudgingRef.current = false;
       setRate(1);
       positionSampleRef.current = null;
       applyRemote(() => player.seekTo(target, true));
       return;
     }
+    nudgingRef.current = true;
     setRate(drift > 0 ? 1 + NUDGE_RATE_DELTA : 1 - NUDGE_RATE_DELTA);
     window.clearTimeout(rateNudgeTimerRef.current);
-    rateNudgeTimerRef.current = window.setTimeout(() => setRate(1), (gap / NUDGE_RATE_DELTA) * 1000);
+    rateNudgeTimerRef.current = window.setTimeout(() => {
+      nudgingRef.current = false;
+      setRate(1);
+    }, (gap / NUDGE_RATE_DELTA) * 1000);
+  };
+
+  // Dragging YouTube's progress bar fires no event we can hear. If the new
+  // position is already buffered the player doesn't even leave PLAYING — so
+  // from the outside a deliberate seek is indistinguishable from drift, and
+  // the corrector above dutifully undoes it: a small drag gets nudged back at
+  // ±25% rate (the video audibly speeds up or slows down), a large one gets
+  // seeked back outright. That happens even alone in a room, because the room
+  // still has an anchor and this tab never told it the anchor moved.
+  //
+  // YouTube gives us no seek event, so watch the playhead for a
+  // discontinuity: backwards at all, or forwards past what the clock can
+  // explain, is a person moving it. A buffering stall does neither — it
+  // leaves the position standing still, which is ordinary drift and must
+  // stay the corrector's business.
+  const seekProbeRef = useRef<{ value: number; at: number } | null>(null);
+
+  const detectLocalSeek = () => {
+    const player = readyPlayer();
+    if (!player) return;
+    const raw = player.getCurrentTime();
+    const now = performance.now();
+    const previous = seekProbeRef.current;
+    seekProbeRef.current = { value: raw, at: now };
+    if (!previous || suppressUntilRef.current || !videoIdRef.current) return;
+
+    const elapsed = (now - previous.at) / 1000;
+    const advanced = raw - previous.value;
+    const jumped =
+      advanced < -SEEK_JUMP_SECONDS ||
+      advanced > elapsed * playbackRateRef.current + SEEK_JUMP_SECONDS;
+    if (!jumped) return;
+
+    // Mid-scrub the player passes through BUFFERING, where "is it playing?"
+    // has no honest answer — and guessing wrong here would pause or resume
+    // the whole room. It settles into PLAYING or PAUSED a moment later, and
+    // that event already reports the new position, so let it.
+    const state = player.getPlayerState();
+    if (state !== PlayerState.PLAYING && state !== PlayerState.PAUSED) return;
+    // A tab that's still catching up after being hidden isn't seeking; its
+    // jumps are the browser resuming media it suspended.
+    if (isRecovering()) return;
+
+    window.clearTimeout(rateNudgeTimerRef.current);
+    setRate(1);
+    positionSampleRef.current = null;
+    const playing = state === PlayerState.PLAYING;
+    localActionAtRef.current = now;
+    const at = serverNow();
+    socket.emit(playing ? "video:play" : "video:pause", { time: raw, at });
+    lastStateRef.current = { videoId: videoIdRef.current, isPlaying: playing, time: raw, at };
   };
 
   // Seeks/plays/pauses the player to match an authoritative state snapshot.
@@ -885,8 +977,14 @@ function Room() {
               if (roomTime !== null && time < roomTime - RESUME_BEHIND_SECONDS) return;
             }
             localActionAtRef.current = performance.now();
+            // `at` is when this happened, not when the packet lands. Stamping
+            // it on arrival instead made the room's anchor one-way-latency
+            // stale on every play, pause and seek — a systematic error that
+            // the drift corrector then "fixed" by running everyone slow.
+            const at = serverNow();
             socket.emit(event.data === PlayerState.PLAYING ? "video:play" : "video:pause", {
               time,
+              at,
             });
             // Our own action is as authoritative as anything the server
             // sends — anchor the local drift-check to it immediately.
@@ -894,7 +992,7 @@ function Room() {
               videoId: videoIdRef.current,
               isPlaying: event.data === PlayerState.PLAYING,
               time,
-              at: serverNow(),
+              at,
             };
           },
         },
@@ -1040,7 +1138,34 @@ function Room() {
       syncPlayerToState(state);
     };
 
-    const onUsers = (list: User[]) => setUsers(list);
+    const onUsers = (list: User[]) => {
+      // Exactly one — us — means we were established here alone, not that
+      // we're the one arriving (a joiner's first roster already includes
+      // whoever was here). Only the resident re-anchors.
+      const wasAlone = usersRef.current.length === 1;
+      usersRef.current = list;
+      setUsers(list);
+      // Someone just arrived to find us mid-video. Nothing was correcting our
+      // position while we were alone, so the room's anchor is as old as our
+      // last play/pause/seek and wrong by every stall since. Tell it where we
+      // actually are, so the newcomer starts here rather than dragging us to
+      // a moment we left behind.
+      if (wasAlone && list.length > 1) {
+        const player = readyPlayer();
+        const playerState = player?.getPlayerState();
+        if (
+          player &&
+          videoIdRef.current &&
+          (playerState === PlayerState.PLAYING || playerState === PlayerState.PAUSED)
+        ) {
+          const time = player.getCurrentTime();
+          const playing = playerState === PlayerState.PLAYING;
+          const at = serverNow();
+          socket.emit(playing ? "video:play" : "video:pause", { time, at });
+          lastStateRef.current = { videoId: videoIdRef.current, isPlaying: playing, time, at };
+        }
+      }
+    };
 
     socket.on("room:state", onRoomState);
     socket.on("video:load", onVideoLoad);
@@ -1067,9 +1192,11 @@ function Room() {
   // estimatedPosition() accurate.
   useEffect(() => {
     if (!videoId) return;
+    seekProbeRef.current = null;
     const sampler = window.setInterval(() => {
       if (document.hidden) return;
       estimatedPosition();
+      detectLocalSeek();
     }, 100);
     const interval = window.setInterval(() => {
       const state = lastStateRef.current;
@@ -1101,6 +1228,10 @@ function Room() {
       setDebugInfo(
         [
           `drift ${(drift * 1000).toFixed(0)}ms`,
+          // The two halves of that number, so a bad anchor is telling apart
+          // from a bad position reading.
+          `pos ${estimatedPosition().toFixed(2)}`,
+          `anchor ${state ? `${state.time.toFixed(2)}@${((serverNow() - state.at) / 1000).toFixed(2)}s` : "none"}`,
           `clock offset ${clockOffsetRef.current.toFixed(0)}ms`,
           `start lag ${(playStartLagRef.current * 1000).toFixed(0)}ms`,
           `rate ${playbackRateRef.current}`,
@@ -1229,13 +1360,12 @@ function Room() {
   }, []);
 
   // A video change resets everything end-of-video: the overlay, its tiles,
-  // the banner, and the previous video's radio pick (the server re-announces
-  // for the new one, but don't show a stale pick in the gap).
+  // and the previous video's radio pick (the server re-announces for the new
+  // one, but don't show a stale pick in the gap).
   useEffect(() => {
     setEnded(false);
     setRelated(null);
     setUpnext(null);
-    setNearEnd(false);
   }, [videoId]);
 
   // When the video ends, fetch our own recommendations for the overlay.
@@ -1258,27 +1388,6 @@ function Room() {
       cancelled = true;
     };
   }, [ended, videoId]);
-
-  // Tick down toward the end of playback: the up-next banner shows during the
-  // final ~12 seconds. readyPlayer() guards every read — a player that isn't
-  // ready yet has no getCurrentTime to call.
-  useEffect(() => {
-    if (!videoId) return;
-    const interval = window.setInterval(() => {
-      const player = readyPlayer();
-      if (!player) return;
-      const duration = player.getDuration();
-      if (!(duration > 0)) {
-        setNearEnd(false);
-        return;
-      }
-      const remaining = duration - player.getCurrentTime();
-      setNearEnd(
-        player.getPlayerState() === PlayerState.PLAYING && remaining > 0 && remaining <= 12,
-      );
-    }, 500);
-    return () => window.clearInterval(interval);
-  }, [videoId]);
 
   // Track whether our wrapper is the fullscreen element (Esc exits natively,
   // so state has to follow the document, not our button).
@@ -1392,15 +1501,6 @@ function Room() {
       })
     );
 
-  // What the up-next banner should show, per the room's rules: the queue's
-  // head always wins; otherwise the radio's pick, but only if autoplay is on
-  // (off means playback simply stops, so there is no "next").
-  const upNextDisplay =
-    queue.length > 0
-      ? { title: queue[0].title ?? "YouTube video", channel: null as string | null }
-      : radio.autoplay && upnext
-        ? { title: upnext.title, channel: upnext.channel as string | null }
-        : null;
 
   // Sync corrections and background tabs don't mix. Browsers throttle a hidden
   // tab's timers to about once a second, and after a few minutes to once a
@@ -1836,22 +1936,8 @@ function Room() {
                     🔇 Tap for sound
                   </button>
                 )}
-                {/* Up next: the queue's head, or the radio's announced pick.
-                    Only during the last moments of playback, and never on top
-                    of the end overlay. */}
-                {nearEnd && !ended && upNextDisplay && (
-                  <button
-                    className="upnext-banner"
-                    title="Play it now"
-                    onClick={() => {
-                      if (queue.length > 0) socket.emit("queue:play", { id: queue[0].id });
-                      else if (upnext) loadVideo(upnext.videoId);
-                    }}
-                  >
-                    <span className="upnext-label">Up next:</span> {upNextDisplay.title}
-                    {upNextDisplay.channel && ` — ${upNextDisplay.channel}`}
-                  </button>
-                )}
+                {/* No "up next" over the video: the panel under it already
+                    says what's coming, and the video is for watching. */}
                 {/* Our end screen, fully covering the iframe so YouTube's
                     recommendation wall underneath can't be clicked. Tiles play
                     in the room via the same path as a search-result click. */}
@@ -1878,25 +1964,24 @@ function Room() {
                     )}
                   </div>
                 )}
-                {/* Our fullscreen control (YouTube's own is disabled via
-                    fs:0): fullscreens the wrapper, so every overlay above
-                    comes along. */}
-                <button
-                  className="player-fs-toggle"
-                  onClick={toggleFullscreen}
-                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                  aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                >
-                  {isFullscreen ? (
+                {/* Only in fullscreen does this have to float over the video —
+                    there's nowhere else for it to be. Windowed, it lives in a
+                    row under the player (below), where it can't half-share the
+                    frame with YouTube's chrome: ours fades on our timer,
+                    YouTube's on its own, and no amount of tuning makes two
+                    independent timers look deliberate. */}
+                {isFullscreen && (
+                  <button
+                    className="player-fs-toggle"
+                    onClick={toggleFullscreen}
+                    title="Exit fullscreen"
+                    aria-label="Exit fullscreen"
+                  >
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
                       <path d="M8 3H6v3H3v2h5V3zm8 0h2v3h3v2h-5V3zM8 21H6v-3H3v-2h5v5zm8 0h2v-3h3v-2h-5v5z" />
                     </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
-                      <path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4z" />
-                    </svg>
-                  )}
-                </button>
+                  </button>
+                )}
                 {/* Chat inside fullscreen: a toggle with an unread badge, and
                     a compact panel over the right edge — the same messages
                     and the same draft/send as the page chat. */}
@@ -1937,6 +2022,16 @@ function Room() {
                 <p className="load-error player-error">
                   {playerError} Try pasting a different link.
                 </p>
+              )}
+              {!isFullscreen && (
+                <div className="player-controls">
+                  <button className="player-fs-button" onClick={toggleFullscreen}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4z" />
+                    </svg>
+                    Fullscreen
+                  </button>
+                </div>
               )}
               <p className="pip-hint">
                 Tip: go fullscreen, then press home — the video pops out and keeps playing while

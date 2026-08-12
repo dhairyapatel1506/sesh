@@ -17,7 +17,7 @@ Create a room, share the code, and everyone's player stays locked together — p
 - 🔗 **Instant rooms** — create a room, share the link or 6-character code, done
 - 🔍 **Built-in YouTube search** — search by title or just paste any YouTube link. Results are double-checked against YouTube before they're shown, so a video that can't play in an embedded player never appears as an option — including the ones YouTube itself mislabels, like age-restricted uploads and tracks locked to a handful of countries, which claim to be embeddable and then refuse on screen
 - ⏭️ **Shared queue** — everyone sees the same "Up next" list; add videos from search (**+**) or a pasted link, auto-play when the current one ends, play-now or remove anytime
-- ⚡ **Tight sync** — playback stays within tens of milliseconds across viewers
+- ⚡ **Tight sync** — playback stays within a fraction of a second across viewers, and corrects itself without anyone hearing it happen
 - 💬 **Room chat** — side-by-side with the video on desktop, stacked below on mobile; as ephemeral as the room itself (history lives only while someone's in the room)
   - Consecutive messages from the same person group together, like any chat app
   - "…is typing" indicators, live as people compose
@@ -31,10 +31,10 @@ Create a room, share the code, and everyone's player stays locked together — p
 - 🫂 **Friends** — swap 6-character friend codes to connect. Your list shows who's **online**, who's **in a room** (one click to join them), and who's away; from inside a sesh, one click invites anyone who's actually around. Presence is live (no polling) and only ever visible to settled friends — a pending request reveals nothing
 - 💌 **Direct messages** — message a friend outside any room, from the same friends list. Unread counts, typing indicators, and a sound when something arrives while you're not looking. Conversations are kept for 30 days and then deleted — long enough to pick a thread back up, short enough that Sesh isn't an archive
 - 📻 **Autoplay** — when the queue runs out, the room keeps going on its own instead of falling silent, using YouTube's own Mix radio for whatever just played. Room-wide (everyone's hearing the same thing), on by default, and it only ever engages on an empty queue after a video genuinely ends — so it never overrides anything anyone chose. Videos the room already played are skipped, so it doesn't circle
-- ⏭️ **Up next, like YouTube's** — the next pick is decided while the current video is still playing and shown as a small banner over its last few seconds (the queue's head when there is one, the radio's pick when there isn't) — and because the answer is ready in advance, the handoff between videos is instant
+- ⏭️ **Up next, like YouTube's** — the next pick is decided while the current video is still playing and shown in the panel under it (the queue's head when there is one, the radio's pick when there isn't), clickable to skip straight to it — and because the answer is ready in advance, the handoff between videos is instant
 - 🎬 **Our own end screen** — when a video ends without anything to follow it, the player shows Sesh's recommendations (YouTube's mix, pre-filtered to videos that actually play embedded) instead of YouTube's wall of tiles that open youtube.com in a new tab. One click plays it in the room, for everyone
-- 🛡️ **No accidental exits** — the video body belongs to the room: clicking it toggles play/pause, like any player, instead of falling through to YouTube's title bar, paused-screen suggestions or creators' end-screen links, all of which open youtube.com over your sesh. Everything YouTube draws for *you* stays YouTube's and stays clickable — the progress bar and control row along the bottom, volume, captions and quality in the top-right corner — and the "Up next" promise is clickable everywhere it appears, over the video or in the panel, to skip straight to it
-- 🖥️ **Fullscreen with chat** — Sesh's own fullscreen button, with a chat panel you can toggle over the video: same conversation as the room chat, plus an unread badge while it's closed. No more choosing between the video filling the screen and knowing what everyone's saying
+- 🛡️ **No accidental exits** — the video body belongs to the room: clicking it toggles play/pause, like any player, instead of falling through to YouTube's title bar, paused-screen suggestions or creators' end-screen links, all of which open youtube.com over your sesh. Everything YouTube draws for *you* stays YouTube's and stays clickable — the progress bar and control row along the bottom, volume, captions and quality in the top-right corner — and nothing of ours is drawn over the picture either: what's coming up lives in the panel under the player, where it doesn't compete with the film
+- 🖥️ **Fullscreen with chat** — Sesh's own fullscreen button, in a row under the player where it can't clash with YouTube's own controls, and a chat panel you can toggle over the video: same conversation as the room chat, plus an unread badge while it's closed. No more choosing between the video filling the screen and knowing what everyone's saying
 - 🐞 **Report a bug** — from the web or the terminal, signed in or not. The web form takes a screenshot by file, paste or drag-and-drop, downscaled in the browser before it's sent. Rate-limited with a global ceiling, so an open endpoint stays an open endpoint — counted against your account where you have one, and only against your address when you don't, since one address is a household rather than a person. Reports are kept 90 days
 - ⏱️ **Room uptime** — every room shows how long it's been going
 - 🔇 **Tap for sound** — browsers only autoplay a muted video, so anyone who didn't press play themselves lands in the room silently. A one-tap prompt over the player turns the sound on (which also keeps the browser from suspending the tab in the background)
@@ -46,20 +46,21 @@ Create a room, share the code, and everyone's player stays locked together — p
 
 Keeping two YouTube players in audible sync is harder than it looks — `getCurrentTime()` lies, autoplay policies get in the way, and every device starts playback with different latency. Sesh layers several techniques to get drift down to imperceptible levels:
 
-1. **Server-authoritative state.** The server holds each room's truth (`videoId`, playing/paused, position) and stamps every playback message with its own clock time.
+1. **Server-authoritative state.** The server holds each room's truth (`videoId`, playing/paused, position). Every playback message carries the moment it *happened* on the server's clock — sent by the client that did it, clamped by the server — rather than the moment its packet arrived, so one-way latency doesn't quietly bury itself in the room's anchor.
 
 2. **NTP-style clock sync.** On connect, each client pings the server five times and uses the lowest-RTT sample to estimate its offset from the server clock. That makes server timestamps directly comparable to local time, so network latency can be extrapolated out of every sync message.
 
 3. **Honest position measurement.** The IFrame API's `getCurrentTime()` is a cached value that only refreshes a few times per second (~250 ms stale). Sesh detects the moment the cached value last changed and extrapolates forward from it, turning a jittery reading into a precise one.
 
 4. **Three-tier drift correction**, checked every 750 ms:
-   - **< 60 ms** — leave it alone
-   - **60 ms – 1.2 s** — nudge playback rate ±25% (pitch-preserved) until the gap closes, so there's no audible skip
+   - **< 300 ms** — leave it alone. The threshold sits above the noise floor of the measurement on a real connection, deliberately: correcting below it means reacting to jitter rather than to drift, which is audible as the video speeding up and slowing down for no reason
+   - **300 ms – 1.2 s** — nudge playback rate ±25% (pitch-preserved) until the gap closes, so there's no audible skip. Once a nudge starts it runs until the gap is properly closed, rather than stopping the instant it re-enters tolerance and starting again a moment later
    - **> 1.2 s** — hard seek
+   - **alone in the room** — no correction at all. There's nothing to be in sync with, so the only thing correction can do is fight what you just did
 
 5. **Play-start latency learning.** Each tab measures how long its player takes between "play requested" and "actually playing" and keeps an exponential moving average, then leads its seeks by that amount so playback starts already aligned.
 
-6. **Ready-barrier starts.** When the queue auto-advances, every tab silently pre-buffers the next video (played muted until proven buffered, then parked at 0) and reports ready; only when all tabs are ready — or a short timeout passes — does the server start everyone at the same instant. Without it, fast tabs would run ahead while slow ones buffer, then jump to catch up.
+6. **Ready-barrier starts.** When the queue auto-advances, every tab silently pre-buffers the next video (played muted until proven buffered, then parked at 0) and reports ready; only when all tabs are ready — or a short timeout passes — does the server start everyone at the same instant. Without it, fast tabs would run ahead while slow ones buffer, then jump to catch up. A client that needs longer than the timeout (the terminal has to run yt-dlp before mpv can buffer a frame) says so while it works, and the barrier waits for it up to a ceiling.
 
 Add `?debug` to any room URL to watch it all live: drift, clock offset, learned start lag, and current playback rate.
 
@@ -176,7 +177,7 @@ When a video won't play, the CLI now tells you *why* instead of guessing: it rea
 
 Sign in with `sesh login` (`sesh whoami`, `sesh logout`) and the terminal gets the account features too: `/friends` shows who's online and who's in a room, `/invite <n>` pulls one here, `/join <n>` and `/accept` move you into their room without restarting, and `/dms` / `/dm <n|name>` are direct messages, with `/room` (or Esc) going back to room chat. `/autoplay [on|off]` controls the room's radio, and `/bug <description>` files a report without leaving the terminal. Voice is read-only there — the roster shows in the presence line, but joining a call needs the browser. Without signing in the CLI behaves exactly as it always has.
 
-The sync engine is a straight port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround and often ends up the tightest-synced client in the room.
+The sync engine is a port of the web client's — server-authoritative state, NTP-style clock sync, three-tier drift correction, and ready-barrier starts — with one twist: mpv reports playback position precisely, so the CLI skips the web client's cached-`getCurrentTime()` workaround, holds itself to a much tighter tolerance than a browser tab can, and often ends up the tightest-synced client in the room.
 
 ## Deploying
 

@@ -32,6 +32,11 @@ const LOCAL_DRIFT_CHECK_MS = 750;
 // half a minute for it.
 const LOAD_TIMEOUT_MS = Number(process.env.SESH_LOAD_TIMEOUT_MS ?? "") || 30000;
 
+// How often to tell the server we're still loading during a synchronized
+// start, so its barrier waits for us instead of starting the room without us.
+// Comfortably inside the server's own 8s window.
+const PREPARING_PING_MS = 2500;
+
 export type UiState = {
   connected: boolean;
   // The room is no longer fixed for the life of the process — /join and
@@ -242,7 +247,10 @@ export class Session extends EventEmitter {
     // Reasons other than eof: "stop" fires on every replacing loadfile,
     // "error" when yt-dlp can't resolve the video.
     mpv.on("end-file", (msg: { reason?: string }) => {
-      if (msg.reason === "error") this.noteLoadFailure();
+      // Same attribution problem as eof-reached: an error reported while a
+      // different video is on its way in belongs to the file leaving, and
+      // recording it against the incoming one blames the wrong video.
+      if (msg.reason === "error" && !this.loading) this.noteLoadFailure();
     });
 
     // With --keep-open the file stays loaded at EOF and end-file never
@@ -444,16 +452,32 @@ export class Session extends EventEmitter {
       this.pendingLocal = null;
       this.lastState = { videoId, isPlaying: false, time: 0, at: this.serverNow() };
       void (async () => {
+        // Resolving a stream with yt-dlp takes longer than a browser tab
+        // needs to buffer, and often longer than the server's barrier. Say
+        // we're still on it, so the room waits for us instead of starting
+        // without us and leaving us to join seconds in.
+        const heartbeat = setInterval(() => {
+          if (this.prepare === videoId) this.socket.emit("video:preparing", { videoId });
+        }, PREPARING_PING_MS);
+        this.socket.emit("video:preparing", { videoId });
         try {
           this.currentVideo = videoId;
-          this.update({ videoId, isPlaying: false, position: 0 });
+          // Clear the outgoing video's title with it, or the next video shows
+          // under the last one's name until the lookup comes back.
+          this.update({
+            videoId,
+            title: this.titleCache.get(videoId) ?? null,
+            isPlaying: false,
+            position: 0,
+          });
           void this.resolveTitle(videoId);
-          await mpv.load(videoId, { paused: true });
-          await this.waitForLoad(videoId);
+          await this.loadIntoMpv(videoId, { paused: true });
           if (this.prepare !== videoId) return; // superseded meanwhile
           this.socket.emit("video:ready", { videoId });
         } catch {
           // Load failed — the server's timeout will start the room without us.
+        } finally {
+          clearInterval(heartbeat);
         }
       })();
     });
@@ -494,6 +518,26 @@ export class Session extends EventEmitter {
     if (title) {
       this.titleCache.set(videoId, title);
       if (this.state.videoId === videoId) this.update({ title });
+    }
+  }
+
+  // What mpv is currently being asked to load. While this is set, mpv still
+  // has the *previous* file open — so anything it says about the file it has
+  // (an EOF, a position, a duration) is about the video on its way out, not
+  // the one on its way in. Attributing that to the incoming video is what
+  // made an auto-advance report "playback failed — retrying" for a video that
+  // hadn't been given a chance to start yet.
+  private loading: string | null = null;
+
+  private async loadIntoMpv(videoId: string, opts: { paused: boolean }): Promise<void> {
+    const mpv = this.mpv;
+    if (!mpv) throw new Error("mpv not ready");
+    this.loading = videoId;
+    try {
+      await mpv.load(videoId, opts);
+      await this.waitForLoad(videoId);
+    } finally {
+      if (this.loading === videoId) this.loading = null;
     }
   }
 
@@ -546,6 +590,16 @@ export class Session extends EventEmitter {
     const video = this.currentVideo;
     const mpv = this.mpv;
     if (!video || !mpv) return;
+    // Mid-load, mpv still has the outgoing file open: this EOF is that file
+    // finishing, not the incoming one failing. Without this the room's own
+    // auto-advance raced us — the server's video:prepare set currentVideo to
+    // the next video, then the previous one's EOF landed and was recorded as
+    // "the next video failed", which is where "playback failed — retrying
+    // (1/3)" came from on a perfectly good handoff.
+    if (this.loading) {
+      this.dbg("eof-reached ignored: loading", this.loading);
+      return;
+    }
     const [position, duration] = await Promise.all([mpv.getTime(), mpv.getDuration()]);
     const playedThrough = position !== null && duration !== null && duration - position < 3;
     this.dbg("eof-reached", video, "pos", position, "dur", duration, "genuine", playedThrough);
@@ -633,8 +687,7 @@ export class Session extends EventEmitter {
         this.update({ videoId: state.videoId, title: this.titleCache.get(state.videoId) ?? null });
         void this.resolveTitle(state.videoId);
         await this.resetSpeed();
-        await mpv.load(state.videoId, { paused: true });
-        await this.waitForLoad(state.videoId);
+        await this.loadIntoMpv(state.videoId, { paused: true });
         // Things may have moved on while we buffered.
         const current = this.lastState;
         if (!current || current.videoId !== state.videoId) return;
@@ -770,9 +823,12 @@ export class Session extends EventEmitter {
     try {
       const time = (await this.mpv.getTime()) ?? 0;
       await this.mpv.setPause(false);
-      this.lastState = { videoId: this.currentVideo, isPlaying: true, time, at: this.serverNow() };
+      const at = this.serverNow();
+      this.lastState = { videoId: this.currentVideo, isPlaying: true, time, at };
       this.update({ isPlaying: true });
-      this.socket.emit("video:play", { time });
+      // `at` says when this happened; without it the server stamps arrival
+      // and the room's anchor is one-way latency stale.
+      this.socket.emit("video:play", { time, at });
     } catch {
       this.setStatus("player not responding");
     }
@@ -784,9 +840,10 @@ export class Session extends EventEmitter {
       const time = (await this.mpv.getTime()) ?? 0;
       await this.resetSpeed();
       await this.mpv.setPause(true);
-      this.lastState = { videoId: this.currentVideo, isPlaying: false, time, at: this.serverNow() };
+      const at = this.serverNow();
+      this.lastState = { videoId: this.currentVideo, isPlaying: false, time, at };
       this.update({ isPlaying: false });
-      this.socket.emit("video:pause", { time });
+      this.socket.emit("video:pause", { time, at });
     } catch {
       this.setStatus("player not responding");
     }
@@ -826,8 +883,7 @@ export class Session extends EventEmitter {
     void this.resolveTitle(videoId);
     this.setStatus("loading\u2026");
     try {
-      await this.mpv.load(videoId, { paused: true });
-      await this.waitForLoad(videoId);
+      await this.loadIntoMpv(videoId, { paused: true });
     } catch (err) {
       this.dbg("playNow load failed:", videoId, (err as Error).message);
       if (this.pendingLocal === videoId) this.pendingLocal = null;
@@ -853,7 +909,7 @@ export class Session extends EventEmitter {
       // hit this: its own player firing PLAYING broadcasts the play for it.
       // Without this the others sat on a play button for up to a resync, and
       // anyone who pressed it restarted the whole room from 0:00.
-      this.socket.emit("video:play", { time: 0 });
+      this.socket.emit("video:play", { time: 0, at: this.serverNow() });
     } catch {
       this.setStatus("couldn't start playback");
     }
