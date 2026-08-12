@@ -177,6 +177,10 @@ const NUDGE_RATE_DELTA = 0.25;
 // runs the video backwards, and nothing makes it run forwards faster than the
 // clock (a rate nudge is only ±25%, which is accounted for separately).
 const SEEK_JUMP_SECONDS = 0.7;
+// How long to wait for playback to actually resume after a seek before
+// announcing it anyway. Long enough for a slow buffer, short enough that a
+// seek is never silently unreported.
+const SEEK_SETTLE_MAX_MS = 4000;
 // Authoritative pull from the server (also re-anchors after stalls)...
 const RESYNC_INTERVAL_MS = 5000;
 // ...but drift correction itself runs locally far more often, against the
@@ -426,6 +430,10 @@ function Room() {
 
   const correctDrift = (target: number) => {
     const player = playerRef.current!;
+    // A seek is mid-flight: the anchor is knowingly stale until it settles
+    // (see settleSeek), and correcting towards it would chase a position the
+    // person has already left.
+    if (pendingSeekRef.current) return;
     // Alone in the room there is nothing to be in sync *with*. The room's
     // anchor is only a record of what this tab last said, so correcting
     // towards it can't improve anything — it can only fight what the person
@@ -520,13 +528,52 @@ function Room() {
     if (isRecovering()) return;
 
     window.clearTimeout(rateNudgeTimerRef.current);
+    nudgingRef.current = false;
     setRate(1);
     positionSampleRef.current = null;
-    const playing = state === PlayerState.PLAYING;
-    localActionAtRef.current = now;
+    // Don't announce it yet. A seek lands the *reported* position instantly
+    // and resumes actual playback up to a second later, so anchoring on the
+    // moment of the jump tells the room the video is a second further along
+    // than it is — and everyone else jumps ahead and then settles back.
+    // Measured on the deployed server, that gap was ~0.9s. So mark it and let
+    // settleSeek() below anchor once playback is genuinely rolling again.
+    pendingSeekRef.current = { since: now };
+  };
+
+  // The other half of detectLocalSeek: announce the seek once the position is
+  // moving with the clock again (or the player has settled into a pause,
+  // where the position is honest immediately). Bounded, so a seek into a slow
+  // stretch of buffering still gets reported rather than never announced.
+  const pendingSeekRef = useRef<{ since: number } | null>(null);
+
+  const settleSeek = () => {
+    const pending = pendingSeekRef.current;
+    if (!pending) return;
+    const player = readyPlayer();
+    if (!player || !videoIdRef.current) {
+      pendingSeekRef.current = null;
+      return;
+    }
+    const state = player.getPlayerState();
+    const now = performance.now();
+    const expired = now - pending.since > SEEK_SETTLE_MAX_MS;
+    if (state === PlayerState.PLAYING && !expired) {
+      const probe = seekProbeRef.current;
+      const rolling =
+        probe !== null &&
+        probe.at !== now &&
+        player.getCurrentTime() - probe.value > 0.05; // moving, not parked
+      if (!rolling) return;
+    } else if (state !== PlayerState.PAUSED && !expired) {
+      return; // still buffering into the new position
+    }
+    pendingSeekRef.current = null;
+    const playing = state !== PlayerState.PAUSED;
+    const time = player.getCurrentTime();
     const at = serverNow();
-    socket.emit(playing ? "video:play" : "video:pause", { time: raw, at });
-    lastStateRef.current = { videoId: videoIdRef.current, isPlaying: playing, time: raw, at };
+    localActionAtRef.current = now;
+    socket.emit(playing ? "video:play" : "video:pause", { time, at });
+    lastStateRef.current = { videoId: videoIdRef.current, isPlaying: playing, time, at };
   };
 
   // Seeks/plays/pauses the player to match an authoritative state snapshot.
@@ -1196,6 +1243,9 @@ function Room() {
     const sampler = window.setInterval(() => {
       if (document.hidden) return;
       estimatedPosition();
+      // settleSeek first: it compares against the previous tick's reading,
+      // which detectLocalSeek is about to overwrite.
+      settleSeek();
       detectLocalSeek();
     }, 100);
     const interval = window.setInterval(() => {
