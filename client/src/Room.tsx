@@ -1292,6 +1292,16 @@ function Room() {
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
 
+  // Shared by both panels of the click shield below.
+  const toggleFromShield = () => {
+    const player = readyPlayer();
+    if (!player) return;
+    const state = player.getPlayerState();
+    if (state === PlayerState.ENDED) return;
+    if (state === PlayerState.PLAYING) player.pauseVideo();
+    else player.playVideo();
+  };
+
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
       void document.exitFullscreen();
@@ -1806,27 +1816,21 @@ function Room() {
                 onPointerDown={wakeControls}
               >
                 <div id="yt-player" ref={playerContainerRef} />
-                {/* Every click on the video body goes through us, never
-                    YouTube. The iframe is full of exits — the title bar, the
-                    paused "More videos" wall, creator end-screens in the last
-                    seconds — and every one of them opens youtube.com over the
-                    room. The shield stops at the control bar, so pausing,
-                    seeking and volume stay YouTube's; a click on the body
-                    itself toggles play/pause, which is what a video player's
-                    body does anyway. Never on an ENDED player: play would
-                    restart it from 0 (sharp edge #1) — and the end overlay is
-                    covering this shield by then anyway. */}
-                <div
-                  className="click-shield"
-                  onClick={() => {
-                    const player = readyPlayer();
-                    if (!player) return;
-                    const state = player.getPlayerState();
-                    if (state === PlayerState.ENDED) return;
-                    if (state === PlayerState.PLAYING) player.pauseVideo();
-                    else player.playVideo();
-                  }}
-                />
+                {/* Two panels shaped around YouTube's own controls, catching
+                    the clicks that would leave the room before YouTube sees
+                    them: the title strip (title and channel both open
+                    youtube.com) and the picture (the paused "More videos"
+                    wall, creator end-screens, the recommendation grid — every
+                    tile a link out). What they deliberately leave alone is
+                    everything YouTube draws for the viewer: the top-right
+                    corner (volume, captions, quality) and the bottom strip
+                    (progress bar, share, the control row). A click the shield
+                    does catch toggles play/pause, which is what a video body
+                    does anyway. Never on an ENDED player: play would restart it
+                    from 0 (sharp edge #1) — and the end overlay covers this by
+                    then anyway. */}
+                <div className="click-shield shield-top" onClick={toggleFromShield} />
+                <div className="click-shield shield-body" onClick={toggleFromShield} />
                 {needsUnmute && (
                   <button className="unmute-nudge" onClick={enableSound}>
                     🔇 Tap for sound

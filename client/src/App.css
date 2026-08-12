@@ -355,12 +355,13 @@ button:disabled {
 }
 
 /* Bottom-right, raised clear of YouTube's control bar — including the
-   progress bar riding on top of it, whose hover hit-area reaches higher than
-   the bar looks. */
+   progress bar riding above it (~4.6rem up), whose grab area reaches higher
+   than the bar looks. Same offsets in fullscreen: YouTube's chrome sits at
+   the same distance from the bottom edge however large the player is. */
 .player-fs-toggle {
   position: absolute;
   right: 0.75rem;
-  bottom: 5rem;
+  bottom: 6.5rem;
   z-index: 4;
   display: flex;
   align-items: center;
@@ -382,7 +383,7 @@ button:disabled {
 .fs-chat-toggle {
   position: absolute;
   right: 0.75rem;
-  bottom: 8rem;
+  bottom: 9.5rem;
   z-index: 4;
   display: flex;
   align-items: center;
@@ -399,15 +400,6 @@ button:disabled {
 
 .fs-chat-toggle:hover {
   background: rgba(0, 0, 0, 0.85);
-}
-
-/* YouTube's chrome grows on big players, so give it more room in fullscreen. */
-.player-frame.is-fullscreen .player-fs-toggle {
-  bottom: 6.5rem;
-}
-
-.player-frame.is-fullscreen .fs-chat-toggle {
-  bottom: 9.5rem;
 }
 
 /* The radio's announced pick shown where the queue would be — visibly not a
@@ -515,23 +507,51 @@ button:disabled {
 /* "Up next" pill during the last seconds — top-left, clear of the player's
    bottom controls and our bottom-right buttons. Display only, so it must
    not eat clicks meant for the video. */
-/* Between the iframe and every overlay: catches all clicks on the video body
-   (YouTube's title bar, paused-wall and end-screen tiles all open youtube.com)
-   and turns them into play/pause. Stops short of the bottom so YouTube's own
-   control bar — pause, seek, volume, captions — stays fully usable. */
+/* Between the iframe and every overlay: catches the clicks that would open
+   youtube.com and turns them into play/pause. Cut around YouTube's real
+   layout, measured rather than guessed — and that layout barely scales, so
+   these are near-constants at every player size:
+     · title + channel: top strip, roughly 3.5rem tall
+     · volume, captions, quality: top-RIGHT corner (a wider corner in
+       fullscreen, where there's room for all three)
+     · progress bar: ~4.6rem above the bottom edge
+     · share / more videos / YouTube logo: the bottom ~2.5rem
+   So the shield takes the title strip and the picture, and hands back both
+   ends of the frame. 6rem of bottom clearance leaves the progress bar and its
+   grab area comfortably clear — an earlier 3.5rem sat right on top of it and
+   swallowed every seek. */
 .click-shield {
   position: absolute;
-  inset: 0 0 3.5rem 0;
+  left: 0;
   z-index: 1;
   cursor: pointer;
 }
 
+.click-shield.shield-top {
+  top: 0;
+  right: 7.5rem;
+  height: 4rem;
+}
+
+.click-shield.shield-body {
+  top: 4rem;
+  right: 0;
+  bottom: 6rem;
+}
+
+.player-frame.is-fullscreen .click-shield.shield-top {
+  right: 11rem;
+}
+
+/* Bottom-left, above the progress bar — where a viewer already looks for
+   "what's next", and clear of both YouTube's top-right controls and our own
+   buttons on the other side. */
 .upnext-banner {
   position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
+  bottom: 6.5rem;
+  left: 0.75rem;
   z-index: 2;
-  max-width: min(70%, 26rem);
+  max-width: min(60%, 24rem);
   padding: 0.4rem 0.75rem;
   border: 0;
   border-radius: 999px;
