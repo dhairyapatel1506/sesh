@@ -536,17 +536,39 @@ button:disabled {
    not eat clicks meant for the video. */
 /* Between the iframe and every overlay: catches the clicks that would open
    youtube.com and turns them into play/pause. Cut around YouTube's real
-   layout, measured rather than guessed — and that layout barely scales, so
-   these are near-constants at every player size:
-     · title + channel: top strip, roughly 3.5rem tall
-     · volume, captions, quality: top-RIGHT corner (a wider corner in
-       fullscreen, where there's room for all three)
-     · progress bar: ~4.6rem above the bottom edge
-     · share / more videos / YouTube logo: the bottom ~2.5rem
-   So the shield takes the title strip and the picture, and hands back both
-   ends of the frame. 6rem of bottom clearance leaves the progress bar and its
-   grab area comfortably clear — an earlier 3.5rem sat right on top of it and
-   swallowed every seek. */
+   layout — "real" meaning asked of the embed's own DOM, not eyeballed off a
+   screenshot, which is how the volume button ended up buried under the shield
+   once already.
+
+   px, deliberately, not rem. YouTube's chrome is fixed-size — it does not
+   scale with the player, so every number here is measured from an edge and
+   holds at 693x390 and at 1440x900 fullscreen alike. Our root font-size, by
+   contrast, drops 18px -> 16px under a 1024px-wide window, so rem here would
+   quietly slide the whole shield by 12% depending on how wide the window is.
+
+   Measured, in px from the nearest edge:
+     · title, channel, avatar: top-left, down to y=56
+     · volume, captions, quality: top-RIGHT, y 0..48
+     · seek slider grab area: 52..96 above the bottom
+     · share, "More videos", "Watch on YouTube": 12..60 above the bottom — all
+       three of them ways out, and none of them anything a viewer needs, since
+       play/pause is centre-screen and volume is up top
+   So the shield takes the title strip, the picture and the bottom row, and
+   hands back two things: the top-right corner and the scrubber. That shape
+   has holes in it, so it takes a panel each.
+
+   The one number that isn't constant is where the top-right cluster starts.
+   YouTube draws that bar in at least three widths — the volume button's left
+   edge lands 168, 144 or 120 in from the right depending on the player width
+   and on whether a captions button appears at all (it comes and goes between
+   loads of the same video, and the API won't say which you got). The title
+   always ends 12px short of it, so no single gap can both clear the volume
+   button and cover the title in all three. The gap therefore yields to the
+   WIDEST cluster: 174 keeps volume clickable in every layout seen, and in the
+   narrower ones the title's tail — up to 48px of it — stays live. That is the
+   right way round to be wrong: a click on the title opens a new tab and the
+   room carries on playing behind it, whereas a volume button under the shield
+   is broken every single time. */
 .click-shield {
   position: absolute;
   left: 0;
@@ -556,18 +578,25 @@ button:disabled {
 
 .click-shield.shield-top {
   top: 0;
-  right: 7.5rem;
-  height: 4rem;
+  right: 174px;
+  height: 60px;
 }
 
 .click-shield.shield-body {
-  top: 4rem;
+  top: 60px;
   right: 0;
-  bottom: 6rem;
+  bottom: 96px;
 }
 
-.player-frame.is-fullscreen .click-shield.shield-top {
-  right: 11rem;
+/* The bottom button row, which is nothing but exits. Its top edge (60) laps
+   over the bottom of the seek slider's grab area (52) by 8px, and the shield
+   takes that overlap on purpose: a click aimed at the scrubber that lands a
+   few pixels low should cost a play/pause, not the room. The slider keeps 36
+   of its 44px, with the visible bar and the playhead in the middle of that. */
+.click-shield.shield-bottom {
+  right: 0;
+  bottom: 0;
+  height: 60px;
 }
 
 /* Fully covers the iframe so YouTube's own recommendation wall (links to

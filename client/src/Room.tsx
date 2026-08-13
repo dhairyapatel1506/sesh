@@ -1966,21 +1966,22 @@ function Room() {
                 onPointerDown={wakeControls}
               >
                 <div id="yt-player" ref={playerContainerRef} />
-                {/* Two panels shaped around YouTube's own controls, catching
+                {/* Three panels shaped around YouTube's own controls, catching
                     the clicks that would leave the room before YouTube sees
                     them: the title strip (title and channel both open
-                    youtube.com) and the picture (the paused "More videos"
-                    wall, creator end-screens, the recommendation grid — every
-                    tile a link out). What they deliberately leave alone is
-                    everything YouTube draws for the viewer: the top-right
-                    corner (volume, captions, quality) and the bottom strip
-                    (progress bar, share, the control row). A click the shield
-                    does catch toggles play/pause, which is what a video body
-                    does anyway. Never on an ENDED player: play would restart it
-                    from 0 (sharp edge #1) — and the end overlay covers this by
-                    then anyway. */}
+                    youtube.com), the picture (the paused "More videos" wall,
+                    creator end-screens, the recommendation grid — every tile a
+                    link out), and the bottom button row ("More videos",
+                    "Watch on YouTube", share). What they deliberately leave
+                    alone is what a viewer actually reaches for: the top-right
+                    corner (volume, captions, quality) and the seek slider. A
+                    click the shield does catch toggles play/pause, which is
+                    what a video body does anyway. Never on an ENDED player:
+                    play would restart it from 0 (sharp edge #1) — and the end
+                    overlay covers this by then anyway. */}
                 <div className="click-shield shield-top" onClick={toggleFromShield} />
                 <div className="click-shield shield-body" onClick={toggleFromShield} />
+                <div className="click-shield shield-bottom" onClick={toggleFromShield} />
                 {needsUnmute && (
                   <button className="unmute-nudge" onClick={enableSound}>
                     🔇 Tap for sound
