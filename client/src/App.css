@@ -2351,7 +2351,17 @@ button:disabled {
   }
 }
 
-@media (min-width: 1600px) {
+/* Three columns as soon as there is room for them at all. They are not free —
+   the two rails and their gaps come out of the picture, so the video is
+   smaller here than it would be with the recommendations stacked under the
+   chat. That is the trade, made deliberately: having them beside the video is
+   worth more than the pixels they cost. Past ~1500px it stops being a trade,
+   since everything the frame gains from there goes to the video.
+
+   The rail width is a variable so the two breakpoints below differ by one
+   number, and the chat's height — which is derived from whatever is left for
+   the player — follows it automatically instead of being restated. */
+@media (min-width: 1280px) {
   #root:has(.app.room) {
     /* Grows with the screen rather than in steps, up to a point past which a
        wider video stops being a better one. */
@@ -2359,17 +2369,26 @@ button:disabled {
   }
 
   .room-main {
-    grid-template-columns: 320px minmax(0, 1fr) 320px;
+    --rail: 270px;
+    grid-template-columns: var(--rail) minmax(0, 1fr) var(--rail);
     grid-template-areas: "recs video chat";
   }
 
   .room-chat {
-    height: calc((100cqw - 640px - 2.5rem) * 0.5625);
+    height: calc((100cqw - var(--rail) * 2 - 2.5rem) * 0.5625);
   }
 
   /* Matched to the player, so the three columns end level rather than one
      rail trailing half a screen below the others. */
   .room-recs .recommended .queue-list {
-    max-height: calc((100cqw - 640px - 2.5rem) * 0.5625 - 3.5rem);
+    max-height: calc((100cqw - var(--rail) * 2 - 2.5rem) * 0.5625 - 3.5rem);
+  }
+}
+
+/* Enough width that the rails can be comfortable without the video paying
+   for it. */
+@media (min-width: 1500px) {
+  .room-main {
+    --rail: 300px;
   }
 }
