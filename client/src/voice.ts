@@ -199,7 +199,18 @@ export function useVoice(roomId: string) {
   const [outputs, setOutputs] = useState<AudioDevice[]>([]);
   const [settings, setSettings] = useState<Settings>(loadSettings);
 
+  // A failure worth reading once isn't worth staring at until it's dismissed.
+  // Clicking it still works; not clicking it now works too.
+  useEffect(() => {
+    if (!error) return;
+    const t = window.setTimeout(() => setError(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [error]);
+
   const micStream = useRef<MediaStream | null>(null);
+  // Set by openMic when it had to abandon a remembered microphone, so the
+  // saved id can be cleared once we're actually in.
+  const forgetDevice = useRef(false);
   // The audio graph: mic -> gain -> destination. Peers are always sent the
   // *destination's* track, never the microphone's, so changing input device is
   // a rewire upstream rather than a track swap on every connection.
@@ -350,10 +361,34 @@ export function useVoice(roomId: string) {
     try {
       return await navigator.mediaDevices.getUserMedia(constraints);
     } catch (err) {
+      const name = (err as DOMException)?.name;
+      // Being refused outright is the caller's problem to report — there is
+      // nothing to retry when the answer is "no".
+      if (name === "NotAllowedError" || name === "SecurityError") throw err;
+      // A remembered microphone that has since been unplugged, renamed by a
+      // driver update, or taken by another tab fails with the id pinned to
+      // `exact`. Nothing about the room is wrong in that case — the saved
+      // setting is — which is why the same browser could join from an
+      // incognito window (no saved settings) while the ordinary tab could
+      // not. Fall back to whatever the system's default microphone is, and
+      // let the caller forget the id so it stops happening.
+      if (deviceId) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation, noiseSuppression, autoGainControl },
+            video: false,
+          });
+          forgetDevice.current = true;
+          return stream;
+        } catch {
+          // Fall through and report the original failure, which is the more
+          // informative of the two.
+        }
+      }
       // sampleRate and channelCount are advisory almost everywhere, but a
       // device that refuses them outright would otherwise mean no microphone
       // at all. Ask again for the part that matters.
-      if ((err as DOMException)?.name !== "OverconstrainedError") throw err;
+      if (name !== "OverconstrainedError") throw err;
       return navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation,
@@ -632,6 +667,10 @@ export function useVoice(roomId: string) {
       // microphone picked up.
       watchLevel("me", graph.current.destination.stream);
 
+      if (forgetDevice.current) {
+        forgetDevice.current = false;
+        setSettings((prev) => ({ ...prev, inputDeviceId: "" }));
+      }
       inVoiceRef.current = true;
       justJoined.current = true;
       setInVoice(true);
@@ -643,11 +682,15 @@ export function useVoice(roomId: string) {
     } catch (err) {
       const name = (err as DOMException)?.name;
       setError(
-        name === "NotAllowedError"
+        name === "NotAllowedError" || name === "SecurityError"
           ? "Microphone access was blocked — allow it in your browser's address bar."
-          : name === "NotFoundError"
+          : name === "NotFoundError" || name === "DevicesNotFoundError"
             ? "No microphone found."
-            : "Couldn't open your microphone.",
+            : name === "NotReadableError" || name === "TrackStartError"
+              ? // Almost always another tab or app holding it — worth saying,
+                // because the fix isn't in this page at all.
+                "Your microphone is in use by something else — close whatever has it and try again."
+              : `Couldn't open your microphone${name ? ` (${name})` : ""}.`,
       );
     } finally {
       setConnecting(false);

@@ -181,6 +181,11 @@ const SEEK_JUMP_SECONDS = 0.7;
 // announcing it anyway. Long enough for a slow buffer, short enough that a
 // seek is never silently unreported.
 const SEEK_SETTLE_MAX_MS = 4000;
+// How long the picture shield stands down after the viewer uses one of
+// YouTube's own controls. Long enough to read a settings menu and pick
+// something out of it, short enough that a paused "More videos" wall isn't
+// left clickable for any length of time.
+const CHROME_ENGAGED_MS = 8000;
 // Authoritative pull from the server (also re-anchors after stalls)...
 const RESYNC_INTERVAL_MS = 5000;
 // ...but drift correction itself runs locally far more often, against the
@@ -277,6 +282,10 @@ function Room() {
   // what lets our UI exist inside fullscreen at all.
   const playerFrameRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // True for a short while after the viewer clicks something of YouTube's —
+  // see the .chrome-engaged rules in App.css for what it stands down.
+  const [chromeEngaged, setChromeEngaged] = useState(false);
+  const chromeEngagedTimerRef = useRef<number | undefined>(undefined);
   const [fsChatOpen, setFsChatOpen] = useState(false);
   // How many chat messages were already seen when the fullscreen chat panel
   // was last open (or fullscreen entered) — anything beyond it is the badge.
@@ -744,6 +753,42 @@ function Room() {
     tick();
     return () => window.clearTimeout(timer);
   }, [roomCreatedAt]);
+
+  // A cross-origin iframe won't say whether one of its menus is open, but the
+  // browser does say when it takes focus — and it only takes focus when the
+  // viewer clicks inside it, which (given what the shield leaves reachable)
+  // means they just used YouTube's own controls. Stand the picture shield
+  // down for a few seconds so whatever they opened can actually be operated.
+  useEffect(() => {
+    const iframeNow = () => playerContainerRef.current?.querySelector("iframe") ?? null;
+    const standDown = () => {
+      setChromeEngaged(false);
+      window.clearTimeout(chromeEngagedTimerRef.current);
+    };
+    const onBlur = () => {
+      // activeElement isn't updated until after this event, hence the hop.
+      window.setTimeout(() => {
+        if (document.activeElement !== iframeNow()) return;
+        setChromeEngaged(true);
+        window.clearTimeout(chromeEngagedTimerRef.current);
+        chromeEngagedTimerRef.current = window.setTimeout(() => {
+          setChromeEngaged(false);
+          // Hand focus back to our document. Without this the iframe simply
+          // keeps it, no further blur ever fires, and the second visit to the
+          // settings menu would find the shield back in the way with no way
+          // to stand it down again.
+          (document.activeElement as HTMLElement | null)?.blur?.();
+        }, CHROME_ENGAGED_MS);
+      }, 0);
+    };
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", standDown);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", standDown);
+      window.clearTimeout(chromeEngagedTimerRef.current);
+    };
+  }, []);
 
   // Friends live behind a toolbar menu rather than under the video: listed
   // inline they pushed the page down and dragged the chat with them, so typing
@@ -2009,6 +2054,7 @@ function Room() {
                 className={[
                   "player-frame",
                   isFullscreen && "is-fullscreen",
+                  chromeEngaged && "chrome-engaged",
                   !controlsAwake && "controls-idle",
                 ]
                   .filter(Boolean)
@@ -2032,6 +2078,8 @@ function Room() {
                     play would restart it from 0 (sharp edge #1) — and the end
                     overlay covers this by then anyway. */}
                 <div className="click-shield shield-top" onClick={toggleFromShield} />
+                <div className="click-shield shield-slider-left" onClick={toggleFromShield} />
+                <div className="click-shield shield-slider-right" onClick={toggleFromShield} />
                 <div className="click-shield shield-body" onClick={toggleFromShield} />
                 <div className="click-shield shield-bottom" onClick={toggleFromShield} />
                 {needsUnmute && (

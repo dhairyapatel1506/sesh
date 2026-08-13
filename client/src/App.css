@@ -608,10 +608,46 @@ button:disabled {
   height: 60px;
 }
 
-.click-shield.shield-body {
+/* Hovering the volume button unfurls a slider straight down from it — 48px
+   wide, reaching 219px down the frame — which the body panel was sitting on
+   top of, so the volume could be muted but not turned down. The band beside
+   it is cut into two panels with the slider's column left open between them:
+   174px in from the right (where the button starts) to 114px (where it ends).
+   A hole in the middle of a rectangle takes two rectangles. */
+.click-shield.shield-slider-left {
   top: 60px;
+  right: 174px;
+  height: 164px;
+}
+
+.click-shield.shield-slider-right {
+  top: 60px;
+  left: auto;
+  right: 0;
+  width: 114px;
+  height: 164px;
+}
+
+.click-shield.shield-body {
+  top: 224px;
   right: 0;
   bottom: 96px;
+}
+
+/* YouTube's settings menu opens as a modal sheet across the middle of the
+   picture, with a scrim over everything — there is no fixed rectangle to cut
+   around, and no way to ask a cross-origin iframe whether a menu is open. But
+   there is one signal: clicking inside the iframe moves focus to it, which
+   the parent document does see. So for a few seconds after the viewer uses
+   YouTube's own chrome, the picture and the bottom row stop being shielded
+   and whatever opened is fully usable. Safe while it lasts, because the same
+   scrim that makes the sheet modal also covers the exits underneath it. The
+   title strip stays shielded throughout: nothing YouTube opens lives there. */
+.player-frame.chrome-engaged .click-shield.shield-body,
+.player-frame.chrome-engaged .click-shield.shield-bottom,
+.player-frame.chrome-engaged .click-shield.shield-slider-left,
+.player-frame.chrome-engaged .click-shield.shield-slider-right {
+  display: none;
 }
 
 /* The bottom button row, which is nothing but exits. Its top edge (60) laps
