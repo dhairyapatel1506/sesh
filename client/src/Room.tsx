@@ -1481,14 +1481,16 @@ function Room() {
   // one, but don't show a stale pick in the gap).
   useEffect(() => {
     setEnded(false);
-    setRelated(null);
     setUpnext(null);
   }, [videoId]);
 
-  // When the video ends, fetch our own recommendations for the overlay.
-  // A 503 (no key) or an error just means an overlay without tiles.
+  // Recommendations for whatever is playing. Fetched as soon as there IS a
+  // video rather than only once it has ended, because the same list now feeds
+  // two things: the end-of-video overlay, and the panel under the player.
+  // Cheap to ask for — the server answers from the same cached mix the radio
+  // uses, so the second reader costs nothing.
   useEffect(() => {
-    if (!ended || !videoId) {
+    if (!videoId) {
       setRelated(null);
       return;
     }
@@ -1504,7 +1506,7 @@ function Room() {
     return () => {
       cancelled = true;
     };
-  }, [ended, videoId]);
+  }, [videoId]);
 
   // Track whether our wrapper is the fullscreen element (Esc exits natively,
   // so state has to follow the document, not our button).
@@ -2304,6 +2306,49 @@ function Room() {
                   ))}
                 </ul>
               )}
+            </div>
+          )}
+
+          {/* What YouTube would show down the right-hand side of a watch page,
+              except these play in the room. It exists because the ones inside
+              the player can't: the embed is sandboxed, so clicking one of
+              YouTube's own recommendations does nothing, and there is no way
+              for this page to see a click inside someone else's iframe, let
+              alone redirect it. So rather than fight for those tiles, here are
+              our own — same source (YouTube's mix for whatever is playing),
+              already filtered to videos that really play embedded. */}
+          {videoId && related && related.length > 0 && (
+            <div className="queue recommended">
+              <div className="queue-head">
+                <span>Recommended</span>
+              </div>
+              <ul className="queue-list">
+                {related.map((r) => (
+                  <li key={r.videoId} className="queue-item">
+                    <img src={r.thumbnail} alt="" loading="lazy" />
+                    <span className="queue-info">
+                      <span className="queue-title">{r.title}</span>
+                      <span className="queue-meta">{r.channel}</span>
+                    </span>
+                    <button
+                      className="queue-action"
+                      title="Play now"
+                      aria-label={`Play ${r.title} now`}
+                      onClick={() => loadVideo(r.videoId)}
+                    >
+                      ▶
+                    </button>
+                    <button
+                      className="queue-action"
+                      title="Add to queue"
+                      aria-label={`Add ${r.title} to the queue`}
+                      onClick={() => socket.emit("queue:add", { videoId: r.videoId, title: r.title })}
+                    >
+                      +
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

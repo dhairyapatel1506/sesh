@@ -2269,3 +2269,15 @@ button:disabled {
   font-size: 0.85rem;
   color: var(--text);
 }
+
+/* Same furniture as the queue — it is the same kind of list, and reading as
+   one thing is the point. Capped so a long list of suggestions can't push the
+   chat off the bottom of the page. */
+.queue.recommended {
+  margin-top: 0.75rem;
+}
+
+.queue.recommended .queue-list {
+  max-height: 22rem;
+  overflow-y: auto;
+}

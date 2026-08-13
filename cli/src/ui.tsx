@@ -588,13 +588,26 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
       case "room":
         session.closeDm();
         break;
-      case "voice":
-        // Honest rather than silent: the mesh is browser-to-browser WebRTC and
-        // there is no headless half of it to join.
-        session.setStatus(
-          `voice needs the web client — open ${serverUrl.replace(/^https?:\/\//, "")}/room/${s.roomId}`,
-        );
+      case "voice": {
+        // This used to just say "voice needs the web client" and then clear
+        // itself four seconds later, which is a command that reads its own
+        // description aloud and does nothing. The mesh really is
+        // browser-to-browser WebRTC with no headless half to join — so the
+        // useful things it CAN do are say who's talking right now, and put the
+        // room's link on the clipboard so joining from a browser is a paste
+        // rather than a retype.
+        const link = `${serverUrl}/room/${s.roomId}`;
+        const who =
+          s.voice.length > 0
+            ? `in the call: ${s.voice.join(", ")}`
+            : "nobody's in the call yet";
+        void copyToClipboard(link).then(({ via }) => {
+          session.setStatus(
+            `${who} — voice needs a browser; link ${via === "helper" ? "copied" : "sent to your clipboard"}: ${link}`,
+          );
+        });
         break;
+      }
       case "copy": {
         // A terminal can't offer a click-to-copy button — capturing the mouse
         // would take away the selection people already have — but it can put
