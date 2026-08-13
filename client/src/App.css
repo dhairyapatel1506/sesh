@@ -443,10 +443,21 @@ button:disabled {
   transition: opacity 0.25s ease;
 }
 
-.player-frame.controls-idle .player-fs-toggle,
-.player-frame.controls-idle .fs-chat-toggle {
-  opacity: 0;
-  pointer-events: none;
+/* These used to fade out after a beat of stillness and wake on pointer
+   movement over the video. Nothing of ours sits over the iframe any more, so
+   there is no movement to wake them with — they'd fade once and never return.
+   They sit quietly instead: dim enough not to compete with the picture, full
+   strength the moment the pointer is on one. */
+.player-frame .player-fs-toggle,
+.player-frame .fs-chat-toggle {
+  opacity: 0.4;
+}
+
+.player-frame .player-fs-toggle:hover,
+.player-frame .player-fs-toggle:focus-visible,
+.player-frame .fs-chat-toggle:hover,
+.player-frame .fs-chat-toggle:focus-visible {
+  opacity: 1;
 }
 
 .fs-chat-badge {
@@ -560,109 +571,33 @@ button:disabled {
 /* "Up next" pill during the last seconds — top-left, clear of the player's
    bottom controls and our bottom-right buttons. Display only, so it must
    not eat clicks meant for the video. */
-/* Between the iframe and every overlay: catches the clicks that would open
-   youtube.com and turns them into play/pause. Cut around YouTube's real
-   layout — "real" meaning asked of the embed's own DOM, not eyeballed off a
-   screenshot, which is how the volume button ended up buried under the shield
-   once already.
 
-   px, deliberately, not rem. YouTube's chrome is fixed-size — it does not
-   scale with the player, so every number here is measured from an edge and
-   holds at 693x390 and at 1440x900 fullscreen alike. Our root font-size, by
-   contrast, drops 18px -> 16px under a 1024px-wide window, so rem here would
-   quietly slide the whole shield by 12% depending on how wide the window is.
-
-   Measured, in px from the nearest edge:
-     · title, channel, avatar: top-left, down to y=56
-     · volume, captions, quality: top-RIGHT, y 0..48
-     · seek slider grab area: 52..96 above the bottom
-     · share, "More videos", "Watch on YouTube": 12..60 above the bottom — all
-       three of them ways out, and none of them anything a viewer needs, since
-       play/pause is centre-screen and volume is up top
-   So the shield takes the title strip, the picture and the bottom row, and
-   hands back two things: the top-right corner and the scrubber. That shape
-   has holes in it, so it takes a panel each.
-
-   The one number that isn't constant is where the top-right cluster starts.
-   YouTube draws that bar in at least three widths — the volume button's left
-   edge lands 168, 144 or 120 in from the right depending on the player width
-   and on whether a captions button appears at all (it comes and goes between
-   loads of the same video, and the API won't say which you got). The title
-   always ends 12px short of it, so no single gap can both clear the volume
-   button and cover the title in all three. The gap therefore yields to the
-   WIDEST cluster: 174 keeps volume clickable in every layout seen, and in the
-   narrower ones the title's tail — up to 48px of it — stays live. That is the
-   right way round to be wrong: a click on the title opens a new tab and the
-   room carries on playing behind it, whereas a volume button under the shield
-   is broken every single time. */
-.click-shield {
+/* Our own recommendations in place of YouTube's wall of tiles — the ones here
+   play in the room instead of opening youtube.com. */
+.end-overlay-close {
   position: absolute;
-  left: 0;
+  top: 0.5rem;
+  right: 0.6rem;
   z-index: 1;
-  cursor: pointer;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 1.3rem;
+  line-height: 1;
 }
 
-.click-shield.shield-top {
-  top: 0;
-  right: 174px;
-  height: 60px;
+.end-overlay-close:hover {
+  background: rgba(255, 255, 255, 0.25);
+  filter: none;
 }
 
-/* Hovering the volume button unfurls a slider straight down from it — 48px
-   wide, reaching 219px down the frame — which the body panel was sitting on
-   top of, so the volume could be muted but not turned down. The band beside
-   it is cut into two panels with the slider's column left open between them:
-   174px in from the right (where the button starts) to 114px (where it ends).
-   A hole in the middle of a rectangle takes two rectangles. */
-.click-shield.shield-slider-left {
-  top: 60px;
-  right: 174px;
-  height: 164px;
-}
-
-.click-shield.shield-slider-right {
-  top: 60px;
-  left: auto;
-  right: 0;
-  width: 114px;
-  height: 164px;
-}
-
-.click-shield.shield-body {
-  top: 224px;
-  right: 0;
-  bottom: 96px;
-}
-
-/* YouTube's settings menu opens as a modal sheet across the middle of the
-   picture, with a scrim over everything — there is no fixed rectangle to cut
-   around, and no way to ask a cross-origin iframe whether a menu is open. But
-   there is one signal: clicking inside the iframe moves focus to it, which
-   the parent document does see. So for a few seconds after the viewer uses
-   YouTube's own chrome, the picture and the bottom row stop being shielded
-   and whatever opened is fully usable. Safe while it lasts, because the same
-   scrim that makes the sheet modal also covers the exits underneath it. The
-   title strip stays shielded throughout: nothing YouTube opens lives there. */
-.player-frame.chrome-engaged .click-shield.shield-body,
-.player-frame.chrome-engaged .click-shield.shield-bottom,
-.player-frame.chrome-engaged .click-shield.shield-slider-left,
-.player-frame.chrome-engaged .click-shield.shield-slider-right {
-  display: none;
-}
-
-/* The bottom button row, which is nothing but exits. Its top edge (60) laps
-   over the bottom of the seek slider's grab area (52) by 8px, and the shield
-   takes that overlap on purpose: a click aimed at the scrubber that lands a
-   few pixels low should cost a play/pause, not the room. The slider keeps 36
-   of its 44px, with the visible bar and the playhead in the middle of that. */
-.click-shield.shield-bottom {
-  right: 0;
-  bottom: 0;
-  height: 60px;
-}
-
-/* Fully covers the iframe so YouTube's own recommendation wall (links to
-   youtube.com) can't be clicked underneath. */
 .end-overlay {
   position: absolute;
   inset: 0;

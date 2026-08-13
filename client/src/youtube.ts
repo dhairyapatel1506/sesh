@@ -29,7 +29,10 @@ interface YTNamespace {
   Player: new (
     element: string | HTMLElement,
     options: {
-      videoId: string;
+      // All optional: attaching to an <iframe> we built ourselves (which is
+      // how the sandbox attribute gets set) carries these in its src instead,
+      // and the API ignores them here on that path.
+      videoId?: string;
       width?: string | number;
       height?: string | number;
       playerVars?: Record<string, string | number>;

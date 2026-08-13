@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { API_BASE, socket } from "./socket";
 import { applyShortcodes, searchEmojis } from "./emoji";
@@ -181,11 +181,6 @@ const SEEK_JUMP_SECONDS = 0.7;
 // announcing it anyway. Long enough for a slow buffer, short enough that a
 // seek is never silently unreported.
 const SEEK_SETTLE_MAX_MS = 4000;
-// How long the picture shield stands down after the viewer uses one of
-// YouTube's own controls. Long enough to read a settings menu and pick
-// something out of it, short enough that a paused "More videos" wall isn't
-// left clickable for any length of time.
-const CHROME_ENGAGED_MS = 8000;
 // Authoritative pull from the server (also re-anchors after stalls)...
 const RESYNC_INTERVAL_MS = 5000;
 // ...but drift correction itself runs locally far more often, against the
@@ -282,10 +277,6 @@ function Room() {
   // what lets our UI exist inside fullscreen at all.
   const playerFrameRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  // True for a short while after the viewer clicks something of YouTube's —
-  // see the .chrome-engaged rules in App.css for what it stands down.
-  const [chromeEngaged, setChromeEngaged] = useState(false);
-  const chromeEngagedTimerRef = useRef<number | undefined>(undefined);
   const [fsChatOpen, setFsChatOpen] = useState(false);
   // How many chat messages were already seen when the fullscreen chat panel
   // was last open (or fullscreen entered) — anything beyond it is the badge.
@@ -754,41 +745,6 @@ function Room() {
     return () => window.clearTimeout(timer);
   }, [roomCreatedAt]);
 
-  // A cross-origin iframe won't say whether one of its menus is open, but the
-  // browser does say when it takes focus — and it only takes focus when the
-  // viewer clicks inside it, which (given what the shield leaves reachable)
-  // means they just used YouTube's own controls. Stand the picture shield
-  // down for a few seconds so whatever they opened can actually be operated.
-  useEffect(() => {
-    const iframeNow = () => playerContainerRef.current?.querySelector("iframe") ?? null;
-    const standDown = () => {
-      setChromeEngaged(false);
-      window.clearTimeout(chromeEngagedTimerRef.current);
-    };
-    const onBlur = () => {
-      // activeElement isn't updated until after this event, hence the hop.
-      window.setTimeout(() => {
-        if (document.activeElement !== iframeNow()) return;
-        setChromeEngaged(true);
-        window.clearTimeout(chromeEngagedTimerRef.current);
-        chromeEngagedTimerRef.current = window.setTimeout(() => {
-          setChromeEngaged(false);
-          // Hand focus back to our document. Without this the iframe simply
-          // keeps it, no further blur ever fires, and the second visit to the
-          // settings menu would find the shield back in the way with no way
-          // to stand it down again.
-          (document.activeElement as HTMLElement | null)?.blur?.();
-        }, CHROME_ENGAGED_MS);
-      }, 0);
-    };
-    window.addEventListener("blur", onBlur);
-    window.addEventListener("focus", standDown);
-    return () => {
-      window.removeEventListener("blur", onBlur);
-      window.removeEventListener("focus", standDown);
-      window.clearTimeout(chromeEngagedTimerRef.current);
-    };
-  }, []);
 
   // Friends live behind a toolbar menu rather than under the video: listed
   // inline they pushed the page down and dragged the chat with them, so typing
@@ -922,16 +878,43 @@ function Room() {
       // next time React needs to reposition a sibling near the wrapper, it
       // does so relative to a DOM node YouTube already ripped out, which
       // throws (and, with no error boundary, unmounts the whole app).
-      const target = document.createElement("div");
+      // The iframe is ours, not the API's, for one reason: a **sandbox**
+      // attribute, which can only be set before the frame loads. Without
+      // allow-popups and allow-top-navigation, nothing inside the embed can
+      // open youtube.com — not the title, not the channel, not the paused
+      // "More videos" wall, not a creator's end-screen cards, not "Watch on
+      // YouTube". The browser refuses on our behalf, which is a guarantee no
+      // amount of measuring transparent panels could give: it doesn't depend
+      // on where YouTube draws anything, and it can't be out of date. What it
+      // costs is nothing — playback, and the whole JS API this app is built
+      // on, work exactly the same inside the sandbox.
+      //
+      // allow-same-origin is what lets the embed reach its own cookies and
+      // storage (it is a different origin from us, so this grants it nothing
+      // of ours); allow-scripts is the player itself; allow-presentation is
+      // casting. The two that matter are the two that aren't here.
+      //
+      // Handing the API an element we own also keeps YouTube's DOM surgery in
+      // a subtree React never diffs into — it used to replace a plain <div>
+      // with an iframe behind React's back, and any later reposition of a
+      // sibling threw against a node that no longer existed, unmounting the
+      // whole app.
+      const target = document.createElement("iframe");
+      target.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation");
+      target.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture");
+      target.setAttribute("frameborder", "0");
+      target.width = "640";
+      target.height = "390";
+      // Attaching to an existing iframe means the parameters travel in the
+      // URL — the options object's videoId/playerVars are ignored on this
+      // path. fs=0 hides YouTube's own fullscreen button: its native
+      // fullscreen contains only the iframe, which would strand every overlay
+      // we draw (chat, end screen). Our own button fullscreens the wrapper.
+      target.src =
+        `https://www.youtube.com/embed/${encodeURIComponent(videoId)}` +
+        `?enablejsapi=1&fs=0&origin=${encodeURIComponent(window.location.origin)}`;
       playerContainerRef.current.appendChild(target);
       playerRef.current = new YT.Player(target, {
-        videoId,
-        width: "640",
-        height: "390",
-        // fs:0 hides YouTube's own fullscreen button — its native fullscreen
-        // contains only the iframe, which would strand every overlay we draw
-        // (chat, end screen, up-next). Our own button fullscreens the wrapper.
-        playerVars: { fs: 0 },
         events: {
           onReady: () => {
             // The YouTube API sets width/height as HTML attributes, and in
@@ -1501,46 +1484,37 @@ function Room() {
     const onFullscreenChange = () => {
       const fs = document.fullscreenElement === playerFrameRef.current;
       setIsFullscreen(fs);
-      if (!fs) setFsChatOpen(false);
+      if (!fs) {
+        setFsChatOpen(false);
+        // After the next paint, when the page is its full height again and
+        // there is somewhere to scroll to. Back to where they were, or to the
+        // player if they got here some other way (Esc from a deep link, say).
+        requestAnimationFrame(() => {
+          const y = scrollBeforeFullscreenRef.current;
+          if (y > 0) window.scrollTo({ top: y, behavior: "instant" as ScrollBehavior });
+          else playerFrameRef.current?.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior });
+        });
+      }
     };
     document.addEventListener("fullscreenchange", onFullscreenChange);
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
 
-  // Shared by both panels of the click shield below.
-  const toggleFromShield = () => {
-    const player = readyPlayer();
-    if (!player) return;
-    const state = player.getPlayerState();
-    if (state === PlayerState.ENDED) return;
-    if (state === PlayerState.PLAYING) player.pauseVideo();
-    else player.playVideo();
-  };
+  // Where the page was before fullscreen took over. Going fullscreen collapses
+  // the document to the height of one element, which throws the scroll offset
+  // away — so leaving it dropped everyone at the top of the room rather than
+  // back at the video they were watching.
+  const scrollBeforeFullscreenRef = useRef(0);
 
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
       void document.exitFullscreen();
     } else {
+      scrollBeforeFullscreenRef.current = window.scrollY;
       void playerFrameRef.current?.requestFullscreen();
     }
   };
 
-  // The floating buttons behave like YouTube's own chrome: awake while the
-  // pointer moves over the video, gone after a beat of stillness. A control
-  // that never leaves is a control drawn on top of someone's film.
-  const [controlsAwake, setControlsAwake] = useState(true);
-  const controlsTimerRef = useRef<number | null>(null);
-  const wakeControls = useCallback(() => {
-    setControlsAwake(true);
-    if (controlsTimerRef.current !== null) window.clearTimeout(controlsTimerRef.current);
-    controlsTimerRef.current = window.setTimeout(() => setControlsAwake(false), 2800);
-  }, []);
-  useEffect(() => {
-    wakeControls();
-    return () => {
-      if (controlsTimerRef.current !== null) window.clearTimeout(controlsTimerRef.current);
-    };
-  }, [videoId, wakeControls]);
 
   // Unread badge for the fullscreen chat toggle: everything past fsSeenCount
   // is unread. Entering fullscreen or having the panel open marks all read.
@@ -2054,34 +2028,12 @@ function Room() {
                 className={[
                   "player-frame",
                   isFullscreen && "is-fullscreen",
-                  chromeEngaged && "chrome-engaged",
-                  !controlsAwake && "controls-idle",
                 ]
                   .filter(Boolean)
                   .join(" ")}
                 ref={playerFrameRef}
-                onPointerMove={wakeControls}
-                onPointerDown={wakeControls}
               >
                 <div id="yt-player" ref={playerContainerRef} />
-                {/* Three panels shaped around YouTube's own controls, catching
-                    the clicks that would leave the room before YouTube sees
-                    them: the title strip (title and channel both open
-                    youtube.com), the picture (the paused "More videos" wall,
-                    creator end-screens, the recommendation grid — every tile a
-                    link out), and the bottom button row ("More videos",
-                    "Watch on YouTube", share). What they deliberately leave
-                    alone is what a viewer actually reaches for: the top-right
-                    corner (volume, captions, quality) and the seek slider. A
-                    click the shield does catch toggles play/pause, which is
-                    what a video body does anyway. Never on an ENDED player:
-                    play would restart it from 0 (sharp edge #1) — and the end
-                    overlay covers this by then anyway. */}
-                <div className="click-shield shield-top" onClick={toggleFromShield} />
-                <div className="click-shield shield-slider-left" onClick={toggleFromShield} />
-                <div className="click-shield shield-slider-right" onClick={toggleFromShield} />
-                <div className="click-shield shield-body" onClick={toggleFromShield} />
-                <div className="click-shield shield-bottom" onClick={toggleFromShield} />
                 {needsUnmute && (
                   <button className="unmute-nudge" onClick={enableSound}>
                     🔇 Tap for sound
@@ -2094,6 +2046,18 @@ function Room() {
                     in the room via the same path as a search-result click. */}
                 {ended && (
                   <div className="end-overlay">
+                    {/* Dismissable: the overlay covers the whole picture, and
+                        someone who wants the last frame, or YouTube's own
+                        controls, shouldn't have to load another video to get
+                        at them. It comes back with the next video that ends. */}
+                    <button
+                      className="end-overlay-close"
+                      onClick={() => setEnded(false)}
+                      title="Close"
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
                     <p className="end-overlay-head">Video ended</p>
                     {related && related.length > 0 && (
                       <>
