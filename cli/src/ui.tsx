@@ -627,8 +627,24 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         break;
       case "quit":
       case "exit":
-        session.destroy();
+        // Ink's exit() unmounts and resolves waitUntilExit, which is where the
+        // process would normally tidy up and go. It didn't: something in the
+        // socket/mpv teardown was still holding the event loop, so the render
+        // went away and the prompt sat there until Ctrl-C. Tear down what we
+        // own, ask Ink to leave, then make sure of it — an explicit exit on a
+        // short timer that is deliberately NOT unref'd, so it stays alive long
+        // enough to fire.
+        try {
+          session.destroy();
+        } catch {
+          // Nothing here is worth staying open for.
+        }
         exit();
+        // Not reproducible from a bare terminal here (no mpv playing, which is
+        // the most likely thing still holding the loop), so this doesn't try to
+        // guess the cause: it just leaves. Deliberately NOT unref'd, so it
+        // stays alive long enough to fire.
+        setTimeout(() => process.exit(0), 150);
         break;
       default:
         session.setStatus(`unknown command: /${cmd} (try /help)`);

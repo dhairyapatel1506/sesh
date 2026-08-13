@@ -2084,7 +2084,17 @@ function Room() {
                       title="Close"
                       aria-label="Close"
                     >
-                      ×
+                      {/* Drawn, not typed: the × glyph carries its own font
+                          metrics and sits off-centre in a round button however
+                          the box is aligned. Two strokes are exactly centred. */}
+                      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden>
+                        <path
+                          d="M6 6l12 12M18 6L6 18"
+                          stroke="currentColor"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                        />
+                      </svg>
                     </button>
                     <p className="end-overlay-head">Video ended</p>
                     {related && related.length > 0 && (

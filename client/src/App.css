@@ -590,8 +590,7 @@ button:disabled {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
-  font-size: 1.3rem;
-  line-height: 1;
+  line-height: 0;
 }
 
 .end-overlay-close:hover {
