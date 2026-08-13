@@ -49,6 +49,8 @@ type Presence = "in-room" | "online" | "offline";
 const presenceOf = (friend: Friend): Presence =>
   friend.roomId ? "in-room" : friend.online ? "online" : "offline";
 
+const presenceLabel = (presence: Presence) => (presence === "in-room" ? "in a room" : presence);
+
 const PRESENCE_ORDER: Record<Presence, number> = { "in-room": 0, online: 1, offline: 2 };
 
 export const totalUnread = (friends: Friend[]) =>
@@ -69,14 +71,24 @@ let lastPingedMessageId: string | null = null;
 export function useFriends() {
   const { user } = useAuth();
   const [friends, setFriends] = useState<Friend[]>([]);
+  // Whether the list has ever come back. An empty array means "none" only
+  // after that — before it, an empty array is just "haven't asked yet", and
+  // rendering it as "No friends yet" flashed that at people with a full list
+  // every time the panel opened.
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
-    if (!user) return setFriends([]);
+    if (!user) {
+      setFriends([]);
+      setLoaded(true);
+      return;
+    }
     try {
       const res = await fetch(`${API_BASE}/api/friends`, { credentials: "include" });
       if (!res.ok) return;
       const data = await res.json();
       setFriends(data.friends ?? []);
+      setLoaded(true);
     } catch {
       // Keep whatever was on screen; the next event or reconnect will correct it.
     }
@@ -112,7 +124,7 @@ export function useFriends() {
     };
   }, [user]);
 
-  return { friends, refresh };
+  return { friends, refresh, loaded };
 }
 
 export function FriendsPanel({
@@ -125,7 +137,7 @@ export function FriendsPanel({
   roomId?: string;
 }) {
   const { user } = useAuth();
-  const { friends, refresh } = useFriends();
+  const { friends, refresh, loaded } = useFriends();
   const navigate = useNavigate();
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -245,12 +257,17 @@ export function FriendsPanel({
                 title={`Message ${friend.name}`}
                 onClick={() => setTalkingTo(friend.id)}
               >
-                <span className={`friend-status ${presence}`} aria-hidden="true" />
+                {/* The dot and the row's dimming already carry online /
+                    offline, so spelling it out beside them was the same fact
+                    three times. "in a room" stays: that one is an invitation
+                    to go and join them, not a status. The word moves onto the
+                    dot as its label so nothing is lost to a screen reader. */}
+                <span className={`friend-status ${presence}`} title={presenceLabel(presence)}>
+                  <span className="sr-only">{presenceLabel(presence)}</span>
+                </span>
                 <span className="friend-name">{friend.name}</span>
-                {!here && (
-                  <span className="friend-where">
-                    {presence === "in-room" ? "in a room" : presence}
-                  </span>
+                {!here && presence === "in-room" && (
+                  <span className="friend-where">in a room</span>
                 )}
                 {friend.unread > 0 && <span className="friend-unread">{friend.unread}</span>}
               </button>
@@ -290,7 +307,7 @@ export function FriendsPanel({
         })}
       </ul>
 
-      {accepted.length === 0 && incoming.length === 0 && (
+      {loaded && accepted.length === 0 && incoming.length === 0 && (
         <p className="friends-empty">
           No friends yet — swap codes with someone and they'll show up here whenever they're
           around, watching something or not.
@@ -397,9 +414,11 @@ function Conversation({ friend, onBack }: { friend: Friend; onBack: () => void }
         <button className="dm-back" onClick={onBack} aria-label="Back to friends">
           ←
         </button>
-        <span className={`friend-status ${presence}`} aria-hidden="true" />
+        <span className={`friend-status ${presence}`} title={presenceLabel(presence)}>
+          <span className="sr-only">{presenceLabel(presence)}</span>
+        </span>
         <span className="dm-with">{friend.name}</span>
-        <span className="friend-where">{presence === "in-room" ? "in a room" : presence}</span>
+        {presence === "in-room" && <span className="friend-where">in a room</span>}
       </div>
 
       {/* Said up front rather than in a footer nobody scrolls to: how long

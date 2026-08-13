@@ -164,22 +164,43 @@ function InputLine({
   const [sel, setSel] = useState(0);
   useEffect(() => setSel(0), [line]);
 
-  // The two kinds of suggestion this line can be growing: a "/" command, or a
-  // ":code" emoji anywhere mid-message.
-  const commandMatches = line.startsWith("/") ? matchCommands(line.slice(1)) : [];
-  const commands = commandMatches.slice(0, SUGGESTIONS_VISIBLE);
+  // The three kinds of suggestion this line can be growing: a "/" command, a
+  // ":code" emoji anywhere mid-message, or the query being typed after
+  // "/emoji" — which is a search box, so it should be answering as it's typed
+  // rather than making anyone press Enter to see what they asked for.
+  const emojiCommand = /^\/emoji(?:\s+(.*))?$/i.exec(line);
+  const commandMatches = line.startsWith("/") && !emojiCommand ? matchCommands(line.slice(1)) : [];
   const token = line.startsWith("/") ? null : emojiToken(line);
-  const emojiMatches = token ? matchEmojis(token) : [];
-  const emojis: EmojiSuggestion[] = emojiMatches.slice(0, SUGGESTIONS_VISIBLE).map((e) => {
-    const name = e.names.find((n) => n.includes(token!.toLowerCase())) ?? e.names[0];
+  const emojiMatches = emojiCommand
+    ? // "/emoji" on its own browses the lot; "/emoji smi" narrows it.
+      matchEmojis((emojiCommand[1] ?? "").trim())
+    : token
+      ? matchEmojis(token)
+      : [];
+  const query = emojiCommand ? (emojiCommand[1] ?? "").trim() : token;
+  // The selection moves through everything that matched, not just the rows
+  // that fit — so the list scrolls under it once the pick reaches the bottom.
+  const total = emojiMatches.length || commandMatches.length;
+  const selected = total ? Math.min(sel, total - 1) : 0;
+  const first = Math.max(0, Math.min(selected - SUGGESTIONS_VISIBLE + 1, total - SUGGESTIONS_VISIBLE));
+  const window = { from: Math.max(0, first), to: Math.max(0, first) + SUGGESTIONS_VISIBLE };
+
+  const commands = emojiMatches.length ? [] : commandMatches.slice(window.from, window.to);
+  const emojis: EmojiSuggestion[] = emojiMatches.slice(window.from, window.to).map((e) => {
+    const q = (query ?? "").toLowerCase();
+    const name = e.names.find((n) => n.includes(q)) ?? e.names[0];
     return { char: e.char, name, aliases: e.names.filter((n) => n !== name) };
   });
-  const rows = emojis.length || commands.length;
-  const selected = Math.min(sel, Math.max(0, rows - 1));
+  const rows = total;
+  // Where the highlight sits within the window that's actually on screen.
+  const selectedRow = selected - window.from;
 
   // Swaps the half-typed :code for the picked emoji, leaving the rest of the
-  // message exactly as it was.
+  // message exactly as it was. Picking one out of "/emoji smi" instead leaves
+  // just the emoji on the line, ready to send — the query was the search, not
+  // the message.
   const acceptEmoji = (e: EmojiSuggestion) => {
+    if (emojiCommand) return onChange(e.char);
     onChange(line.slice(0, line.length - token!.length - 1) + e.char);
   };
 
@@ -189,7 +210,7 @@ function InputLine({
       // With an emoji list on offer, Enter takes the picked one — sending the
       // half-typed ":hea" as chat is never what anyone meant. The next Enter
       // sends the message, emoji and all.
-      if (emojis.length > 0) return acceptEmoji(emojis[selected]);
+      if (emojiMatches.length > 0) return acceptEmoji(emojis[selectedRow]);
       const value = line.trim();
       onChange("");
       if (value) onSubmit(value);
@@ -205,8 +226,8 @@ function InputLine({
     // Tab finishes whichever row is highlighted in the list already on screen
     // — the emoji it names, or the command it spells out.
     if (key.tab) {
-      if (emojis.length > 0) return acceptEmoji(emojis[selected]);
-      const finished = completionOf(commands[selected], line);
+      if (emojiMatches.length > 0) return acceptEmoji(emojis[selectedRow]);
+      const finished = completionOf(commands[selectedRow], line);
       if (finished) onChange(finished);
       return;
     }
@@ -230,8 +251,8 @@ function InputLine({
         line={line}
         commands={commands}
         emojis={emojis}
-        hidden={Math.max(commandMatches.length, emojiMatches.length) - rows}
-        selected={selected}
+        hidden={total - (emojis.length || commands.length) - window.from}
+        selected={selectedRow}
         signedIn={signedIn}
         accountsEnabled={accountsEnabled}
       />
@@ -283,11 +304,24 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
     const t = setInterval(() => setDotFrame((f) => (f + 1) % 3), 400);
     return () => clearInterval(t);
   }, [s.typers.length > 0]);
+  // The server's clock, and stepped on ITS second boundaries. roomCreatedAt is
+  // a server timestamp, so counting from a local Date.now() measures how wrong
+  // this machine's clock is rather than how old the room is. And a plain
+  // 1000ms interval starts on whatever phase it happened to start on, so two
+  // clients showing the same room sat a second apart forever; waking just
+  // after each whole second of room age puts every client on the same step.
   useEffect(() => {
-    if (!s.roomCreatedAt) return;
-    const t = setInterval(() => setClock(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [s.roomCreatedAt]);
+    const createdAt = s.roomCreatedAt;
+    if (!createdAt) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const now = session.serverNow();
+      setClock(now);
+      timer = setTimeout(tick, 1000 - ((now - createdAt) % 1000) + 5);
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [s.roomCreatedAt, session]);
 
   // The first thing someone new needs is the way to find everything else. Once
   // per run, on the way in — /join and /accept rejoin, and being told this

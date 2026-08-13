@@ -211,7 +211,8 @@ export class Session extends EventEmitter {
     }
   }
 
-  private serverNow() {
+  /** The server's clock, not this machine's — see clockOffset. */
+  serverNow() {
     return Date.now() + this.clockOffset;
   }
 
@@ -679,6 +680,17 @@ export class Session extends EventEmitter {
     if (!mpv) return;
     try {
       if (!state.videoId) return;
+
+      // A pick of our own is mid-flight and this isn't it. Ignore it: yt-dlp
+      // takes seconds to resolve a stream, and while it does, the room keeps
+      // resyncing whatever is still playing elsewhere. Acting on that reloads
+      // the outgoing video, moves currentVideo off our pick, and playNow then
+      // finds itself superseded and never announces — so picking a video from
+      // the terminal did nothing at all whenever a browser was mid-playback.
+      if (this.pendingLocal && this.pendingLocal !== state.videoId) {
+        this.dbg("applyState ignored: local pick in flight", this.pendingLocal, "vs", state.videoId);
+        return;
+      }
 
       if (state.videoId !== this.currentVideo) {
         if ((this.loadFailures.get(state.videoId) ?? 0) >= 3) return;

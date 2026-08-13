@@ -262,6 +262,7 @@ function Room() {
   );
   const [emojiOpen, setEmojiOpen] = useState(false);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const fsChatInputRef = useRef<HTMLInputElement | null>(null);
   // Mirror for the socket handler, which is registered once and would
   // otherwise close over a stale value.
   const chatMutedRef = useRef(chatMuted);
@@ -728,10 +729,20 @@ function Room() {
   // wrong this computer's clock is. A laptop running 45 minutes fast showed
   // every brand-new room as 45 minutes old. Playback already corrects for this
   // (see clockOffsetRef); the uptime display simply wasn't using it.
+  // Stepped on the server's second boundaries, not on whatever phase this
+  // interval happened to start on — otherwise two clients watching the same
+  // room sit a second apart indefinitely, which is what made a browser and a
+  // terminal disagree about the same room's age.
   useEffect(() => {
     if (!roomCreatedAt) return;
-    const t = window.setInterval(() => setUptimeTick(serverNow()), 1000);
-    return () => window.clearInterval(t);
+    let timer: number;
+    const tick = () => {
+      const now = serverNow();
+      setUptimeTick(now);
+      timer = window.setTimeout(tick, 1000 - ((now - roomCreatedAt) % 1000) + 5);
+    };
+    tick();
+    return () => window.clearTimeout(timer);
   }, [roomCreatedAt]);
 
   // Friends live behind a toolbar menu rather than under the video: listed
@@ -1525,6 +1536,47 @@ function Room() {
 
   // The message list, rendered identically wherever the chat appears. Both
   // views read the same messages array — one state, two views.
+  // The picker is the same in both places the chat bar appears; only which
+  // input it types into differs. It was written inline in the page chat, which
+  // is why the fullscreen overlay — same conversation, same draft — had no way
+  // to reach the emoji at all.
+  const renderEmojiPanel = (target: React.RefObject<HTMLInputElement | null>) =>
+    emojiOpen && (
+      <div className="emoji-panel">
+        <input
+          className="emoji-search"
+          value={emojiQuery}
+          onChange={(e) => setEmojiQuery(e.target.value)}
+          placeholder="Search emoji…"
+          autoFocus
+        />
+        <div className="emoji-grid">
+          {searchEmojis(emojiQuery).map((e) => (
+            <button
+              key={e.char}
+              title={`:${e.names[0]}:`}
+              onClick={() => {
+                setChatInput((v) => v + e.char);
+                target.current?.focus();
+              }}
+            >
+              {e.char}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+
+  const renderEmojiToggle = () => (
+    <button
+      className="emoji-toggle"
+      onClick={() => setEmojiOpen((open) => !open)}
+      aria-label="Emoji picker"
+    >
+      😊
+    </button>
+  );
+
   const renderChatMessages = () =>
     messages.length === 0 ? (
       <p className="chat-empty">No messages yet — say hi 👋</p>
@@ -2054,14 +2106,18 @@ function Room() {
                     <div className="chat-messages" ref={fsChatListRef}>
                       {renderChatMessages()}
                     </div>
+                    {renderEmojiPanel(fsChatInputRef)}
                     <div className="fs-chat-bar">
+                      {renderEmojiToggle()}
                       <input
+                        ref={fsChatInputRef}
                         value={chatInput}
                         onChange={(e) => handleChatInputChange(e.target.value)}
                         placeholder="Send a message..."
                         maxLength={500}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") sendChat();
+                          if (e.key === "Escape") setEmojiOpen(false);
                         }}
                       />
                       <button onClick={sendChat}>Send</button>
@@ -2223,39 +2279,9 @@ function Room() {
               </p>
             )}
             <div className="chat-bar-wrap">
-              {emojiOpen && (
-                <div className="emoji-panel">
-                  <input
-                    className="emoji-search"
-                    value={emojiQuery}
-                    onChange={(e) => setEmojiQuery(e.target.value)}
-                    placeholder="Search emoji…"
-                    autoFocus
-                  />
-                  <div className="emoji-grid">
-                    {searchEmojis(emojiQuery).map((e) => (
-                      <button
-                        key={e.char}
-                        title={`:${e.names[0]}:`}
-                        onClick={() => {
-                          setChatInput((v) => v + e.char);
-                          chatInputRef.current?.focus();
-                        }}
-                      >
-                        {e.char}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+              {renderEmojiPanel(chatInputRef)}
               <div className="load-bar chat-bar">
-                <button
-                  className="emoji-toggle"
-                  onClick={() => setEmojiOpen((open) => !open)}
-                  aria-label="Emoji picker"
-                >
-                  😊
-                </button>
+                {renderEmojiToggle()}
                 <input
                   ref={chatInputRef}
                   value={chatInput}

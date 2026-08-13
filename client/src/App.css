@@ -529,6 +529,32 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+/* The picker floats above the page chat's bar, but .fs-chat is itself the
+   positioned ancestor here — floating it would put it above the whole panel
+   and off the top of the screen. In fullscreen it just takes its place in the
+   column instead, above the bar, dressed for the dark overlay. */
+.fs-chat .emoji-panel {
+  position: static;
+  background: rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+.fs-chat .emoji-panel .emoji-grid {
+  max-height: 9rem;
+}
+
+.fs-chat .emoji-search {
+  background: rgba(0, 0, 0, 0.5);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.fs-chat .emoji-panel button {
+  color: #fff;
+}
+
 /* ---- End-of-video ---- */
 
 /* "Up next" pill during the last seconds — top-left, clear of the player's
@@ -2248,4 +2274,18 @@ button:disabled {
    dialog the flex gap already provides that. */
 .report-error {
   margin: 0;
+}
+
+/* Present to a screen reader, absent on screen — for facts the design carries
+   visually (a coloured dot, a dimmed row) that would otherwise be lost. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
