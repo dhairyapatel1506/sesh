@@ -1838,24 +1838,46 @@ button:disabled {
    breakpoint (phones/tablets) the default stacked layout applies, same as
    the YouTube app's video-on-top-chat-below pattern. */
 @media (min-width: 900px) {
+  /* The frame around the whole app is 1126px wide (see #root in index.css),
+     which is a reading width — right for the landing page, and what was
+     actually capping the room however wide this said. The room widens the
+     frame itself below; this just stops fighting it. */
   .app.room {
-    max-width: 1180px;
+    max-width: none;
   }
 
+  /* A grid, not a row, because the recommendations column belongs in a
+     different place depending on how much width there is: beside the video
+     when the page has spare margin, tucked under the chat when it doesn't.
+     Named areas move it without the markup knowing anything about it.
+
+     start, not stretch: the chat sizes itself to the player rather than to
+     the whole column. Anything under the video (the queue) would otherwise
+     push the chat's composer down the page, so sending a message meant
+     scrolling past it. */
   .room-main {
-    display: flex;
-    /* flex-start, not stretch: the chat sizes itself to the player below
-       rather than to the whole left column. Anything under the video (the
-       queue) would otherwise push the chat's composer down the page, so
-       sending a message meant scrolling past it. */
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-areas:
+      "video chat"
+      "video recs";
+    align-items: start;
     gap: 1.25rem;
     /* Lets the chat work out the player's height from the row's width. */
     container-type: inline-size;
   }
 
   .room-video {
-    flex: 1;
+    grid-area: video;
+    min-width: 0;
+  }
+
+  .room-chat {
+    grid-area: chat;
+  }
+
+  .room-recs {
+    grid-area: recs;
     min-width: 0;
   }
 
@@ -1874,8 +1896,6 @@ button:disabled {
      min-height only matters on a narrow desktop or before a video loads. */
   .room-chat {
     position: relative;
-    width: 320px;
-    flex-shrink: 0;
     height: calc((100cqw - 320px - 1.25rem) * 0.5625);
     min-height: 15rem;
   }
@@ -1891,14 +1911,6 @@ button:disabled {
     flex: 1;
     max-height: none;
     min-height: 0;
-  }
-}
-
-/* More room for the picture on a large screen. The chat rail is a fixed
-   width, so everything past 1180px goes to the video. */
-@media (min-width: 1400px) {
-  .app.room {
-    max-width: 1340px;
   }
 }
 
@@ -2303,45 +2315,61 @@ button:disabled {
   overflow-y: auto;
 }
 
-/* The right-hand column: chat, then recommendations underneath it. The chat
-   is sized to the player's height, so on any reasonable screen the column ran
-   out of content well before the page did — this is that space, used. */
-.room-side {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-@media (min-width: 900px) {
-  .room-side {
-    width: 320px;
-    flex-shrink: 0;
-  }
-
-  .room-side .room-chat {
-    width: auto;
-  }
-
-  /* Tall enough to be worth having, capped so the page doesn't grow a screen
-     and a half of suggestions below the fold. */
-  .room-side .recommended .queue-list {
-    max-height: 26rem;
-    overflow-y: auto;
-  }
-}
 
 /* Narrow rows: this column is 320px, not the width of the video. */
-.room-side .recommended .queue-item img {
+.room-recs .recommended .queue-item img {
   width: 72px;
 }
 
 /* Two lines rather than one: a 320px column truncates most video titles to
    "Luis Fonsi - Qu…", which is not enough to choose from. */
-.room-side .recommended .queue-title {
+.room-recs .recommended .queue-title {
   font-size: 0.82rem;
   white-space: normal;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   line-height: 1.25;
+}
+
+
+/* ---- How wide the room gets ----
+
+   Only the room asks for more than the reading-width frame; the landing page
+   and the rest still want to be a column of text. :has() scopes it to the one
+   page that wants it without the markup having to reach outside itself.
+
+   Three columns are not free: two 320px rails and their gaps take 685px, and
+   that comes out of the picture. Below ~1600px of viewport the video ends up
+   SMALLER with the recommendations beside it than with them under the chat,
+   so the switch waits until the screen can pay for it — at which point the
+   video is bigger than it ever was in two columns, because everything past
+   the fixed rails goes to the picture. */
+@media (min-width: 1200px) {
+  #root:has(.app.room) {
+    width: 1180px;
+  }
+}
+
+@media (min-width: 1600px) {
+  #root:has(.app.room) {
+    /* Grows with the screen rather than in steps, up to a point past which a
+       wider video stops being a better one. */
+    width: min(1660px, calc(100vw - 3rem));
+  }
+
+  .room-main {
+    grid-template-columns: 320px minmax(0, 1fr) 320px;
+    grid-template-areas: "recs video chat";
+  }
+
+  .room-chat {
+    height: calc((100cqw - 640px - 2.5rem) * 0.5625);
+  }
+
+  /* Matched to the player, so the three columns end level rather than one
+     rail trailing half a screen below the others. */
+  .room-recs .recommended .queue-list {
+    max-height: calc((100cqw - 640px - 2.5rem) * 0.5625 - 3.5rem);
+  }
 }

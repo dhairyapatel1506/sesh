@@ -2316,8 +2316,7 @@ function Room() {
 
         </div>
 
-        <div className="room-side">
-          <div className="room-chat">
+        <div className="room-chat">
           <div className="chat">
             <div className="chat-head">
               <span>Chat</span>
@@ -2358,46 +2357,48 @@ function Room() {
               </div>
             </div>
           </div>
-          </div>
-          {/* Down the side, where YouTube puts them and where the chat leaves
-              the column empty anyway. Under the video they were a third thing
-              stacked below a second thing, so seeing them meant scrolling past
-              everything else. */}
-          {hasRecommendations && (
+        </div>
+
+        {/* Down the side, where YouTube puts them and where the chat leaves
+            the column empty anyway. Under the video they were a third thing
+            stacked below a second thing, so seeing them meant scrolling past
+            everything else. */}
+        {hasRecommendations && (
+          <div className="room-recs">
             <div className="queue recommended">
               <div className="queue-head">
                 <span>Recommended</span>
               </div>
-      <ul className="queue-list recommended-list">
-        {(related ?? []).map((r) => (
-          <li key={r.videoId} className="queue-item">
-            <img src={r.thumbnail} alt="" loading="lazy" />
-            <span className="queue-info">
-              <span className="queue-title">{r.title}</span>
-              <span className="queue-meta">{r.channel}</span>
-            </span>
-            <button
-              className="queue-action"
-              title="Play now"
-              aria-label={`Play ${r.title} now`}
-              onClick={() => loadVideo(r.videoId)}
-            >
-              ▶
-            </button>
-            <button
-              className="queue-action"
-              title="Add to queue"
-              aria-label={`Add ${r.title} to the queue`}
-              onClick={() => socket.emit("queue:add", { videoId: r.videoId, title: r.title })}
-            >
-              +
-            </button>
-          </li>
-        ))}
-      </ul>
+              <ul className="queue-list recommended-list">
+                {(related ?? []).map((r) => (
+                  <li key={r.videoId} className="queue-item">
+                    <img src={r.thumbnail} alt="" loading="lazy" />
+                    <span className="queue-info">
+                      <span className="queue-title">{r.title}</span>
+                      <span className="queue-meta">{r.channel}</span>
+                    </span>
+                    <button
+                      className="queue-action"
+                      title="Play now"
+                      aria-label={`Play ${r.title} now`}
+                      onClick={() => loadVideo(r.videoId)}
+                    >
+                      ▶
+                    </button>
+                    <button
+                      className="queue-action"
+                      title="Add to queue"
+                      aria-label={`Add ${r.title} to the queue`}
+                      onClick={() => socket.emit("queue:add", { videoId: r.videoId, title: r.title })}
+                    >
+                      +
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Below everything, deliberately: something went wrong is worth telling
