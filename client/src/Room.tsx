@@ -301,6 +301,7 @@ function Room() {
     return () => window.clearTimeout(t);
   }, [waitingForRoom]);
   const [related, setRelated] = useState<RelatedResult[] | null>(null);
+  const hasRecommendations = Boolean(videoId && related && related.length > 0);
   const [upnext, setUpnext] = useState<UpNextPick | null>(null);
 
   // Latest authoritative playback state (from the server or our own emits),
@@ -2182,19 +2183,6 @@ function Room() {
                   {playerError} Try pasting a different link.
                 </p>
               )}
-              {!isFullscreen && (
-                <div className="player-controls">
-                  {waitingForRoom && (
-                    <span className="player-waiting">Starting together…</span>
-                  )}
-                  <button className="player-fs-button" onClick={toggleFullscreen}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                      <path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4z" />
-                    </svg>
-                    Fullscreen
-                  </button>
-                </div>
-              )}
               <p className="pip-hint">
                 Tip: go fullscreen, then press home — the video pops out and keeps playing while
                 you use other apps.
@@ -2205,11 +2193,19 @@ function Room() {
             <p className="empty-state">Paste a YouTube link above to start a sesh.</p>
           )}
 
+          {/* Everything that belongs under the video shares one panel and one
+              header row. Stacked, they pushed each other down the page: the
+              fullscreen button had a row to itself, which shoved "Up next"
+              below the fold, and recommendations sat below that again. As
+              tabs they cost one row between them, and the fullscreen button
+              rides along in the same row rather than claiming another. */}
           {(queue.length > 0 || radio.available) && (
-            <div className="queue">
-              <div className="queue-head">
-                <span>Up next</span>
+            <div className="queue under-player">
+              <div className="queue-head under-tabs">
+                <span className="under-title">Up next</span>
                 {queue.length > 0 && <span className="queue-count">{queue.length}</span>}
+                <span className="under-spacer" />
+                {waitingForRoom && <span className="player-waiting">Starting together…</span>}
                 {/* The checkbox shows the room's setting, never this tab's
                     intention: the emit is answered with a radio:state to
                     everyone, which is what moves it. So a click that doesn't
@@ -2224,6 +2220,14 @@ function Room() {
                     />
                     Autoplay
                   </label>
+                )}
+                {!isFullscreen && (
+                  <button className="player-fs-button" onClick={toggleFullscreen} title="Fullscreen">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4z" />
+                    </svg>
+                    Fullscreen
+                  </button>
                 )}
               </div>
               {radio.available && (
@@ -2309,52 +2313,11 @@ function Room() {
             </div>
           )}
 
-          {/* What YouTube would show down the right-hand side of a watch page,
-              except these play in the room. It exists because the ones inside
-              the player can't: the embed is sandboxed, so clicking one of
-              YouTube's own recommendations does nothing, and there is no way
-              for this page to see a click inside someone else's iframe, let
-              alone redirect it. So rather than fight for those tiles, here are
-              our own — same source (YouTube's mix for whatever is playing),
-              already filtered to videos that really play embedded. */}
-          {videoId && related && related.length > 0 && (
-            <div className="queue recommended">
-              <div className="queue-head">
-                <span>Recommended</span>
-              </div>
-              <ul className="queue-list">
-                {related.map((r) => (
-                  <li key={r.videoId} className="queue-item">
-                    <img src={r.thumbnail} alt="" loading="lazy" />
-                    <span className="queue-info">
-                      <span className="queue-title">{r.title}</span>
-                      <span className="queue-meta">{r.channel}</span>
-                    </span>
-                    <button
-                      className="queue-action"
-                      title="Play now"
-                      aria-label={`Play ${r.title} now`}
-                      onClick={() => loadVideo(r.videoId)}
-                    >
-                      ▶
-                    </button>
-                    <button
-                      className="queue-action"
-                      title="Add to queue"
-                      aria-label={`Add ${r.title} to the queue`}
-                      onClick={() => socket.emit("queue:add", { videoId: r.videoId, title: r.title })}
-                    >
-                      +
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
 
         </div>
 
-        <div className="room-chat">
+        <div className="room-side">
+          <div className="room-chat">
           <div className="chat">
             <div className="chat-head">
               <span>Chat</span>
@@ -2395,6 +2358,45 @@ function Room() {
               </div>
             </div>
           </div>
+          </div>
+          {/* Down the side, where YouTube puts them and where the chat leaves
+              the column empty anyway. Under the video they were a third thing
+              stacked below a second thing, so seeing them meant scrolling past
+              everything else. */}
+          {hasRecommendations && (
+            <div className="queue recommended">
+              <div className="queue-head">
+                <span>Recommended</span>
+              </div>
+      <ul className="queue-list recommended-list">
+        {(related ?? []).map((r) => (
+          <li key={r.videoId} className="queue-item">
+            <img src={r.thumbnail} alt="" loading="lazy" />
+            <span className="queue-info">
+              <span className="queue-title">{r.title}</span>
+              <span className="queue-meta">{r.channel}</span>
+            </span>
+            <button
+              className="queue-action"
+              title="Play now"
+              aria-label={`Play ${r.title} now`}
+              onClick={() => loadVideo(r.videoId)}
+            >
+              ▶
+            </button>
+            <button
+              className="queue-action"
+              title="Add to queue"
+              aria-label={`Add ${r.title} to the queue`}
+              onClick={() => socket.emit("queue:add", { videoId: r.videoId, title: r.title })}
+            >
+              +
+            </button>
+          </li>
+        ))}
+      </ul>
+            </div>
+          )}
         </div>
       </div>
 
