@@ -286,6 +286,20 @@ function Room() {
   // video has ended (drives the overlay), what /api/related suggested for it,
   // and the radio's announced next pick (radio:upnext).
   const [ended, setEnded] = useState(false);
+  // A synchronized start is in flight: this tab has buffered and is waiting on
+  // the rest of the room. It shows as a paused player at 0:00, which reads as
+  // "broken, click me" — especially when a terminal client is in the room,
+  // since resolving a stream with yt-dlp legitimately takes seconds and the
+  // room deliberately waits rather than leaving it behind.
+  const [waitingForRoom, setWaitingForRoom] = useState(false);
+  // Belt and braces: the label is a reassurance, so it must never become the
+  // lie it was meant to prevent. The server's barrier gives up long before
+  // this does.
+  useEffect(() => {
+    if (!waitingForRoom) return;
+    const t = window.setTimeout(() => setWaitingForRoom(false), 50_000);
+    return () => window.clearTimeout(t);
+  }, [waitingForRoom]);
   const [related, setRelated] = useState<RelatedResult[] | null>(null);
   const [upnext, setUpnext] = useState<UpNextPick | null>(null);
 
@@ -901,7 +915,17 @@ function Room() {
       // whole app.
       const target = document.createElement("iframe");
       target.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation");
-      target.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture");
+      // Exactly what the API sets on the iframe it builds for itself. Trimming
+      // this list is how the share button broke: it needs clipboard-write to
+      // copy a link and web-share to hand one to the OS, and without them it
+      // opens and then can't do anything. Permissions Policy is a separate
+      // mechanism from the sandbox above — this grants the embed browser
+      // features, the sandbox withholds the ability to navigate away.
+      target.setAttribute(
+        "allow",
+        "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+      );
+      target.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
       target.setAttribute("frameborder", "0");
       target.width = "640";
       target.height = "390";
@@ -1151,6 +1175,7 @@ function Room() {
 
     const onVideoLoad = ({ videoId: id }: { videoId: string }) => {
       prepareRef.current = null; // a user's pick overrides a prepare in flight
+      setWaitingForRoom(false);
       // Somebody picked this — the server marks the room as playing it from
       // the top in the same breath. So this means "we're all watching this
       // now", not "here's a video to look at". Cueing it (thumbnail, big play
@@ -1175,6 +1200,7 @@ function Room() {
       pendingStateRef.current = state;
       lastStateRef.current = state;
       setPlayerError(null);
+      setWaitingForRoom(true);
       if (playerRef.current) {
         prepareRef.current = id;
         prepareUnmuteRef.current = !playerRef.current.isMuted();
@@ -1201,6 +1227,7 @@ function Room() {
       // to PLAYING (slow — the timeout opened it), stop treating the eventual
       // PLAYING as a prepare signal or it would pause the real playback.
       prepareRef.current = null;
+      setWaitingForRoom(false);
       const eventVideoId = id ?? videoId;
       if (!eventVideoId) return;
       const state: RoomState = { videoId: eventVideoId, isPlaying: true, time, at };
@@ -1216,6 +1243,7 @@ function Room() {
 
     const onVideoPause = ({ time, at, videoId: id }: { time: number; at: number; videoId?: string | null }) => {
       prepareRef.current = null;
+      setWaitingForRoom(false);
       const eventVideoId = id ?? videoId;
       if (!eventVideoId) return;
       const state: RoomState = { videoId: eventVideoId, isPlaying: false, time, at };
@@ -2144,6 +2172,9 @@ function Room() {
               )}
               {!isFullscreen && (
                 <div className="player-controls">
+                  {waitingForRoom && (
+                    <span className="player-waiting">Starting together…</span>
+                  )}
                   <button className="player-fs-button" onClick={toggleFullscreen}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                       <path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4z" />

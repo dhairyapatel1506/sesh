@@ -358,6 +358,7 @@ button:disabled {
    out of YouTube's way entirely. */
 .player-controls {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   max-width: 640px;
   margin: 0.5rem auto 0;
@@ -2259,4 +2260,13 @@ button:disabled {
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Says the pause is the room waiting, not the player being stuck. Sits in the
+   row under the player with the fullscreen button — never over the picture. */
+.player-waiting {
+  margin-right: auto;
+  align-self: center;
+  font-size: 0.85rem;
+  color: var(--text);
 }
