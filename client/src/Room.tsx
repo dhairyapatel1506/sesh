@@ -301,7 +301,6 @@ function Room() {
     return () => window.clearTimeout(t);
   }, [waitingForRoom]);
   const [related, setRelated] = useState<RelatedResult[] | null>(null);
-  const hasRecommendations = Boolean(videoId && related && related.length > 0);
   const [upnext, setUpnext] = useState<UpNextPick | null>(null);
 
   // Latest authoritative playback state (from the server or our own emits),
@@ -2221,7 +2220,7 @@ function Room() {
                     Autoplay
                   </label>
                 )}
-                {!isFullscreen && (
+                {videoId && !isFullscreen && (
                   <button className="player-fs-button" onClick={toggleFullscreen} title="Fullscreen">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                       <path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4z" />
@@ -2363,12 +2362,21 @@ function Room() {
             the column empty anyway. Under the video they were a third thing
             stacked below a second thing, so seeing them meant scrolling past
             everything else. */}
-        {hasRecommendations && (
+        {/* Present as soon as there is a video, not once the suggestions land:
+            the column's existence is what decides the page's whole shape (see
+            :has(.room-recs) in App.css), so appearing a second late would
+            widen the frame and re-lay the room out under whoever was already
+            watching. It holds its place and fills in. */}
+        {videoId && (
           <div className="room-recs">
             <div className="queue recommended">
               <div className="queue-head">
                 <span>Recommended</span>
               </div>
+              {related === null && <p className="autoplay-note">Looking for something…</p>}
+              {related !== null && related.length === 0 && (
+                <p className="autoplay-note">Nothing to suggest for this one.</p>
+              )}
               <ul className="queue-list recommended-list">
                 {(related ?? []).map((r) => (
                   <li key={r.videoId} className="queue-item">

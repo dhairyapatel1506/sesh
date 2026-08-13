@@ -1472,7 +1472,22 @@ button:disabled {
   cursor: pointer;
 }
 
+/* Stands where the player will stand — same width, same 16:9 box — so a room
+   waiting for its first video is the room it is about to become, with "Up
+   next" already in its final position rather than jumping down the page the
+   moment somebody pastes a link. */
 .empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1rem;
+  box-sizing: border-box;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
   color: var(--text);
   opacity: 0.8;
 }
@@ -1881,8 +1896,16 @@ button:disabled {
     min-width: 0;
   }
 
+  /* .queue's top margin spaces it from whatever it sits under. At the top of
+     its own column there is nothing above it, and the margin left it a
+     centimetre lower than the video and the chat it should line up with. */
+  .room-recs .queue {
+    margin-top: 0;
+  }
+
   .room-video #yt-player,
-  .room-video .player-frame {
+  .room-video .player-frame,
+  .room-video .empty-state {
     max-width: none;
   }
 
@@ -2362,19 +2385,22 @@ button:disabled {
    number, and the chat's height — which is derived from whatever is left for
    the player — follows it automatically instead of being restated. */
 @media (min-width: 1280px) {
-  #root:has(.app.room) {
+  /* Written as a descendant so this out-specifies the 1200px rule above:
+     :has() takes the specificity of its most specific argument, and a bare
+     .room-recs loses to .app.room. */
+  #root:has(.app.room .room-recs) {
     /* Grows with the screen rather than in steps, up to a point past which a
        wider video stops being a better one. */
     width: min(1660px, calc(100vw - 3rem));
   }
 
-  .room-main {
+  .room-main:has(.room-recs) {
     --rail: 270px;
     grid-template-columns: var(--rail) minmax(0, 1fr) var(--rail);
     grid-template-areas: "recs video chat";
   }
 
-  .room-chat {
+  .room-main:has(.room-recs) .room-chat {
     height: calc((100cqw - var(--rail) * 2 - 2.5rem) * 0.5625);
   }
 
@@ -2388,7 +2414,7 @@ button:disabled {
 /* Enough width that the rails can be comfortable without the video paying
    for it. */
 @media (min-width: 1500px) {
-  .room-main {
+  .room-main:has(.room-recs) {
     --rail: 300px;
   }
 }
