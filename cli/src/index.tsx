@@ -9,28 +9,10 @@ import { Session } from "./session.js";
 import { App } from "./ui.js";
 import type { Account } from "./types.js";
 
-// Read from the manifest rather than hardcoded, so publishing a version can
-// never disagree with the version the thing reports. Relative to dist/, which
-// is where this file lives once built.
-function version(): string {
-  try {
-    const manifest = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
-    return (JSON.parse(manifest) as { version?: string }).version ?? "unknown";
-  } catch {
-    return "unknown";
-  }
-}
+import { command as BIN, defaultServer, version as VERSION } from "./channel.js";
 
-// Where a bare `sesh` connects. A staging build — published under npm's
-// `next` tag with a `-staging` pre-release version, e.g. 0.8.0-staging.1 —
-// points at the staging server, so testing the terminal client against
-// staging is `npm i -g sesh-terminal@next` and nothing else to remember.
-// The version *is* the switch: there's no second field to forget to flip.
-// SESH_SERVER overrides either, for anything unusual.
-const PRODUCTION_SERVER = "https://sesh.dhairya.cloud";
-const STAGING_SERVER = "https://sesh-staging.dhairya.cloud";
-const DEFAULT_SERVER =
-  process.env.SESH_SERVER || (version().includes("-staging") ? STAGING_SERVER : PRODUCTION_SERVER);
+const DEFAULT_SERVER = defaultServer;
+const version = () => VERSION;
 
 // WSL's audio relay (WSLg) wedges often enough that sesh won't play there.
 // Instead of failing mysteriously, hand the session off to the Windows-native
@@ -54,17 +36,17 @@ function windowsHas(command: string): boolean {
 }
 
 function handOffToWindows(args: string[], reason: string): never {
-  if (!windowsHas("sesh")) {
+  if (!windowsHas(BIN)) {
     console.error(
-      "sesh can't play audio reliably under WSL, and no Windows-side install was found to hand off to.\n" +
-        "Install it in PowerShell (see README → Terminal client → Windows), then `sesh` here will open it there.\n" +
+      `${BIN} can't play audio reliably under WSL, and no Windows-side install was found to hand off to.\n` +
+        "Install it in PowerShell (see README → Terminal client → Windows), then `${BIN}` here will open it there.\n" +
         "(Developers: set SESH_ALLOW_WSL=1 to force running in WSL.)",
     );
     process.exit(1);
   }
   const quoted = args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
   // `|| pause` keeps the window around if sesh fails, so errors stay readable.
-  const winCmd = `sesh ${quoted} || pause`;
+  const winCmd = `${BIN} ${quoted} || pause`;
   // cwd must be a Windows-visible path or every interop spawn whines about
   // UNC working directories.
   const opts = { cwd: "/mnt/c", detached: true, stdio: "ignore" as const };
@@ -91,22 +73,23 @@ function generateRoomId(length = 6): string {
 }
 
 function usage(): never {
-  console.log(`sesh — watch2gether from your terminal (audio mode)
+  const c = BIN.padEnd(12);
+  console.log(`${BIN} — watch2gether from your terminal (audio mode)
 
 usage:
-  sesh                                         # create a room
-  sesh <ROOM-CODE> [--name <you>] [--server <url>]
-  sesh login | logout | whoami                 # your sesh account
-  sesh --version
+  ${c}                                    # create a room
+  ${c} <ROOM-CODE> [--name <you>] [--server <url>]
+  ${c} login | logout | whoami            # your sesh account
+  ${c} --version
 
 examples:
-  sesh
-  sesh F3K9QX
-  sesh F3K9QX --name dhairya
-  sesh F3K9QX --server http://localhost:3001   # local dev server
-  sesh login                                   # friends, invites, DMs
+  ${BIN}
+  ${BIN} F3K9QX
+  ${BIN} F3K9QX --name dhairya
+  ${BIN} F3K9QX --server http://localhost:3001   # local dev server
+  ${BIN} login                                   # friends, invites, DMs
 
-sesh ${version()} → ${DEFAULT_SERVER}`);
+${BIN} ${version()} → ${DEFAULT_SERVER}`);
   process.exit(1);
 }
 
@@ -243,8 +226,8 @@ if (isWsl() && !process.env.SESH_ALLOW_WSL) {
       ...(server !== DEFAULT_SERVER ? ["--server", server] : []),
     ],
     command
-      ? "sesh runs on the Windows side under WSL, so it signs in there"
-      : "sesh doesn't play audio reliably under WSL",
+      ? `${BIN} runs on the Windows side under WSL, so it signs in there`
+      : `${BIN} doesn't play audio reliably under WSL`,
   );
 }
 

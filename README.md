@@ -199,7 +199,14 @@ There are two deploys of the same repo, and every change goes through the first 
 
 The flow: commit to `staging` → Render deploys it → test it there → merge `staging` into `main` → Render deploys production. `render.yaml` describes both services; the staging one sets `SESH_ENV=staging`, which puts a small **staging** badge in the corner of every page and reports `"env": "staging"` from `/api/health`, so the two are never mistaken for each other. Staging has its own secrets — in particular its own database (a Neon branch of the production one), so testing never touches real accounts. Sign-in on staging needs the staging origin added to the Google client's authorised JavaScript origins.
 
-The terminal client has the same split: staging builds are published under npm's `next` tag with a `-staging` pre-release version (`0.8.0-staging.1`), and a build whose version says `-staging` connects to the staging server by default. So `npm install -g sesh-terminal@next` is the staging client and `npm install -g sesh-terminal` the production one; `sesh --help` prints which server the installed build talks to, and `SESH_SERVER=<url>` or `--server <url>` overrides it.
+The terminal client has the same split, as two separate npm packages so both can be installed at once and neither ever replaces the other:
+
+| Package | Command | Talks to |
+|---|---|---|
+| `sesh-terminal` | `sesh` | production |
+| `sesh-terminal-staging` | `sesh-staging` | staging |
+
+The staging package is the same code, published by `npm run publish:staging --workspace cli` (add `-- --dry-run` to rehearse), which derives its manifest from the production one at publish time — there is no second `package.json` to keep in step. A build knows which channel it is from its own package name, keeps its saved sign-in separately (`~/.config/sesh-staging/` vs `~/.config/sesh/`), and prints which server it talks to at the bottom of `--help`. `SESH_SERVER=<url>` or `--server <url>` overrides either. Versions move together: staging publishes the version production will publish once it's merged.
 
 ### Getting told about reports (optional)
 
@@ -258,7 +265,8 @@ sesh/
 │       ├── index.ts     # rooms, sync relay, queue, history, chat, search proxy
 │       └── radio.ts     # autoplay + recommendations (YouTube mixes, watch-page Up next)
 ├── cli/             # terminal client (Ink TUI + mpv audio engine)
-│   └── src/         #   published to npm as `sesh-terminal`
+│   ├── src/         #   published to npm as `sesh-terminal` (+ `sesh-terminal-staging`)
+│   ├── scripts/     #   publish-staging.mjs derives the staging package
 │       ├── session.ts   # socket + sync engine port
 │       ├── mpv.ts       # mpv JSON IPC wrapper
 │       └── ui.tsx       # panes: now playing, queue, chat, search

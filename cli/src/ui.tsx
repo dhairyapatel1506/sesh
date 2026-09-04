@@ -6,6 +6,7 @@ import { copyToClipboard, hyperlink } from "./clipboard.js";
 import { emojiToken, matchEmojis, searchEmojis } from "./emoji.js";
 import { extractVideoId, fetchTitle, formatTime, parseTime, search } from "./youtube.js";
 import type { SearchResult } from "./types.js";
+import { command } from "./channel.js";
 
 const CHAT_VISIBLE = 10;
 // A few rows above the prompt, not a menu that swallows the room. Anyone who
@@ -609,7 +610,7 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         session.setStatus(
           s.account
             ? `${s.account.name} · friend code ${s.account.friendCode}`
-            : "not signed in — run `sesh login` in a shell",
+            : `not signed in — run \`${command} login\` in a shell`,
         );
         break;
       case "help":

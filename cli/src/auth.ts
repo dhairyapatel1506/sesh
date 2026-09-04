@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Account } from "./types.js";
+import { command, configName } from "./channel.js";
 
 // Signing a terminal in, without a browser on the machine running it.
 //
@@ -21,9 +22,9 @@ const POLL_INTERVAL_MS = 2000;
 // because a session token is a live credential, not a preference.
 function configDir(): string {
   if (process.platform === "win32") {
-    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "sesh");
+    return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), configName);
   }
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "sesh");
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), configName);
 }
 
 export function authFile(): string {
@@ -157,7 +158,7 @@ export async function runLogin(serverUrl: string): Promise<number> {
     if (result.status === "expired") break;
     process.stdout.write(".");
   }
-  console.error("\n\nthat code expired before it was approved — run `sesh login` again.");
+  console.error(`\n\nthat code expired before it was approved — run \`${command} login\` again.`);
   return 1;
 }
 
@@ -170,14 +171,14 @@ export function runLogout(): number {
 /** `sesh whoami` — asks the server, so an expired token shows up as one. */
 export async function runWhoami(serverUrl: string): Promise<number> {
   if (!loadAuth()) {
-    console.log("not signed in — run `sesh login`.");
+    console.log(`not signed in — run \`${command} login\`.`);
     return 0;
   }
   try {
     const res = await authedFetch(serverUrl, "/api/auth/me");
     const data = (await readJson(res)) as { user?: Account | null };
     if (!res.ok || !data.user) {
-      console.log("your saved sign-in is no longer valid — run `sesh login` again.");
+      console.log(`your saved sign-in is no longer valid — run \`${command} login\` again.`);
       return 1;
     }
     console.log(`${data.user.name} <${data.user.email}>`);
