@@ -9,3 +9,6 @@ dist-ssr
 
 # WSL/NTFS download markers
 *:Zone.Identifier
+
+# Neon CLI project link (ids only, but per-machine)
+.neon
