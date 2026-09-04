@@ -81,13 +81,74 @@ async function mixFor(seed: string): Promise<string[]> {
       ids.push(id);
     }
   }
+  // No mix (YouTube only builds them for music): ask for what YouTube's own
+  // watch page shows beside this video. Free, and right for every kind of
+  // video. The title search stays as the last resort for the day that
+  // endpoint changes shape.
+  if (ids.length === 0) ids = await watchNextFor(seed);
   if (ids.length === 0) ids = await searchLike(seed, key);
   remember(mixCache, seed, { ids, fetchedAt: Date.now() });
   return ids;
 }
 
-// The fallback for everything that isn't music: a search for the video's own
-// title. search.list costs 100 quota units — a hundred times the mix — which
+// The "Up next" column of YouTube's own watch page, fetched the way the page
+// itself fetches it: the internal `next` endpoint, as an anonymous web
+// client. Unofficial, so parsed defensively — walk the whole response for
+// anything shaped like a video card rather than trusting one exact path —
+// and any failure is an empty list, never an error. Costs no API quota, and
+// unlike a mix it exists for every video.
+async function watchNextFor(seed: string): Promise<string[]> {
+  try {
+    const res = await fetch("https://www.youtube.com/youtubei/v1/next?prettyPrint=false", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "accept-language": "en-US,en;q=0.9",
+      },
+      body: JSON.stringify({
+        context: { client: { clientName: "WEB", clientVersion: "2.20240701.00.00", hl: "en", gl: "US" } },
+        videoId: seed,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as Record<string, unknown>;
+    const ids: string[] = [];
+    const seen = new Set<string>([seed]);
+    const add = (id: unknown) => {
+      if (typeof id === "string" && /^[\w-]{11}$/.test(id) && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    };
+    const walk = (node: unknown): void => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      const obj = node as Record<string, any>;
+      // The two card shapes YouTube has used for the sidebar so far.
+      if (obj.compactVideoRenderer?.videoId) add(obj.compactVideoRenderer.videoId);
+      else if (obj.lockupViewModel?.contentType === "LOCKUP_CONTENT_TYPE_VIDEO") add(obj.lockupViewModel.contentId);
+      for (const value of Object.values(obj)) walk(value);
+    };
+    // The sidebar specifically, so the video's own card and the comments'
+    // embedded links don't count as suggestions.
+    const sidebar = (data as any)?.contents?.twoColumnWatchNextResults?.secondaryResults;
+    walk(sidebar ?? data);
+    if (ids.length === 0) console.warn(`radio: watch-next gave nothing for ${seed} (response shape changed?)`);
+    return ids.slice(0, MIX_SIZE);
+  } catch (err) {
+    console.warn("radio: watch-next lookup failed:", (err as Error).message);
+    return [];
+  }
+}
+
+// Last resort, only if the watch-next lookup above came back empty: a search
+// for the video's own title. search.list costs 100 quota units — a hundred times the mix — which
 // against the 10,000/day allowance is about a hundred distinct non-music
 // videos a day before suggestions go quiet until the quota resets. The
 // day-long cache above is what makes that affordable at all.
