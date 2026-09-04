@@ -194,7 +194,7 @@ There are two deploys of the same repo, and every change goes through the first 
 
 | | Branch | URL | Purpose |
 |---|---|---|---|
-| **Staging** | `staging` | staging.dhairya.cloud | where changes land first and get tried out |
+| **Staging** | `staging` | sesh-staging.dhairya.cloud | where changes land first and get tried out |
 | **Production** | `main` | sesh.dhairya.cloud | what everyone uses; only gets what staging has already proven |
 
 The flow: commit to `staging` → Render deploys it → test it there → merge `staging` into `main` → Render deploys production. `render.yaml` describes both services; the staging one sets `SESH_ENV=staging`, which puts a small **staging** badge in the corner of every page and reports `"env": "staging"` from `/api/health`, so the two are never mistaken for each other. Staging has its own secrets — in particular its own database (a Neon branch of the production one), so testing never touches real accounts. Sign-in on staging needs the staging origin added to the Google client's authorised JavaScript origins.

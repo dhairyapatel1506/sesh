@@ -28,7 +28,7 @@ function version(): string {
 // The version *is* the switch: there's no second field to forget to flip.
 // SESH_SERVER overrides either, for anything unusual.
 const PRODUCTION_SERVER = "https://sesh.dhairya.cloud";
-const STAGING_SERVER = "https://staging.dhairya.cloud";
+const STAGING_SERVER = "https://sesh-staging.dhairya.cloud";
 const DEFAULT_SERVER =
   process.env.SESH_SERVER || (version().includes("-staging") ? STAGING_SERVER : PRODUCTION_SERVER);
 

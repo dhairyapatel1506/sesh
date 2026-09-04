@@ -25,7 +25,7 @@ services:
   # Staging: the same app, deployed from the `staging` branch, with its own
   # secrets (a separate Neon database branch, so tests never touch real
   # accounts). Every change lands here first and is merged into main once it
-  # has been tried at staging.dhairya.cloud.
+  # has been tried at sesh-staging.dhairya.cloud.
   - type: web
     name: sesh-staging
     runtime: node
