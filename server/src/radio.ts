@@ -83,10 +83,8 @@ async function mixFor(seed: string): Promise<string[]> {
   }
   // No mix (YouTube only builds them for music): ask for what YouTube's own
   // watch page shows beside this video. Free, and right for every kind of
-  // video. The title search stays as the last resort for the day that
-  // endpoint changes shape.
+  // video.
   if (ids.length === 0) ids = await watchNextFor(seed);
-  if (ids.length === 0) ids = await searchLike(seed, key);
   remember(mixCache, seed, { ids, fetchedAt: Date.now() });
   return ids;
 }
@@ -145,37 +143,6 @@ async function watchNextFor(seed: string): Promise<string[]> {
     console.warn("radio: watch-next lookup failed:", (err as Error).message);
     return [];
   }
-}
-
-// Last resort, only if the watch-next lookup above came back empty: a search
-// for the video's own title. search.list costs 100 quota units — a hundred times the mix — which
-// against the 10,000/day allowance is about a hundred distinct non-music
-// videos a day before suggestions go quiet until the quota resets. The
-// day-long cache above is what makes that affordable at all.
-async function searchLike(seed: string, key: string): Promise<string[]> {
-  await detailsFor([seed]);
-  const title = detailCache.get(seed)?.title;
-  if (!title) return [];
-  const url = new URL("https://www.googleapis.com/youtube/v3/search");
-  url.search = new URLSearchParams({
-    part: "id",
-    q: title,
-    type: "video",
-    videoEmbeddable: "true",
-    videoSyndicated: "true",
-    maxResults: String(MIX_SIZE),
-    key,
-  }).toString();
-  const res = await fetch(url);
-  if (!res.ok) return [];
-  const data = (await res.json()) as { items?: { id?: { videoId?: string } }[] };
-  const ids: string[] = [];
-  for (const item of data.items ?? []) {
-    const id = item.id?.videoId;
-    if (id && id !== seed && !ids.includes(id)) ids.push(id);
-  }
-  console.log(`radio: no mix for ${seed}, searched by title instead (100 quota units, cached a day)`);
-  return ids;
 }
 
 // What videos.list has to be asked before believing a video will embed.

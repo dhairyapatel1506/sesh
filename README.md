@@ -256,7 +256,7 @@ sesh/
 ├── server/          # Express + Socket.IO backend
 │   └── src/
 │       ├── index.ts     # rooms, sync relay, queue, history, chat, search proxy
-│       └── radio.ts     # autoplay + recommendations (YouTube mixes, title search)
+│       └── radio.ts     # autoplay + recommendations (YouTube mixes, watch-page Up next)
 ├── cli/             # terminal client (Ink TUI + mpv audio engine)
 │   └── src/         #   published to npm as `sesh-terminal`
 │       ├── session.ts   # socket + sync engine port
