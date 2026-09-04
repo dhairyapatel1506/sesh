@@ -325,6 +325,21 @@ function Room() {
   // quick succession.
   const suppressUntilRef = useRef(false);
   const suppressTimerRef = useRef<number | undefined>(undefined);
+  // What the suppressed window was opened *for*. An echo can't contradict the
+  // command that caused it: a PAUSED after we asked for play (or a PLAYING
+  // after we asked for pause) is a person, and dropping it left the server
+  // believing the opposite — and its next resync undid the click. The short
+  // grace covers the seek-while-paused echo that lands before play does.
+  const suppressIntentRef = useRef<{ playing: boolean; at: number } | null>(null);
+  const ECHO_GRACE_MS = 250;
+  const contradictsRemote = (playing: boolean) => {
+    const intent = suppressIntentRef.current;
+    return (
+      intent !== null &&
+      intent.playing !== playing &&
+      performance.now() - intent.at > ECHO_GRACE_MS
+    );
+  };
 
   // When the player last started buffering, and when this tab last took a
   // playback action of its own. Both mark "a change is in flight here that the
@@ -332,8 +347,9 @@ function Room() {
   const bufferingSinceRef = useRef<number | null>(null);
   const localActionAtRef = useRef<number | null>(null);
 
-  const applyRemote = (apply: () => void) => {
+  const applyRemote = (apply: () => void, intent?: boolean) => {
     suppressUntilRef.current = true;
+    suppressIntentRef.current = intent === undefined ? null : { playing: intent, at: performance.now() };
     apply();
     window.clearTimeout(suppressTimerRef.current);
     suppressTimerRef.current = window.setTimeout(() => {
@@ -354,8 +370,15 @@ function Room() {
   const recoveringRef = useRef(false);
   const recoverSinceRef = useRef(0);
   const recoverUntilRef = useRef(0);
+  // Alone there's no room to have fallen behind: the anchor is only this
+  // tab's own last report, and nothing corrects towards it (see correctDrift),
+  // so recovery would never end on its own — and for 30s after every tab
+  // switch, a pause from a tab that had stalled even once was thrown away as
+  // "behind the room", and the next resync started the video back up.
   const isRecovering = () =>
-    recoveringRef.current && performance.now() < recoverUntilRef.current;
+    usersRef.current.length > 1 &&
+    recoveringRef.current &&
+    performance.now() < recoverUntilRef.current;
   const [needsUnmute, setNeedsUnmute] = useState(false);
 
   const debugMode = useRef(new URLSearchParams(window.location.search).has("debug")).current;
@@ -489,7 +512,7 @@ function Room() {
       nudgingRef.current = false;
       setRate(1);
       positionSampleRef.current = null;
-      applyRemote(() => player.seekTo(target, true));
+      applyRemote(() => player.seekTo(target, true), true);
       return;
     }
     nudgingRef.current = true;
@@ -698,7 +721,7 @@ function Room() {
         playerRef.current!.seekTo(target, true);
         playerRef.current!.pauseVideo();
       }
-    });
+    }, state.isPlaying);
   };
 
   // Joins are confirmed, not assumed: the room UI renders only after the
@@ -1061,7 +1084,9 @@ function Room() {
             }
             // A hidden tab can't have received a real click.
             if (document.hidden) return;
-            if (suppressUntilRef.current) return;
+            if (suppressUntilRef.current && !contradictsRemote(event.data === PlayerState.PLAYING)) {
+              return;
+            }
             const time = playerRef.current.getCurrentTime();
             // Neither can a tab that's still recovering from having been one.
             // A tab playing *silently* — which every joiner is, since autoplay
