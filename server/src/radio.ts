@@ -63,26 +63,57 @@ async function mixFor(seed: string): Promise<string[]> {
   }).toString();
 
   const res = await fetch(url);
-  // Not every video has a mix — a private upload, something obscure, a video
-  // that's been taken down. A 404 here is an ordinary answer, not a fault.
-  if (!res.ok) {
-    remember(mixCache, seed, { ids: [], fetchedAt: Date.now() });
-    return [];
+  let ids: string[] = [];
+  // Not every video has a mix — YouTube only builds them for music. A 404
+  // here is an ordinary answer, not a fault; what it means is "ask the
+  // expensive way".
+  if (res.ok) {
+    const data = (await res.json()) as {
+      items?: { snippet: { resourceId?: { videoId?: string }; title?: string } }[];
+    };
+    for (const item of data.items ?? []) {
+      const id = item.snippet?.resourceId?.videoId;
+      // A mix always opens with the video it was built from.
+      if (!id || id === seed) continue;
+      // "Deleted video" / "Private video" come back as real entries.
+      const title = item.snippet?.title ?? "";
+      if (title === "Deleted video" || title === "Private video") continue;
+      ids.push(id);
+    }
   }
-  const data = (await res.json()) as {
-    items?: { snippet: { resourceId?: { videoId?: string }; title?: string } }[];
-  };
+  if (ids.length === 0) ids = await searchLike(seed, key);
+  remember(mixCache, seed, { ids, fetchedAt: Date.now() });
+  return ids;
+}
+
+// The fallback for everything that isn't music: a search for the video's own
+// title. search.list costs 100 quota units — a hundred times the mix — which
+// against the 10,000/day allowance is about a hundred distinct non-music
+// videos a day before suggestions go quiet until the quota resets. The
+// day-long cache above is what makes that affordable at all.
+async function searchLike(seed: string, key: string): Promise<string[]> {
+  await detailsFor([seed]);
+  const title = detailCache.get(seed)?.title;
+  if (!title) return [];
+  const url = new URL("https://www.googleapis.com/youtube/v3/search");
+  url.search = new URLSearchParams({
+    part: "id",
+    q: title,
+    type: "video",
+    videoEmbeddable: "true",
+    videoSyndicated: "true",
+    maxResults: String(MIX_SIZE),
+    key,
+  }).toString();
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { items?: { id?: { videoId?: string } }[] };
   const ids: string[] = [];
   for (const item of data.items ?? []) {
-    const id = item.snippet?.resourceId?.videoId;
-    // A mix always opens with the video it was built from.
-    if (!id || id === seed) continue;
-    // "Deleted video" / "Private video" come back as real entries.
-    const title = item.snippet?.title ?? "";
-    if (title === "Deleted video" || title === "Private video") continue;
-    ids.push(id);
+    const id = item.id?.videoId;
+    if (id && id !== seed && !ids.includes(id)) ids.push(id);
   }
-  remember(mixCache, seed, { ids, fetchedAt: Date.now() });
+  console.log(`radio: no mix for ${seed}, searched by title instead (100 quota units, cached a day)`);
   return ids;
 }
 

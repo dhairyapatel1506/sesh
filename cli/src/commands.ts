@@ -68,7 +68,6 @@ export const COMMANDS: readonly Command[] = [
   { name: "dm", args: "<n|name>", desc: "message a friend", hint: "/friends lists them", account: true },
   { name: "room", desc: "back to room chat (Esc does it too)" },
   { name: "whoami", desc: "who this terminal is signed in as" },
-  { name: "voice", desc: "who's in the call + copy the link to join from a browser" },
   {
     name: "help",
     desc: "toggle the help card",

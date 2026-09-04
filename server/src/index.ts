@@ -787,8 +787,13 @@ type PendingStart = {
   startedAt: number; // for the ceiling on extensions — see video:preparing
 };
 
+// What the room has watched, newest first, for going back to something.
+type HistoryEntry = { videoId: string; title: string | null; at: number };
+const HISTORY_LIMIT = 20;
+
 type Room = {
   state: RoomState;
+  history: HistoryEntry[];
   users: Map<string, RoomUser>; // clientId -> user
   messages: ChatMessage[];
   queue: QueueItem[];
@@ -814,18 +819,12 @@ type Room = {
   // seed records which video the pick was made for: a stale pick (the room
   // moved on mid-lookup) must never be trusted at the next ending.
   upnext: { seed: string; pick: RadioPick } | null;
-  // Who's in the voice call, keyed by socket id rather than clientId: a peer
-  // connection belongs to one tab, and the same person in two tabs is two
-  // different ends of the mesh.
-  voice: Map<string, VoicePeer>;
-};
-
-type VoicePeer = {
-  name: string;
-  clientId: string;
 };
 
 const CHAT_MAX_LENGTH = 500;
+// Spam control: at most this many messages per window, per sender.
+const CHAT_BURST_LIMIT = 5;
+const CHAT_BURST_WINDOW_MS = 5000;
 // Chat is as ephemeral as the room itself (gone when the last person
 // leaves); the cap just keeps a long sesh from growing memory unbounded.
 const CHAT_HISTORY_LIMIT = 100;
@@ -853,12 +852,12 @@ function getOrCreateRoom(roomId: string): Room {
   if (!room) {
     room = {
       state: { videoId: null, isPlaying: false, time: 0, updatedAt: Date.now() },
+      history: [],
       users: new Map(),
       messages: [],
       queue: [],
       pendingStart: null,
       createdAt: Date.now(),
-      voice: new Map(),
       autoplay: true,
       played: [],
       radioPending: false,
@@ -897,9 +896,6 @@ function estimatedRoomState(room: Room) {
 function userList(room: Room) {
   return Array.from(room.users, ([clientId, user]) => ({ id: clientId, name: user.name }));
 }
-
-const voiceRoster = (room: Room) =>
-  Array.from(room.voice, ([socketId, peer]) => ({ peerId: socketId, name: peer.name }));
 
 function cancelPendingStart(room: Room) {
   if (!room.pendingStart) return;
@@ -948,9 +944,49 @@ function rememberPlayed(room: Room, videoId: string) {
   if (room.played.length > PLAYED_MEMORY) room.played.shift();
 }
 
+// Titles for the history list, without spending API quota: YouTube's oEmbed
+// endpoint answers for any public video, keyless. Cached per process — a
+// title is a property of the video, not of when you asked.
+const titleCache = new Map<string, string | null>();
+async function titleFor(videoId: string): Promise<string | null> {
+  const cached = titleCache.get(videoId);
+  if (cached !== undefined) return cached;
+  let title: string | null = null;
+  try {
+    const url =
+      "https://www.youtube.com/oembed?format=json&url=" +
+      encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`);
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (res.ok) title = ((await res.json()) as { title?: string }).title ?? null;
+  } catch {
+    // Keyless and best-effort: a history entry without a title still plays.
+  }
+  if (titleCache.size > 1000) titleCache.delete(titleCache.keys().next().value!);
+  titleCache.set(videoId, title);
+  return title;
+}
+
+// Every video the room starts goes to the front of its history — once, so
+// replaying something moves it up rather than listing it twice.
+function recordHistory(roomId: string, room: Room, videoId: string) {
+  const existing = room.history.find((entry) => entry.videoId === videoId);
+  const entry: HistoryEntry = { videoId, title: existing?.title ?? null, at: Date.now() };
+  room.history = [entry, ...room.history.filter((e) => e.videoId !== videoId)].slice(0, HISTORY_LIMIT);
+  io.to(roomId).emit("history:state", room.history);
+  if (entry.title !== null) return;
+  void titleFor(videoId).then((title) => {
+    if (title === null || rooms.get(roomId) !== room) return;
+    const current = room.history.find((e) => e.videoId === videoId);
+    if (!current || current.title !== null) return;
+    current.title = title;
+    io.to(roomId).emit("history:state", room.history);
+  });
+}
+
 function startVideoForRoom(roomId: string, room: Room, videoId: string) {
   cancelPendingStart(room);
   rememberPlayed(room, videoId);
+  recordHistory(roomId, room, videoId);
   room.state = { videoId, isPlaying: false, time: 0, updatedAt: Date.now() };
   room.pendingStart = {
     videoId,
@@ -1056,10 +1092,7 @@ io.on("connection", (socket) => {
       // Late joiners (and reconnects) get what was said before they arrived.
       socket.emit("chat:history", room.messages);
       socket.emit("queue:state", room.queue);
-      // A call may already be going on in here. The roster is only broadcast
-      // when it *changes*, so without this an arrival sees "nobody in voice"
-      // until the next person happens to join or leave one.
-      if (room.voice.size > 0) socket.emit("voice:roster", voiceRoster(room));
+      socket.emit("history:state", room.history);
       socket.emit("radio:state", { autoplay: room.autoplay, available: radioAvailable() });
       // Broadcast only on change, so an arrival has to be told what's up next.
       socket.emit("radio:upnext", room.upnext?.pick ?? null);
@@ -1081,6 +1114,7 @@ io.on("connection", (socket) => {
     // Counts as heard, so the radio doesn't later offer back something the
     // room chose for itself twenty minutes ago.
     rememberPlayed(room, videoId);
+    recordHistory(socket.data.roomId, room, videoId);
     socket.to(socket.data.roomId).emit("video:load", { videoId });
     // This path doesn't go through startVideoForRoom, so it has to arrange
     // its own "up next" or directly-loaded videos would end with nothing ready.
@@ -1307,6 +1341,21 @@ io.on("connection", (socket) => {
     if (!room || !clientId) return;
     const trimmed = String(text ?? "").trim().slice(0, CHAT_MAX_LENGTH);
     if (!trimmed) return;
+    // Spam control: a sliding window per sender. Over it, the message is
+    // dropped and only the sender hears about it — the room never sees a
+    // flood, and the flooder sees exactly why their line didn't land.
+    const now = Date.now();
+    const recent = (socket.data.chatTimes as number[] | undefined)?.filter(
+      (at) => now - at < CHAT_BURST_WINDOW_MS,
+    ) ?? [];
+    if (recent.length >= CHAT_BURST_LIMIT) {
+      const waitMs = CHAT_BURST_WINDOW_MS - (now - recent[0]);
+      socket.data.chatTimes = recent;
+      socket.emit("chat:rejected", { reason: "slow-down", waitMs });
+      return;
+    }
+    recent.push(now);
+    socket.data.chatTimes = recent;
     const message: ChatMessage = {
       id: crypto.randomUUID(),
       senderId: clientId,
@@ -1320,6 +1369,16 @@ io.on("connection", (socket) => {
     // server's echo keeps one source of truth and doubles as delivery
     // confirmation.
     io.to(socket.data.roomId).emit("chat:message", message);
+  });
+
+  // The other half of typing: an explicit "stopped" the moment the draft is
+  // sent or cleared, so the dots don't linger for the expiry period after a
+  // person has plainly finished.
+  socket.on("chat:typing-stop", () => {
+    const room = currentRoom(socket);
+    const clientId = socket.data.clientId as string | undefined;
+    if (!room || !clientId) return;
+    socket.to(socket.data.roomId).emit("chat:typing-stop", { clientId });
   });
 
   socket.on("resync:request", () => {
@@ -1350,13 +1409,6 @@ io.on("connection", (socket) => {
       room.users.delete(clientId);
     }
 
-    // Leaving the room leaves the call — otherwise the roster keeps showing
-    // someone whose peer connection is already gone.
-    if (room.voice.delete(socket.id)) {
-      io.to(roomId).emit("voice:left", { peerId: socket.id });
-      io.to(roomId).emit("voice:roster", Array.from(room.voice, ([id, p]) => ({ peerId: id, name: p.name })));
-    }
-
     // Don't let a synchronized start wait out its timeout on someone who left.
     if (room.pendingStart?.waiting.delete(clientId) && room.pendingStart.waiting.size === 0) {
       beginPendingStart(roomId, room);
@@ -1384,53 +1436,6 @@ io.on("connection", (socket) => {
   };
 
   socket.on("room:leave", () => leaveRoom());
-
-  // ---- Voice ------------------------------------------------------------
-  // The server introduces peers and then gets out of the way: audio flows
-  // browser-to-browser and never passes through here. Relaying live audio on a
-  // free instance would fall over, and the mesh costs each participant one
-  // connection per other participant — fine for a room of friends, which is
-  // all this is for.
-  const leaveVoice = () => {
-    const roomId = socket.data.roomId as string | undefined;
-    const room = roomId ? rooms.get(roomId) : undefined;
-    if (!room || !room.voice.delete(socket.id)) return;
-    io.to(roomId!).emit("voice:left", { peerId: socket.id });
-    io.to(roomId!).emit("voice:roster", voiceRoster(room));
-  };
-
-  socket.on("voice:join", () => {
-    const room = currentRoom(socket);
-    const roomId = socket.data.roomId as string | undefined;
-    const clientId = socket.data.clientId as string | undefined;
-    if (!room || !roomId || !clientId) return;
-    if (room.voice.has(socket.id)) return;
-
-    // Whoever is already in the call is handed to the newcomer, who makes the
-    // offers. One side offering per pair is what keeps two peers from talking
-    // over each other with simultaneous offers (glare) — no negotiation
-    // tie-breaking needed anywhere.
-    const existing = voiceRoster(room);
-    room.voice.set(socket.id, {
-      name: room.users.get(clientId)?.name ?? "Someone",
-      clientId,
-    });
-    socket.emit("voice:peers", existing);
-    io.to(roomId).emit("voice:roster", voiceRoster(room));
-  });
-
-  socket.on("voice:leave", () => leaveVoice());
-
-  // Offers, answers and ICE candidates, passed to one named peer. The payload
-  // is opaque here on purpose: this is a post box, not a participant.
-  socket.on("voice:signal", ({ to, data }: { to: string; data: unknown }) => {
-    const room = currentRoom(socket);
-    if (!room || typeof to !== "string") return;
-    // Both ends must be in this room's call, or this becomes a way to push
-    // arbitrary payloads at any socket on the server.
-    if (!room.voice.has(socket.id) || !room.voice.has(to)) return;
-    io.to(to).emit("voice:signal", { from: socket.id, data });
-  });
 
   // "Come watch this" — a nudge to a friend's open tabs, carrying the room
   // they'd be joining. Checked against the friendship rather than trusted:

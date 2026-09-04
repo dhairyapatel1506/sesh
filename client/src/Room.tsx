@@ -5,9 +5,7 @@ import { applyShortcodes, searchEmojis } from "./emoji";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import { useAuth } from "./auth";
 import { FriendsPanel, InviteToast, totalUnread, useFriends } from "./Friends";
-import { useVoice } from "./voice";
 import { playChatPing, warmAudio } from "./sounds";
-import { VoiceBar } from "./Voice";
 import { ReportBug } from "./Report";
 import "./App.css";
 
@@ -50,6 +48,8 @@ type ChatMessage = {
   text: string;
   at: number;
 };
+
+type HistoryEntry = { videoId: string; title: string | null; at: number };
 
 type QueueItem = {
   id: string;
@@ -183,6 +183,12 @@ const SEEK_JUMP_SECONDS = 0.7;
 const SEEK_SETTLE_MAX_MS = 4000;
 // Authoritative pull from the server (also re-anchors after stalls)...
 const RESYNC_INTERVAL_MS = 5000;
+// Typing indicator timing. The sender pings while composing; the receiver
+// shows dots until TYPING_EXPIRY_MS after the last ping — a little over one
+// ping interval, so a pause between words doesn't flicker but a person who
+// has stopped is gone within a second, not three.
+const TYPING_PING_MS = 800;
+const TYPING_EXPIRY_MS = 1800;
 // ...but drift correction itself runs locally far more often, against the
 // last known timestamped state extrapolated forward — no round trip needed.
 const LOCAL_DRIFT_CHECK_MS = 750;
@@ -256,6 +262,8 @@ function Room() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [underTab, setUnderTab] = useState<"upnext" | "history">("upnext");
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatMuted, setChatMuted] = useState(
     () => localStorage.getItem(CHAT_MUTE_STORAGE_KEY) === "1",
@@ -280,7 +288,9 @@ function Room() {
   const [fsChatOpen, setFsChatOpen] = useState(false);
   // How many chat messages were already seen when the fullscreen chat panel
   // was last open (or fullscreen entered) — anything beyond it is the badge.
-  const [fsSeenCount, setFsSeenCount] = useState(0);
+  const [fsUnread, setFsUnread] = useState(0);
+  const fullscreenRef = useRef(false);
+  const fsChatOpenRef = useRef(false);
 
   // Feature state for our own end-of-video experience: whether the current
   // video has ended (drives the overlay), what /api/related suggested for it,
@@ -739,23 +749,30 @@ function Room() {
       setNameError(reason);
     };
     // "X is typing" pings: remember each briefly and let them expire — a
-    // sender that stops typing simply stops pinging.
+    // sender that stops typing simply stops pinging. Senders also say so
+    // outright when they send or clear the line, which is what keeps the
+    // dots from outliving the typing by the whole expiry.
     const onTyping = ({ clientId, name }: { clientId: string; name: string }) => {
       setTypers((prev) => [
         ...prev.filter((t) => t.clientId !== clientId),
-        { clientId, name, until: Date.now() + 3000 },
+        { clientId, name, until: Date.now() + TYPING_EXPIRY_MS },
       ]);
+    };
+    const onTypingStop = ({ clientId }: { clientId: string }) => {
+      setTypers((prev) => (prev.some((t) => t.clientId === clientId) ? prev.filter((t) => t.clientId !== clientId) : prev));
     };
     socket.on("room:state", onConfirmed);
     socket.on("room:join-denied", onDenied);
     socket.on("chat:typing", onTyping);
+    socket.on("chat:typing-stop", onTypingStop);
     const prune = window.setInterval(() => {
       setTypers((prev) => (prev.some((t) => t.until <= Date.now()) ? prev.filter((t) => t.until > Date.now()) : prev));
-    }, 1000);
+    }, 250);
     return () => {
       socket.off("room:state", onConfirmed);
       socket.off("room:join-denied", onDenied);
       socket.off("chat:typing", onTyping);
+      socket.off("chat:typing-stop", onTypingStop);
       window.clearInterval(prune);
     };
   }, []);
@@ -786,36 +803,6 @@ function Room() {
   // Friends live behind a toolbar menu rather than under the video: listed
   // inline they pushed the page down and dragged the chat with them, so typing
   // a message meant scrolling past the whole list.
-  const voice = useVoice(roomId);
-
-  // Talking over a video is hard because the video doesn't stop for you. While
-  // someone else is speaking, duck it — the same trick a radio desk does when
-  // the presenter opens their mic. The level before ducking is remembered so
-  // whatever the person had set is what comes back, and it's only restored if
-  // nothing else moved the volume in the meantime.
-  const duckedFromRef = useRef<number | null>(null);
-  useEffect(() => {
-    const player = playerRef.current;
-    if (!player) return;
-    const shouldDuck = voice.inVoice && voice.settings.duckVideo && voice.othersSpeaking;
-
-    if (shouldDuck && duckedFromRef.current === null) {
-      const current = player.getVolume();
-      duckedFromRef.current = current;
-      player.setVolume(Math.round(current * 0.25));
-    } else if (!shouldDuck && duckedFromRef.current !== null) {
-      player.setVolume(duckedFromRef.current);
-      duckedFromRef.current = null;
-    }
-  }, [voice.inVoice, voice.settings.duckVideo, voice.othersSpeaking, videoId]);
-
-  // Leaving the call with the video still ducked would strand it quiet.
-  useEffect(() => {
-    if (voice.inVoice || duckedFromRef.current === null) return;
-    playerRef.current?.setVolume(duckedFromRef.current);
-    duckedFromRef.current = null;
-  }, [voice.inVoice]);
-
   const [friendsOpen, setFriendsOpen] = useState(false);
   const friendsMenuRef = useRef<HTMLDivElement>(null);
   const { friends } = useFriends();
@@ -1383,9 +1370,8 @@ function Room() {
     return () => window.clearInterval(interval);
   }, [debugMode, videoId]);
 
-  // Cues all live in sounds.ts — the chat ping shares a single AudioContext
-  // with the voice cues, and is deliberately loud enough to be heard over a
-  // music video playing through the same speakers.
+  // Cues all live in sounds.ts — the chat ping is deliberately loud enough
+  // to be heard over a music video playing through the same speakers.
   useEffect(() => {
     // Browsers keep an AudioContext suspended until a user gesture, and the
     // ping fires while the tab is unfocused — so grab the first gesture to
@@ -1401,11 +1387,17 @@ function Room() {
     const onHistory = (history: ChatMessage[]) => setMessages(history);
     const onMessage = (message: ChatMessage) => {
       setMessages((prev) => [...prev.slice(-99), message]);
-      // Someone else's message while this tab isn't the one being looked at
-      // (other tab, other window): count it and ping.
-      if (message.senderId === clientIdRef.current || document.hasFocus()) return;
-      setUnreadCount((n) => n + 1);
+      if (message.senderId === clientIdRef.current) return;
+      // Someone else's message pings wherever this tab is — a music video
+      // is loud, and a message that only sounds when you're elsewhere is one
+      // you miss when you're here. The unread count is for coming back.
       if (!chatMutedRef.current) playChatPing();
+      if (!document.hasFocus()) setUnreadCount((n) => n + 1);
+      // Fullscreen with the chat closed: count it on the badge. Counted here
+      // rather than derived from the list's length, because the list is
+      // capped — once it was full, its length stopped growing and the badge
+      // stuck at zero no matter how many messages arrived.
+      if (fullscreenRef.current && !fsChatOpenRef.current) setFsUnread((n) => n + 1);
     };
     socket.on("chat:history", onHistory);
     socket.on("chat:message", onMessage);
@@ -1446,9 +1438,12 @@ function Room() {
   // wholesale sidesteps every add/remove/reorder ordering question.
   useEffect(() => {
     const onQueue = (q: QueueItem[]) => setQueue(q);
+    const onHistory = (h: HistoryEntry[]) => setHistory(h);
     socket.on("queue:state", onQueue);
+    socket.on("history:state", onHistory);
     return () => {
       socket.off("queue:state", onQueue);
+      socket.off("history:state", onHistory);
     };
   }, []);
 
@@ -1570,14 +1565,100 @@ function Room() {
     }
   };
 
-
-  // Unread badge for the fullscreen chat toggle: everything past fsSeenCount
-  // is unread. Entering fullscreen or having the panel open marks all read.
+  // Keyboard shortcuts — the handful worth remembering, and nothing that
+  // needs a cheat sheet: Space play/pause, ← → five seconds, F fullscreen,
+  // C chat, M mute. Off while typing anywhere (Escape leaves a chat box).
   useEffect(() => {
-    if (isFullscreen && !fsChatOpen) return;
-    setFsSeenCount(messages.length);
-  }, [isFullscreen, fsChatOpen, messages.length]);
-  const fsUnread = Math.max(0, messages.length - fsSeenCount);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      const typing =
+        !!el &&
+        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+      if (typing) {
+        if (e.key === "Escape" && el.matches(".chat-bar input, .fs-chat-bar input")) el.blur();
+        return;
+      }
+      const player = readyPlayer();
+      switch (e.key) {
+        case " ":
+        case "k":
+        case "K":
+          if (!player) return;
+          if (player.getPlayerState() === PlayerState.PLAYING) player.pauseVideo();
+          else player.playVideo();
+          break;
+        case "ArrowLeft":
+        case "ArrowRight": {
+          if (!player) return;
+          const delta = e.key === "ArrowLeft" ? -5 : 5;
+          player.seekTo(Math.max(0, player.getCurrentTime() + delta), true);
+          break;
+        }
+        case "f":
+        case "F":
+          if (!videoIdRef.current) return;
+          toggleFullscreen();
+          break;
+        case "c":
+        case "C":
+          if (document.fullscreenElement) {
+            setFsChatOpen((open) => {
+              if (!open) window.setTimeout(() => fsChatInputRef.current?.focus(), 0);
+              return !open;
+            });
+          } else {
+            chatInputRef.current?.focus();
+          }
+          break;
+        case "m":
+        case "M":
+          if (!player) return;
+          if (player.isMuted()) {
+            player.unMute();
+            mutedByUsRef.current = false;
+          } else {
+            player.mute();
+          }
+          break;
+        case "Escape":
+          if (!document.fullscreenElement) return;
+          setFsChatOpen(false);
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // A click on the video puts keyboard focus inside YouTube's frame, where
+  // our shortcuts can't hear it (and YouTube's own differ: C is captions, F
+  // does nothing with its fullscreen button hidden). Hand focus straight
+  // back to the page, so the keys work the same whether the last click was
+  // on the video or beside it. Clicks themselves are unaffected — pointer
+  // events go by position, not focus.
+  useEffect(() => {
+    const onBlur = () => {
+      window.setTimeout(() => {
+        const el = document.activeElement;
+        if (el instanceof HTMLIFrameElement && playerContainerRef.current?.contains(el)) el.blur();
+      }, 0);
+    };
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, []);
+
+
+  // Unread badge for the fullscreen chat toggle: counted as messages arrive
+  // (see onMessage), cleared whenever the panel is open or fullscreen ends.
+  useEffect(() => {
+    fullscreenRef.current = isFullscreen;
+    fsChatOpenRef.current = fsChatOpen;
+    if (!isFullscreen || fsChatOpen) setFsUnread(0);
+  }, [isFullscreen, fsChatOpen]);
 
   // Keep the newest message in view — in both renderings of the chat (the
   // page panel and the fullscreen overlay; same messages, two scroll boxes).
@@ -1587,7 +1668,7 @@ function Room() {
     for (const el of [chatListRef.current, fsChatListRef.current]) {
       if (el) el.scrollTop = el.scrollHeight;
     }
-  }, [messages, fsChatOpen]);
+  }, [messages, typers, fsChatOpen]);
 
   const sendChat = () => {
     const text = applyShortcodes(chatInput.trim());
@@ -1595,18 +1676,63 @@ function Room() {
     socket.emit("chat:message", { text });
     setChatInput("");
     setEmojiOpen(false);
+    stopTyping();
+  };
+
+  const stopTyping = () => {
+    if (lastTypingSentRef.current === 0) return;
+    lastTypingSentRef.current = 0;
+    socket.emit("chat:typing-stop");
   };
 
   // One handler for both chat inputs (page + fullscreen): update the shared
-  // draft and ping "typing" at most every 1.5s; receivers expire it 3s after
-  // the last ping.
+  // draft and ping "typing" at most every TYPING_PING_MS; receivers expire it
+  // TYPING_EXPIRY_MS after the last ping, and an emptied line says so at once.
   const handleChatInputChange = (value: string) => {
     setChatInput(value);
-    if (value && Date.now() - lastTypingSentRef.current > 1500) {
+    if (!value) {
+      stopTyping();
+      return;
+    }
+    if (Date.now() - lastTypingSentRef.current > TYPING_PING_MS) {
       lastTypingSentRef.current = Date.now();
       socket.emit("chat:typing");
     }
   };
+
+  // The sender's line didn't land: the server said why. Shown under the
+  // input for a moment, in both chat views.
+  const [chatNotice, setChatNotice] = useState<string | null>(null);
+  useEffect(() => {
+    let timer: number | undefined;
+    const onRejected = ({ reason, waitMs }: { reason: string; waitMs?: number }) => {
+      const seconds = Math.max(1, Math.ceil((waitMs ?? 0) / 1000));
+      setChatNotice(
+        reason === "slow-down" ? `Slow down — try again in ${seconds}s.` : "That message didn't send.",
+      );
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setChatNotice(null), Math.max(2500, waitMs ?? 0));
+    };
+    socket.on("chat:rejected", onRejected);
+    return () => {
+      socket.off("chat:rejected", onRejected);
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  // Who's typing, drawn as the message they're about to send: the same
+  // nametag, the same bubble, with dots where the words will be.
+  const renderTyping = () =>
+    typers.map((t) => (
+      <div key={`typing-${t.clientId}`} className="chat-msg typing" aria-live="polite">
+        <span className="chat-name">{t.name}</span>
+        <span className="chat-bubble typing-bubble" aria-label={`${t.name} is typing`}>
+          <i />
+          <i />
+          <i />
+        </span>
+      </div>
+    ));
 
   // The message list, rendered identically wherever the chat appears. Both
   // views read the same messages array — one state, two views.
@@ -2001,11 +2127,6 @@ function Room() {
         </div>
       </div>
 
-      {/* Its own row above the video: the call is about who's here, which
-          belongs next to the people list, and putting it inside the video
-          column would push the queue down the page. */}
-      <VoiceBar voice={voice} myName={nickname} />
-
       <div className="load-bar">
         <input
           value={urlInput}
@@ -2182,7 +2303,9 @@ function Room() {
                   <div className="fs-chat">
                     <div className="chat-messages" ref={fsChatListRef}>
                       {renderChatMessages()}
+                      {renderTyping()}
                     </div>
+                    {chatNotice && <p className="chat-notice">{chatNotice}</p>}
                     {renderEmojiPanel(fsChatInputRef)}
                     <div className="fs-chat-bar">
                       {renderEmojiToggle()}
@@ -2223,11 +2346,28 @@ function Room() {
               below the fold, and recommendations sat below that again. As
               tabs they cost one row between them, and the fullscreen button
               rides along in the same row rather than claiming another. */}
-          {(queue.length > 0 || radio.available) && (
+          {(queue.length > 0 || radio.available || history.length > 0) && (
             <div className="queue under-player">
-              <div className="queue-head under-tabs">
-                <span className="under-title">Up next</span>
-                {queue.length > 0 && <span className="queue-count">{queue.length}</span>}
+              <div className="queue-head under-tabs" role="tablist">
+                <button
+                  className={underTab === "upnext" ? "under-tab is-active" : "under-tab"}
+                  role="tab"
+                  aria-selected={underTab === "upnext"}
+                  onClick={() => setUnderTab("upnext")}
+                >
+                  Up next
+                  {queue.length > 0 && <span className="queue-count">{queue.length}</span>}
+                </button>
+                {history.length > 0 && (
+                  <button
+                    className={underTab === "history" ? "under-tab is-active" : "under-tab"}
+                    role="tab"
+                    aria-selected={underTab === "history"}
+                    onClick={() => setUnderTab("history")}
+                  >
+                    History
+                  </button>
+                )}
                 <span className="under-spacer" />
                 {waitingForRoom && <span className="player-waiting">Starting together…</span>}
                 {/* The checkbox shows the room's setting, never this tab's
@@ -2254,85 +2394,119 @@ function Room() {
                   </button>
                 )}
               </div>
-              {radio.available && (
-                <p className="autoplay-note">
-                  {radio.autoplay
-                    ? "When the queue runs out, Sesh keeps playing something similar."
-                    : "Playback stops when the queue runs out."}
-                </p>
-              )}
-              {radioStatus === "searching" && (
-                <p className="radio-status">Finding something to play next…</p>
-              )}
-              {radioStatus === "dry" && (
-                <p className="radio-status is-dry">
-                  Couldn't find anything to play next — the room has stopped.
-                </p>
-              )}
-              {/* An empty queue with the radio armed isn't "nothing up next" —
-                  the pick is announced the moment a video starts, so show it
-                  where the queue would be, or this panel contradicts the
-                  banner over the video. */}
-              {queue.length === 0 && radio.autoplay && upnext && (
-                <ul className="queue-list">
-                  <li className="queue-item queue-radio">
-                    <img
-                      src={`https://i.ytimg.com/vi/${upnext.videoId}/default.jpg`}
-                      alt=""
-                      loading="lazy"
-                    />
-                    <span className="queue-info">
-                      <span className="queue-title">{upnext.title}</span>
-                      <span className="queue-meta">
-                        📻 picked by autoplay
-                        {upnext.channel ? ` · ${upnext.channel}` : ""}
-                      </span>
-                    </span>
-                    <button
-                      className="queue-action"
-                      title="Play now"
-                      aria-label="Play now"
-                      onClick={() => loadVideo(upnext.videoId)}
-                    >
-                      ▶
-                    </button>
-                  </li>
-                </ul>
-              )}
-              {queue.length > 0 && (
-                <ul className="queue-list">
-                  {queue.map((item, index) => (
-                    <li key={item.id} className="queue-item">
+              {underTab === "history" ? (
+                <ul className="queue-list history-list">
+                  {history.map((entry) => (
+                    <li key={entry.videoId} className={entry.videoId === videoId ? "queue-item is-current" : "queue-item"}>
                       <img
-                        src={`https://i.ytimg.com/vi/${item.videoId}/default.jpg`}
+                        src={`https://i.ytimg.com/vi/${entry.videoId}/default.jpg`}
                         alt=""
                         loading="lazy"
                       />
                       <span className="queue-info">
-                        <span className="queue-title">{item.title ?? "YouTube video"}</span>
+                        <span className="queue-title">{entry.title ?? "YouTube video"}</span>
                         <span className="queue-meta">
-                          #{index + 1} · added by {item.addedBy}
+                          {entry.videoId === videoId
+                            ? "playing now"
+                            : `played at ${new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
                         </span>
                       </span>
-                      <button
-                        className="queue-action"
-                        title="Play now"
-                        aria-label="Play now"
-                        onClick={() => socket.emit("queue:play", { id: item.id })}
-                      >
-                        ▶
-                      </button>
-                      <button
-                        className="queue-action"
-                        title="Remove from queue"
-                        aria-label="Remove from queue"
-                        onClick={() => socket.emit("queue:remove", { id: item.id })}
-                      >
-                        ✕
-                      </button>
+                      {entry.videoId !== videoId && (
+                        <button
+                          className="queue-action"
+                          title="Play again"
+                          aria-label="Play again"
+                          onClick={() => loadVideo(entry.videoId)}
+                        >
+                          ▶
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
+              ) : (
+                <>
+                  {radio.available && (
+                    <p className="autoplay-note">
+                      {radio.autoplay
+                        ? "When the queue runs out, Sesh keeps playing something similar."
+                        : "Playback stops when the queue runs out."}
+                    </p>
+                  )}
+                  {radioStatus === "searching" && (
+                    <p className="radio-status">Finding something to play next…</p>
+                  )}
+                  {radioStatus === "dry" && (
+                    <p className="radio-status is-dry">
+                      Couldn't find anything to play next — the room has stopped.
+                    </p>
+                  )}
+                  {/* An empty queue with the radio armed isn't "nothing up next" —
+                      the pick is announced the moment a video starts, so show it
+                      where the queue would be, or this panel contradicts the
+                      banner over the video. */}
+                  {queue.length === 0 && radio.autoplay && upnext && (
+                    <ul className="queue-list">
+                      <li className="queue-item queue-radio">
+                        <img
+                          src={`https://i.ytimg.com/vi/${upnext.videoId}/default.jpg`}
+                          alt=""
+                          loading="lazy"
+                        />
+                        <span className="queue-info">
+                          <span className="queue-title">{upnext.title}</span>
+                          <span className="queue-meta">
+                            📻 picked by autoplay
+                            {upnext.channel ? ` · ${upnext.channel}` : ""}
+                          </span>
+                        </span>
+                        <button
+                          className="queue-action"
+                          title="Play now"
+                          aria-label="Play now"
+                          onClick={() => loadVideo(upnext.videoId)}
+                        >
+                          ▶
+                        </button>
+                      </li>
+                    </ul>
+                  )}
+                  {queue.length > 0 && (
+                    <ul className="queue-list">
+                      {queue.map((item, index) => (
+                        <li key={item.id} className="queue-item">
+                          <img
+                            src={`https://i.ytimg.com/vi/${item.videoId}/default.jpg`}
+                            alt=""
+                            loading="lazy"
+                          />
+                          <span className="queue-info">
+                            <span className="queue-title">{item.title ?? "YouTube video"}</span>
+                            <span className="queue-meta">
+                              #{index + 1} · added by {item.addedBy}
+                            </span>
+                          </span>
+                          <button
+                            className="queue-action"
+                            title="Play now"
+                            aria-label="Play now"
+                            onClick={() => socket.emit("queue:play", { id: item.id })}
+                          >
+                            ▶
+                          </button>
+                          <button
+                            className="queue-action"
+                            title="Remove from queue"
+                            aria-label="Remove from queue"
+                            onClick={() => socket.emit("queue:remove", { id: item.id })}
+                          >
+                            ✕
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -2355,13 +2529,9 @@ function Room() {
             </div>
             <div className="chat-messages" ref={chatListRef}>
               {renderChatMessages()}
+              {renderTyping()}
             </div>
-            {typers.length > 0 && (
-              <p className="typing-line">
-                {typers.map((t) => t.name).join(", ")} {typers.length === 1 ? "is" : "are"} typing
-                <span className="typing-dots" />
-              </p>
-            )}
+            {chatNotice && <p className="chat-notice">{chatNotice}</p>}
             <div className="chat-bar-wrap">
               {renderEmojiPanel(chatInputRef)}
               <div className="load-bar chat-bar">

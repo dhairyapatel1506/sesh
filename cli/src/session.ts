@@ -60,10 +60,6 @@ export type UiState = {
   driftMs: number | null;
   status: string | null;
   fatal: string | null;
-  // Who's in the room's voice call. The CLI can't join one (WebRTC wants a
-  // browser) but it can say a call is happening, which beats a terminal user
-  // wondering why nobody's typing.
-  voice: string[];
 
   // ---- the room's radio ----
   // Keeping the room going on YouTube's Mix when the queue runs dry. It's the
@@ -163,7 +159,6 @@ export class Session extends EventEmitter {
       driftMs: null,
       status: null,
       fatal: null,
-      voice: [],
       // The server's own default, so the footer doesn't say "off" for the
       // fraction of a second before radio:state lands on join.
       autoplay: true,
@@ -325,11 +320,6 @@ export class Session extends EventEmitter {
     );
     this.socket.on("queue:state", (queue: QueueItem[]) => this.update({ queue }));
 
-    // Everyone in the room hears the call's roster change even if they're not
-    // in it, which is the only way a terminal learns a call exists.
-    this.socket.on("voice:roster", (roster: { peerId: string; name: string }[]) =>
-      this.update({ voice: roster.map((peer) => peer.name) }),
-    );
 
     // `available` only rides along with the copy sent on join — the broadcast
     // that follows someone toggling it carries the setting alone — so it must
@@ -1147,7 +1137,6 @@ export class Session extends EventEmitter {
       position: null,
       duration: null,
       driftMs: null,
-      voice: [],
       // The room being left may have been mid-lookup; the room being joined
       // will say what its own radio is doing in its room:join reply.
       radioSearching: false,

@@ -915,411 +915,6 @@ button:disabled {
   font-size: 0.85rem;
 }
 
-/* ---- Voice ------------------------------------------------------------ */
-
-.voice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 12px;
-  background: var(--accent-bg);
-}
-
-/* Before anyone joins there's nothing to frame — just an offer. */
-.voice-idle {
-  background: none;
-  padding: 0;
-  justify-content: flex-start;
-}
-
-.voice-join {
-  font-size: 0.85rem;
-  font-weight: 500;
-  background: transparent;
-  color: var(--accent);
-}
-
-.voice-join:hover:not(:disabled) {
-  background: var(--accent-bg);
-  filter: none;
-}
-
-.voice-hint,
-.voice-error {
-  font-size: 0.8rem;
-  opacity: 0.75;
-}
-
-.voice-error {
-  color: #ef4444;
-  opacity: 1;
-  cursor: pointer;
-}
-
-.voice-people {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.voice-person {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.25rem 0.6rem 0.25rem 0.25rem;
-  border-radius: 999px;
-  background: var(--bg);
-  font-size: 0.8rem;
-}
-
-.voice-avatar {
-  display: grid;
-  place-items: center;
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 50%;
-  background: var(--accent);
-  color: #fff;
-  font-size: 0.65rem;
-  font-weight: 600;
-  /* The speaking ring is drawn as a box-shadow so it can appear and grow
-     without changing the avatar's size — anything that alters layout makes
-     the whole row jitter every time somebody talks. */
-  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
-  transition: box-shadow 120ms ease-out;
-}
-
-.voice-person.is-speaking .voice-avatar {
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.9);
-}
-
-.voice-person-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 8rem;
-}
-
-/* Someone you've silenced still shows, just visibly turned down. */
-.voice-person.is-silenced {
-  opacity: 0.55;
-}
-
-.voice-person-mute {
-  padding: 0 0.15rem;
-  font-size: 0.7rem;
-  line-height: 1;
-  background: none;
-  border: 0;
-  color: inherit;
-  opacity: 0.5;
-}
-
-.voice-person-mute:hover:not(:disabled) {
-  opacity: 1;
-  filter: none;
-  background: none;
-}
-
-.voice-person.is-silenced .voice-person-mute {
-  opacity: 1;
-}
-
-.voice-muted-mark {
-  margin-left: 0.3rem;
-  font-size: 0.7rem;
-}
-
-.voice-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-shrink: 0;
-}
-
-.voice-control {
-  padding: 0.3rem 0.55rem;
-  font-size: 0.9rem;
-  line-height: 1;
-  background: var(--bg);
-  color: inherit;
-}
-
-.voice-control:hover:not(:disabled) {
-  filter: none;
-  background: var(--accent-bg);
-}
-
-/* Off states are stated in colour as well as icon — an emoji swap alone is
-   easy to miss when you're checking whether you're still muted. The chevron
-   turns with its control so the pair stays one object rather than half a red
-   button; it keeps its own hover, though, since it does its own job. */
-.voice-control.is-off,
-.voice-caret.is-off,
-.voice-caret.is-off[aria-expanded="true"] {
-  background: #ef4444;
-  color: #fff;
-}
-
-/* Darker red, the way Leave darkens — the generic hover below would otherwise
-   wash a red button back to the page tint, which reads as it switching off.
-   Written per element rather than on the group so hovering the microphone
-   doesn't light up its chevron as well. */
-.voice-control.is-off:hover:not(:disabled),
-.voice-caret.is-off:hover:not(:disabled) {
-  background: #dc2626;
-  filter: none;
-}
-
-/* Filled, not ghosted: red-on-tinted-background read as a broken button rather
-   than a deliberate one, and leaving a call is worth stating plainly. */
-.voice-leave {
-  padding: 0.3rem 0.7rem;
-  font-size: 0.8rem;
-  font-weight: 500;
-  background: #ef4444;
-  color: #fff;
-}
-
-.voice-leave:hover:not(:disabled) {
-  background: #dc2626;
-  filter: none;
-}
-
-.voice-control-group {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-}
-
-/* Joined to the control it configures: one rounded pair, split down the middle,
-   so it reads as "this button, and its options" rather than two buttons. */
-.voice-control-group .voice-control {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.voice-caret {
-  padding: 0.3rem 0.35rem;
-  font-size: 0.6rem;
-  line-height: 1;
-  background: var(--bg);
-  color: inherit;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  margin-left: 1px;
-}
-
-.voice-caret:hover:not(:disabled),
-.voice-caret[aria-expanded="true"] {
-  background: var(--accent-bg);
-  filter: none;
-}
-
-.voice-menu {
-  position: absolute;
-  top: calc(100% + 0.5rem);
-  right: 0;
-  z-index: 30;
-  width: min(19rem, calc(100vw - 2rem));
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-  padding: 0.9rem 1rem;
-  border-radius: 12px;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
-  background: var(--bg, #fff);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
-  text-align: left;
-}
-
-.voice-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.78rem;
-  /* A flex item's default min-width is its content, which lets a full-width
-     range input push itself past the panel's padding. */
-  min-width: 0;
-}
-
-.voice-field > span {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 0.5rem;
-  opacity: 0.85;
-}
-
-.voice-field em {
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.7;
-  white-space: nowrap;
-}
-
-.voice-field select,
-.voice-field input[type="range"] {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  margin: 0;
-}
-
-/* The browser's own arrow sits hard against the border and no amount of
-   padding moves it — it's positioned against the box, not the text. Drawing
-   our own is the only way to give it room to breathe. */
-.voice-field select {
-  appearance: none;
-  -webkit-appearance: none;
-  padding: 0.4rem 2rem 0.4rem 0.6rem;
-  font: inherit;
-  font-size: 0.8rem;
-  border-radius: 8px;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
-  background-color: var(--bg);
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
-    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: right 1rem top 50%, right 0.7rem top 50%;
-  background-size: 0.3rem 0.3rem, 0.3rem 0.3rem;
-  background-repeat: no-repeat;
-  color: inherit;
-  cursor: pointer;
-}
-
-/* Track filled from the value rather than by the browser: a native range
-   insets its thumb at both ends, so a slider at maximum stops visibly short
-   of full and reads as a rendering bug. */
-.voice-field input[type="range"] {
-  appearance: none;
-  -webkit-appearance: none;
-  height: 1.1rem;
-  background: transparent;
-  cursor: pointer;
-}
-
-.voice-field input[type="range"]::-webkit-slider-runnable-track {
-  height: 0.3rem;
-  border-radius: 999px;
-  background: linear-gradient(
-    to right,
-    var(--accent) 0 var(--fill, 100%),
-    var(--border, rgba(128, 128, 128, 0.35)) var(--fill, 100%) 100%
-  );
-}
-
-.voice-field input[type="range"]::-moz-range-track {
-  height: 0.3rem;
-  border-radius: 999px;
-  background: linear-gradient(
-    to right,
-    var(--accent) 0 var(--fill, 100%),
-    var(--border, rgba(128, 128, 128, 0.35)) var(--fill, 100%) 100%
-  );
-}
-
-.voice-field input[type="range"]::-webkit-slider-thumb {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 0.8rem;
-  height: 0.8rem;
-  margin-top: -0.25rem;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 0;
-}
-
-.voice-field input[type="range"]::-moz-range-thumb {
-  width: 0.8rem;
-  height: 0.8rem;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 0;
-}
-
-/* Where 100% sits on a slider that runs past it, so "normal" stays findable
-   and a thumb resting mid-track reads as deliberate rather than stuck. Drawn
-   on the track itself — the track pseudo-element paints over anything on the
-   input behind it. */
-.voice-field input.has-unity-mark::-webkit-slider-runnable-track {
-  background-image: linear-gradient(var(--bg) 0 0),
-    linear-gradient(
-      to right,
-      var(--accent) 0 var(--fill, 100%),
-      var(--border, rgba(128, 128, 128, 0.35)) var(--fill, 100%) 100%
-    );
-  background-size: 2px 100%, 100% 100%;
-  background-position: 50% 0, 0 0;
-  background-repeat: no-repeat, no-repeat;
-}
-
-.voice-field input.has-unity-mark::-moz-range-track {
-  background-image: linear-gradient(var(--bg) 0 0),
-    linear-gradient(
-      to right,
-      var(--accent) 0 var(--fill, 100%),
-      var(--border, rgba(128, 128, 128, 0.35)) var(--fill, 100%) 100%
-    );
-  background-size: 2px 100%, 100% 100%;
-  background-position: 50% 0, 0 0;
-  background-repeat: no-repeat, no-repeat;
-}
-
-.voice-check {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.15rem 0.5rem;
-  font-size: 0.78rem;
-}
-
-/* Centred against the first line of the label rather than the top of the whole
-   block, which left it floating above the text it belongs to. */
-.voice-check input {
-  margin: 0;
-  align-self: start;
-  transform: translateY(0.12em);
-  accent-color: var(--accent);
-}
-
-.voice-check-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  line-height: 1.35;
-}
-
-.voice-check em {
-  font-style: normal;
-  font-size: 0.72rem;
-  opacity: 0.65;
-}
-
-/* Three related checkboxes in a menu that already has a device picker and a
-   slider need something to say where one subject ends and the next begins. */
-.voice-section {
-  margin: 0.15rem 0 -0.1rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--border);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  opacity: 0.6;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .voice-avatar {
-    transition: none;
-  }
-}
-
 .toolbar-actions {
   display: flex;
   align-items: center;
@@ -1810,23 +1405,58 @@ button:disabled {
   overflow-y: auto;
 }
 
-.typing-line {
+/* Someone typing: their nametag over a bubble of three breathing dots — the
+   message they're about to send, drawn before it exists. */
+.chat-msg.typing .chat-bubble {
+  display: inline-flex;
+  gap: 0.28rem;
+  align-items: center;
+  padding: 0.55rem 0.8rem;
+}
+
+.typing-bubble i {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+.typing-bubble i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-bubble i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-0.2rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-bubble i {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* "Slow down" and friends: the server's reason a line didn't send. */
+.chat-notice {
   margin: 0 0 0.25rem;
   padding: 0 0.25rem;
   font-size: 0.78rem;
-  color: var(--muted, #888);
-}
-
-.typing-dots::after {
-  content: "";
-  animation: typing-dots 1.2s steps(4, end) infinite;
-}
-
-@keyframes typing-dots {
-  0% { content: ""; }
-  25% { content: "."; }
-  50% { content: ".."; }
-  75% { content: "..."; }
+  color: #d9534f;
 }
 
 .room-uptime {
@@ -2317,6 +1947,37 @@ button:disabled {
 .under-title {
   font-weight: 600;
   color: var(--text-h);
+}
+
+/* "Up next" / "History" as tabs sharing the one header row. */
+.under-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: none;
+  padding: 0.1rem 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted, #888);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+
+.under-tab:hover:not(:disabled) {
+  background: none;
+  color: var(--text-h);
+  filter: none;
+}
+
+.under-tab.is-active {
+  color: var(--text-h);
+  border-bottom-color: var(--accent, #ff4d4d);
+}
+
+.queue-item.is-current {
+  opacity: 0.6;
 }
 
 .under-player .player-fs-button {
