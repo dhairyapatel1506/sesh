@@ -188,6 +188,19 @@ Optionally set a `STATS_TOKEN` env var to enable `GET /api/stats?token=…` — 
 
 The same token opens the bug-report inbox: **`/admin?token=…`** is a plain server-rendered page listing every report with its screenshot inline, and `GET /api/reports?token=…` is the same data as JSON. Gated because those screenshots are of whatever the reporter had on screen.
 
+### Staging
+
+There are two deploys of the same repo, and every change goes through the first before the second:
+
+| | Branch | URL | Purpose |
+|---|---|---|---|
+| **Staging** | `staging` | staging.dhairya.cloud | where changes land first and get tried out |
+| **Production** | `main` | sesh.dhairya.cloud | what everyone uses; only gets what staging has already proven |
+
+The flow: commit to `staging` → Render deploys it → test it there → merge `staging` into `main` → Render deploys production. `render.yaml` describes both services; the staging one sets `SESH_ENV=staging`, which puts a small **staging** badge in the corner of every page and reports `"env": "staging"` from `/api/health`, so the two are never mistaken for each other. Staging has its own secrets — in particular its own database (a Neon branch of the production one), so testing never touches real accounts. Sign-in on staging needs the staging origin added to the Google client's authorised JavaScript origins.
+
+The terminal client has the same split: staging builds are published under npm's `next` tag with a `-staging` pre-release version (`0.8.0-staging.1`), and a build whose version says `-staging` connects to the staging server by default. So `npm install -g sesh-terminal@next` is the staging client and `npm install -g sesh-terminal` the production one; `sesh --help` prints which server the installed build talks to, and `SESH_SERVER=<url>` or `--server <url>` overrides it.
+
 ### Getting told about reports (optional)
 
 Without this, reports land in the database and wait to be looked at. With it, each one is emailed as it arrives.

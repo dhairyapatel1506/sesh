@@ -81,8 +81,13 @@ const io = new Server(httpServer, {
   cors: isProd ? undefined : { origin: "http://localhost:5173", credentials: true },
 });
 
+// Which deploy this is — "staging" on the staging service, "production"
+// otherwise. Surfaced so the web client can wear a badge and a curl can tell
+// the two apart.
+const SESH_ENV = process.env.SESH_ENV === "staging" ? "staging" : "production";
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, env: SESH_ENV });
 });
 
 app.use(cookieParser());
@@ -105,6 +110,7 @@ app.get("/api/auth/config", (_req, res) => {
   res.json({
     enabled: authEnabled(),
     clientId: authEnabled() ? env("GOOGLE_CLIENT_ID") : null,
+    env: SESH_ENV,
   });
 });
 

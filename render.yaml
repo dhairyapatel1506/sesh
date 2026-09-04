@@ -21,3 +21,31 @@ services:
         sync: false
       - key: SESSION_SECRET
         sync: false
+
+  # Staging: the same app, deployed from the `staging` branch, with its own
+  # secrets (a separate Neon database branch, so tests never touch real
+  # accounts). Every change lands here first and is merged into main once it
+  # has been tried at staging.dhairya.cloud.
+  - type: web
+    name: sesh-staging
+    runtime: node
+    plan: free
+    branch: staging
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Marks the deploy so the app can say which one it is (a badge in the
+      # web client, the environment in /api/health).
+      - key: SESH_ENV
+        value: staging
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: SESSION_SECRET
+        sync: false

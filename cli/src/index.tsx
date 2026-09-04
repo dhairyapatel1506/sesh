@@ -9,8 +9,6 @@ import { Session } from "./session.js";
 import { App } from "./ui.js";
 import type { Account } from "./types.js";
 
-const DEFAULT_SERVER = "https://sesh.dhairya.cloud";
-
 // Read from the manifest rather than hardcoded, so publishing a version can
 // never disagree with the version the thing reports. Relative to dist/, which
 // is where this file lives once built.
@@ -22,6 +20,17 @@ function version(): string {
     return "unknown";
   }
 }
+
+// Where a bare `sesh` connects. A staging build — published under npm's
+// `next` tag with a `-staging` pre-release version, e.g. 0.8.0-staging.1 —
+// points at the staging server, so testing the terminal client against
+// staging is `npm i -g sesh-terminal@next` and nothing else to remember.
+// The version *is* the switch: there's no second field to forget to flip.
+// SESH_SERVER overrides either, for anything unusual.
+const PRODUCTION_SERVER = "https://sesh.dhairya.cloud";
+const STAGING_SERVER = "https://staging.dhairya.cloud";
+const DEFAULT_SERVER =
+  process.env.SESH_SERVER || (version().includes("-staging") ? STAGING_SERVER : PRODUCTION_SERVER);
 
 // WSL's audio relay (WSLg) wedges often enough that sesh won't play there.
 // Instead of failing mysteriously, hand the session off to the Windows-native
@@ -97,7 +106,7 @@ examples:
   sesh F3K9QX --server http://localhost:3001   # local dev server
   sesh login                                   # friends, invites, DMs
 
-sesh ${version()}`);
+sesh ${version()} → ${DEFAULT_SERVER}`);
   process.exit(1);
 }
 
