@@ -101,11 +101,10 @@ async function mixFor(seed: string): Promise<string[]> {
 // and any failure is an empty list, never an error. Costs no API quota, and
 // unlike a mix it exists for every video.
 //
-// Several client identities are tried in turn, then the watch page's HTML:
-// from a datacenter address YouTube treats these differently (the first
-// deploy saw every WEB request stall past its timeout while the same call
-// answered in a second from a home connection), and the timing of each
-// attempt is logged so the next such change is a log line, not a mystery.
+// The watch page's HTML is asked first, then the endpoint under several
+// client identities: from a datacenter address YouTube treats these
+// differently (see watchNextFor), and the timing of each attempt is logged
+// so the next such change is a log line, not a mystery.
 const NEXT_CLIENTS = [
   {
     name: "WEB",
@@ -153,6 +152,25 @@ function collectVideoIds(root: unknown, seed: string): string[] {
 }
 
 async function watchNextFor(seed: string): Promise<string[]> {
+  // The watch page first: from Render's network every POST to the internal
+  // endpoint stalled past its timeout, whatever client it claimed to be,
+  // while a plain GET of the page answered in a second. The page embeds the
+  // same data (ytInitialData), so it's the primary route and the endpoint is
+  // the fallback for the day the page's markup changes.
+  const pageStarted = Date.now();
+  try {
+    const res = await fetch(`https://www.youtube.com/watch?v=${seed}&hl=en`, {
+      headers: { "user-agent": NEXT_CLIENTS[0].ua, "accept-language": "en-US,en;q=0.9" },
+      signal: AbortSignal.timeout(NEXT_ATTEMPT_TIMEOUT_MS),
+    });
+    const html = await res.text();
+    const match = html.match(/ytInitialData\s*=\s*(\{.*?\});\s*<\/script>/s);
+    const ids = match ? collectVideoIds(JSON.parse(match[1]), seed) : [];
+    console.log(`radio: watch-page gave ${ids.length} for ${seed} in ${Date.now() - pageStarted}ms (status ${res.status})`);
+    if (ids.length > 0) return ids.slice(0, MIX_SIZE);
+  } catch (err) {
+    console.warn(`radio: watch-page failed after ${Date.now() - pageStarted}ms: ${(err as Error).message}`);
+  }
   for (const attempt of NEXT_CLIENTS) {
     const started = Date.now();
     try {
@@ -178,22 +196,7 @@ async function watchNextFor(seed: string): Promise<string[]> {
       console.warn(`radio: watch-next ${attempt.name} failed after ${Date.now() - started}ms: ${(err as Error).message}`);
     }
   }
-  // Last try: the watch page itself, whose HTML embeds the same data.
-  const started = Date.now();
-  try {
-    const res = await fetch(`https://www.youtube.com/watch?v=${seed}&hl=en`, {
-      headers: { "user-agent": NEXT_CLIENTS[0].ua, "accept-language": "en-US,en;q=0.9" },
-      signal: AbortSignal.timeout(NEXT_ATTEMPT_TIMEOUT_MS),
-    });
-    const html = await res.text();
-    const match = html.match(/ytInitialData\s*=\s*(\{.*?\});\s*<\/script>/s);
-    const ids = match ? collectVideoIds(JSON.parse(match[1]), seed) : [];
-    console.log(`radio: watch-page gave ${ids.length} for ${seed} in ${Date.now() - started}ms (status ${res.status})`);
-    return ids.slice(0, MIX_SIZE);
-  } catch (err) {
-    console.warn(`radio: watch-page failed after ${Date.now() - started}ms: ${(err as Error).message}`);
-    return [];
-  }
+  return [];
 }
 
 // What videos.list has to be asked before believing a video will embed.
