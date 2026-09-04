@@ -19,6 +19,7 @@ const MIX_SIZE = 25;
 // API calls in total.
 const MIX_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 300;
+const EMPTY_CACHE_TTL_MS = 2 * 60 * 1000;
 
 type Mix = { ids: string[]; fetchedAt: number };
 const mixCache = new Map<string, Mix>();
@@ -85,62 +86,112 @@ async function mixFor(seed: string): Promise<string[]> {
   // watch page shows beside this video. Free, and right for every kind of
   // video.
   if (ids.length === 0) ids = await watchNextFor(seed);
-  remember(mixCache, seed, { ids, fetchedAt: Date.now() });
+  // An empty answer is remembered only briefly: it's as likely a stalled
+  // request as a video with nothing beside it, and a day of "nothing to
+  // suggest" for a stall is the wrong trade.
+  const fetchedAt = ids.length > 0 ? Date.now() : Date.now() - MIX_CACHE_TTL_MS + EMPTY_CACHE_TTL_MS;
+  remember(mixCache, seed, { ids, fetchedAt });
   return ids;
 }
 
 // The "Up next" column of YouTube's own watch page, fetched the way the page
-// itself fetches it: the internal `next` endpoint, as an anonymous web
-// client. Unofficial, so parsed defensively — walk the whole response for
-// anything shaped like a video card rather than trusting one exact path —
+// itself fetches it: the internal `next` endpoint, as an anonymous client.
+// Unofficial, so parsed defensively — walk the whole response for anything
+// shaped like a recommendation card rather than trusting one exact path —
 // and any failure is an empty list, never an error. Costs no API quota, and
 // unlike a mix it exists for every video.
+//
+// Several client identities are tried in turn, then the watch page's HTML:
+// from a datacenter address YouTube treats these differently (the first
+// deploy saw every WEB request stall past its timeout while the same call
+// answered in a second from a home connection), and the timing of each
+// attempt is logged so the next such change is a log line, not a mystery.
+const NEXT_CLIENTS = [
+  {
+    name: "WEB",
+    client: { clientName: "WEB", clientVersion: "2.20240701.00.00" },
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+  },
+  {
+    name: "MWEB",
+    client: { clientName: "MWEB", clientVersion: "2.20240701.00.00" },
+    ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  },
+  {
+    name: "TVHTML5",
+    client: { clientName: "TVHTML5", clientVersion: "7.20240701.00.00" },
+    ua: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version",
+  },
+];
+const NEXT_ATTEMPT_TIMEOUT_MS = 6000;
+
+// Every card shape YouTube has used for "up next" and the end screen.
+function collectVideoIds(root: unknown, seed: string): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>([seed]);
+  const add = (id: unknown) => {
+    if (typeof id === "string" && /^[\w-]{11}$/.test(id) && !seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  };
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    const obj = node as Record<string, any>;
+    if (obj.compactVideoRenderer?.videoId) add(obj.compactVideoRenderer.videoId);
+    else if (obj.videoWithContextRenderer?.videoId) add(obj.videoWithContextRenderer.videoId);
+    else if (obj.endScreenVideoRenderer?.videoId) add(obj.endScreenVideoRenderer.videoId);
+    else if (obj.lockupViewModel?.contentType === "LOCKUP_CONTENT_TYPE_VIDEO") add(obj.lockupViewModel.contentId);
+    for (const value of Object.values(obj)) walk(value);
+  };
+  walk(root);
+  return ids;
+}
+
 async function watchNextFor(seed: string): Promise<string[]> {
+  for (const attempt of NEXT_CLIENTS) {
+    const started = Date.now();
+    try {
+      const res = await fetch("https://www.youtube.com/youtubei/v1/next?prettyPrint=false", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "user-agent": attempt.ua,
+          "accept-language": "en-US,en;q=0.9",
+        },
+        body: JSON.stringify({ context: { client: { ...attempt.client, hl: "en", gl: "US" } }, videoId: seed }),
+        signal: AbortSignal.timeout(NEXT_ATTEMPT_TIMEOUT_MS),
+      });
+      const elapsed = Date.now() - started;
+      if (!res.ok) {
+        console.warn(`radio: watch-next ${attempt.name} answered ${res.status} in ${elapsed}ms`);
+        continue;
+      }
+      const ids = collectVideoIds(await res.json(), seed);
+      console.log(`radio: watch-next ${attempt.name} gave ${ids.length} for ${seed} in ${elapsed}ms`);
+      if (ids.length > 0) return ids.slice(0, MIX_SIZE);
+    } catch (err) {
+      console.warn(`radio: watch-next ${attempt.name} failed after ${Date.now() - started}ms: ${(err as Error).message}`);
+    }
+  }
+  // Last try: the watch page itself, whose HTML embeds the same data.
+  const started = Date.now();
   try {
-    const res = await fetch("https://www.youtube.com/youtubei/v1/next?prettyPrint=false", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "accept-language": "en-US,en;q=0.9",
-      },
-      body: JSON.stringify({
-        context: { client: { clientName: "WEB", clientVersion: "2.20240701.00.00", hl: "en", gl: "US" } },
-        videoId: seed,
-      }),
-      signal: AbortSignal.timeout(8000),
+    const res = await fetch(`https://www.youtube.com/watch?v=${seed}&hl=en`, {
+      headers: { "user-agent": NEXT_CLIENTS[0].ua, "accept-language": "en-US,en;q=0.9" },
+      signal: AbortSignal.timeout(NEXT_ATTEMPT_TIMEOUT_MS),
     });
-    if (!res.ok) return [];
-    const data = (await res.json()) as Record<string, unknown>;
-    const ids: string[] = [];
-    const seen = new Set<string>([seed]);
-    const add = (id: unknown) => {
-      if (typeof id === "string" && /^[\w-]{11}$/.test(id) && !seen.has(id)) {
-        seen.add(id);
-        ids.push(id);
-      }
-    };
-    const walk = (node: unknown): void => {
-      if (!node || typeof node !== "object") return;
-      if (Array.isArray(node)) {
-        node.forEach(walk);
-        return;
-      }
-      const obj = node as Record<string, any>;
-      // The two card shapes YouTube has used for the sidebar so far.
-      if (obj.compactVideoRenderer?.videoId) add(obj.compactVideoRenderer.videoId);
-      else if (obj.lockupViewModel?.contentType === "LOCKUP_CONTENT_TYPE_VIDEO") add(obj.lockupViewModel.contentId);
-      for (const value of Object.values(obj)) walk(value);
-    };
-    // The sidebar specifically, so the video's own card and the comments'
-    // embedded links don't count as suggestions.
-    const sidebar = (data as any)?.contents?.twoColumnWatchNextResults?.secondaryResults;
-    walk(sidebar ?? data);
-    if (ids.length === 0) console.warn(`radio: watch-next gave nothing for ${seed} (response shape changed?)`);
+    const html = await res.text();
+    const match = html.match(/ytInitialData\s*=\s*(\{.*?\});\s*<\/script>/s);
+    const ids = match ? collectVideoIds(JSON.parse(match[1]), seed) : [];
+    console.log(`radio: watch-page gave ${ids.length} for ${seed} in ${Date.now() - started}ms (status ${res.status})`);
     return ids.slice(0, MIX_SIZE);
   } catch (err) {
-    console.warn("radio: watch-next lookup failed:", (err as Error).message);
+    console.warn(`radio: watch-page failed after ${Date.now() - started}ms: ${(err as Error).message}`);
     return [];
   }
 }
