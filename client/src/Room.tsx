@@ -1500,13 +1500,11 @@ function Room() {
   // the chip is the copy button for it.
   const [codeCopied, setCodeCopied] = useState(false);
   const copyRoomCode = () => {
-    void navigator.clipboard
-      ?.writeText(roomId)
-      .then(() => {
-        setCodeCopied(true);
-        window.setTimeout(() => setCodeCopied(false), 1400);
-      })
-      .catch(() => {});
+    // Confirm on the press, not on the promise: the clipboard write resolves
+    // whenever it resolves, and the feedback is about the click.
+    setCodeCopied(true);
+    window.setTimeout(() => setCodeCopied(false), 1100);
+    void navigator.clipboard?.writeText(roomId).catch(() => {});
   };
 
   const toggleChatMuted = () => {
@@ -1826,24 +1824,39 @@ function Room() {
   // Ignore sub-pixel pointer jitter — only restart the HUD hide timer when
   // the mouse has actually moved a meaningful distance.
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  // Whether the pointer is over the player at all, so the flash and the bar
+  // can leave together without yanking the bar out from under a cursor.
+  const pointerOverRef = useRef(false);
+
+  // While the centre flash is up, the bar stays with it: they cover
+  // YouTube's own flash between them, and they have to leave together or the
+  // one that goes first leaves the other looking stranded.
+  const bezelUntilRef = useRef(0);
+  const holdFor = () => Math.max(HUD_IDLE_MS, bezelUntilRef.current - Date.now());
 
   const showHud = (sticky: boolean) => {
     window.clearTimeout(hudTimerRef.current);
     setHudShown(true);
     if (sticky) return;
-    hudTimerRef.current = window.setTimeout(() => setHudShown(false), HUD_IDLE_MS);
+    hudTimerRef.current = window.setTimeout(() => setHudShown(false), holdFor());
   };
 
   const hideHud = () => {
     window.clearTimeout(hudTimerRef.current);
+    const wait = bezelUntilRef.current - Date.now();
+    if (wait > 0) {
+      hudTimerRef.current = window.setTimeout(() => setHudShown(false), wait);
+      return;
+    }
     setHudShown(false);
   };
 
-  // A paused video keeps its controls: there's nothing to watch, and the bar
-  // is how you start it again.
+  // Play or pause, the bar behaves the same: it shows on the change and goes
+  // when the mouse does. It used to stay up for the whole of a pause, which
+  // was only ever there to cover YouTube's paused overlay — and that is
+  // clipped out of the picture now.
   useEffect(() => {
-    if (!localPlaying) showHud(true);
-    else showHud(false);
+    showHud(false);
     return () => window.clearTimeout(hudTimerRef.current);
   }, [localPlaying]);
 
@@ -1857,8 +1870,15 @@ function Room() {
   useEffect(() => {
     if (!videoId) return;
     setBezel(localPlaying ? "play" : "pause");
+    bezelUntilRef.current = Date.now() + BEZEL_MS;
     window.clearTimeout(bezelTimerRef.current);
-    bezelTimerRef.current = window.setTimeout(() => setBezel(null), BEZEL_MS);
+    bezelTimerRef.current = window.setTimeout(() => {
+      setBezel(null);
+      bezelUntilRef.current = 0;
+      // Whatever the bar was waiting for is over; if the pointer has gone,
+      // it goes now, in the same frame the flash does.
+      if (!pointerOverRef.current) setHudShown(false);
+    }, BEZEL_MS);
     return () => window.clearTimeout(bezelTimerRef.current);
   }, [localPlaying, videoId]);
 
@@ -2465,7 +2485,7 @@ function Room() {
           <h1>
             <Link to="/">
               <img src="/logo.png" alt="" className="logo-mark" />
-              Sesh
+              <span className="wordmark">Sesh</span>
             </Link>
           </h1>
         </header>
@@ -2500,7 +2520,7 @@ function Room() {
         <h1>
           <Link to="/">
             <img src="/logo.png" alt="" className="logo-mark" />
-            Sesh
+            <span className="wordmark">Sesh</span>
           </Link>
         </h1>
         <div className="header-meta">
@@ -2523,6 +2543,9 @@ function Room() {
               <span className="meta-value">{formatUptime(uptimeTick - roomCreatedAt)}</span>
             </span>
           )}
+          {/* Up here where it can be found, rather than at the bottom of the
+              page past everything. The room code goes with the report. */}
+          <ReportBug roomId={roomId} />
           <span
             className={`conn is-${connection}`}
             title={
@@ -2674,6 +2697,7 @@ function Room() {
                   const dx = prev ? e.clientX - prev.x : 0;
                   const dy = prev ? e.clientY - prev.y : 0;
                   lastPointerRef.current = { x: e.clientX, y: e.clientY };
+                  pointerOverRef.current = true;
                   if (prev && Math.abs(dx) + Math.abs(dy) < 3) return;
                   // sticky === "stay up until something else hides it", which
                   // is what a *paused* video wants. Playing wants the timer.
@@ -2684,9 +2708,8 @@ function Room() {
                 }}
                 onPointerLeave={() => {
                   lastPointerRef.current = null;
-                  // Not while paused: a paused video has nothing to watch,
-                  // and the bar is how you start it again.
-                  if (!scrubRef.current && localPlaying) hideHud();
+                  pointerOverRef.current = false;
+                  if (!scrubRef.current) hideHud();
                 }}
               >
                 <div id="yt-player" ref={playerContainerRef} />
@@ -3259,12 +3282,7 @@ function Room() {
         )}
       </div>
 
-      {/* Below everything, deliberately: something went wrong is worth telling
-          us about, but it isn't what anyone came here to do. The room code goes
-          with the report — it's the single most useful thing on one. */}
-      <footer className="app-footer">
-        <ReportBug roomId={roomId} />
-      </footer>
+
     </div>
   );
 }

@@ -49,7 +49,7 @@ function LinkTerminal() {
         <h1>
           <Link to="/">
             <img src="/logo.png" alt="" className="logo-mark" />
-            Sesh
+            <span className="wordmark">Sesh</span>
           </Link>
         </h1>
       </header>
