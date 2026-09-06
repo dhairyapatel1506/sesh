@@ -65,8 +65,8 @@ header h1 a:hover {
    lines up boxes, and a text box carries empty descender space below the
    glyphs whose size depends on the font — which is why this looked right on
    one machine and wrong on another. Trimming the box to cap-height and
-   baseline makes the box the letters. Where that isn't supported, a measured
-   nudge gets close. */
+   baseline makes the box the letters themselves. Where that isn't supported,
+   the measured nudge gets close. */
 .wordmark {
   line-height: 1;
   text-box: trim-both cap alphabetic;
@@ -185,11 +185,633 @@ a:focus-visible {
   .queue-item,
   .end-tile,
   .meta-chip {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.load-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.load-bar input {
+  flex: 1;
+}
+
+.load-bar button {
+  white-space: nowrap;
+}
+
+.search-results {
+  margin: -0.75rem 0 1.5rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.search-results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.15rem 0.4rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.search-results-close {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.2rem 0.5rem;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.search-results-close:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--accent);
+  filter: none;
+}
+
+.search-results-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+.search-result-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.search-result-row .search-result {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-result-queue {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.search-result-queue:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.queue-link {
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--border);
+  white-space: nowrap;
+}
+
+.queue-link:hover:not(:disabled) {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.search-result {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.4rem;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: inherit;
+  font-weight: 400;
+  text-align: left;
+}
+
+.search-result:hover {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.search-result img {
+  width: 110px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--code-bg);
+}
+
+.search-result-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.search-result-title {
+  color: var(--text-h);
+  font-weight: 500;
+  font-size: 0.95rem;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.search-result-meta {
+  font-size: 0.8rem;
+}
+
+/* The clipping window, and the reason YouTube's own chrome is never seen.
+   Its title bar, and the share / Watch Later / "More videos" strip it draws
+   whenever the video is paused, anchor to the top and bottom edges of the
+   iframe — and controls=0 doesn't remove them. So the iframe is made taller
+   than the picture and pulled up inside this box, which clips it: YouTube
+   letterboxes the video to fit the taller frame, so the picture lands
+   exactly on the window while its chrome sits in the clipped-off strips.
+   Measured: the video element inside the frame keeps the same width and
+   height, offset by exactly --yt-clip, and nothing of YouTube's is on screen
+   while paused. */
+#yt-player {
+  --yt-clip: clamp(64px, 14%, 150px);
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 640px;
+}
+
+/* Anchors the unmute nudge over the video rather than the page. */
+.player-frame {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* Sits clear of YouTube's own top-right controls and bottom bar. */
+.unmute-nudge {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 2;
+  padding: 0.45rem 0.8rem;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+
+.unmute-nudge:hover {
+  background: rgba(0, 0, 0, 0.9);
+}
+
+/* The YouTube API sets the iframe's width/height as HTML attributes (not
+   CSS), so it ignores the wrapper's responsive sizing unless overridden
+   here directly. */
+#yt-player iframe {
+  display: block;
+  position: absolute;
+  left: 0;
+  top: calc(-1 * var(--yt-clip));
+  width: 100%;
+  height: calc(100% + 2 * var(--yt-clip));
+  border: 0;
+  border-radius: 0;
+}
+
+/* Player error below the frame, not over it: the default .load-error pulls
+   itself up with a negative margin (styled for the load bar), which drew the
+   message across the bottom of the video. Compound selector so this beats
+   .load-error regardless of declaration order. */
+.load-error.player-error {
+  margin: 0.75rem auto 0;
+  max-width: 640px;
+}
+
+/* ---- Fullscreen (our own, on the wrapper — YouTube's is disabled) ---- */
+
+/* The wrapper as the fullscreen element: black stage, video centered and as
+   large as the screen allows, overlays free to sit on top. The iframe's
+   inline width/height/aspect-ratio (set on ready) are overridden here —
+   !important because inline styles win otherwise. */
+.player-frame.is-fullscreen {
+  max-width: none;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.player-frame.is-fullscreen #yt-player {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+
+.player-frame.is-fullscreen #yt-player iframe {
+  width: 100% !important;
+  height: calc(100% + 2 * var(--yt-clip)) !important;
+  aspect-ratio: auto !important;
+  border-radius: 0;
+}
+
+/* Windowed, the fullscreen control is a normal button under the player —
+   out of YouTube's way entirely. */
+.player-fs-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.player-fs-button:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--accent);
+  filter: none;
+}
+
+/* Above our control bar, clear of it whether the bar is showing or not. */
+.fs-chat-toggle {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 4rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  cursor: pointer;
+}
+
+.fs-chat-toggle:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+/* The radio's announced pick shown where the queue would be — visibly not a
+   queued item anyone chose. */
+.queue-item.queue-radio {
+  opacity: 0.85;
+}
+
+/* Floating controls behave like YouTube's chrome: awake on pointer activity,
+   faded out after a beat of stillness. */
+.fs-chat-toggle {
+  opacity: 1;
+  transition: opacity 0.25s ease;
+}
+
+/* Dim enough not to compete with the picture, full strength the moment the
+   pointer is on it. Deliberately not tied to the control bar's show/hide:
+   the unread badge rides on this button, and a badge that only appears when
+   you move the mouse is a badge nobody sees. */
+.player-frame .fs-chat-toggle {
+  opacity: 0.4;
+}
+
+.player-frame .fs-chat-toggle:hover,
+.player-frame .fs-chat-toggle:focus-visible {
+  opacity: 1;
+}
+
+.fs-chat-badge {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.1rem;
+  text-align: center;
+}
+
+/* Compact chat over the right edge of the fullscreen video. Dark and
+   semi-transparent so the video stays visible behind it; its own column
+   catches pointer events, the rest of the video surface stays clickable. */
+.fs-chat {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  bottom: 9.5rem;
+  width: 320px;
+  max-width: 80vw;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
+  text-align: left;
+}
+
+.fs-chat .chat-messages {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Bubbles need to read on top of video, whatever the app theme is. */
+.fs-chat .chat-bubble {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.fs-chat .chat-msg.own .chat-bubble {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+.fs-chat .chat-empty {
+  color: #fff;
+}
+
+.fs-chat-bar {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.fs-chat-bar input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.fs-chat-bar button {
+  padding: 0.45rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+/* The picker floats above the page chat's bar, but .fs-chat is itself the
+   positioned ancestor here — floating it would put it above the whole panel
+   and off the top of the screen. In fullscreen it just takes its place in the
+   column instead, above the bar, dressed for the dark overlay. */
+.fs-chat .emoji-panel {
+  position: static;
+  background: rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+.fs-chat .emoji-panel .emoji-grid {
+  max-height: 9rem;
+}
+
+.fs-chat .emoji-search {
+  background: rgba(0, 0, 0, 0.5);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.fs-chat .emoji-panel button {
+  color: #fff;
+}
+
+/* ---- End-of-video ---- */
+
+/* "Up next" pill during the last seconds — top-left, clear of the player's
+   bottom controls and our bottom-right buttons. Display only, so it must
+   not eat clicks meant for the video. */
+
+/* Our own recommendations in place of YouTube's wall of tiles — the ones here
+   play in the room instead of opening youtube.com. */
+/* ---- our own player controls ----
+   The embed runs with controls=0; everything here is ours. It hides the
+   instant the pointer leaves the frame, which is the whole reason it exists:
+   YouTube's own chrome sits there for ~3.6s and no page can tell someone
+   else's iframe that the mouse has gone. */
+/* Controls gone, pointer gone — it comes back with them on the next move. */
+.player-frame.is-idle,
+.player-frame.is-idle .player-click {
+  cursor: none;
+}
+
+/* ---- player: title, centre flash, settings menu ---- */
+
+/* Over a gradient rather than a band: nothing of YouTube's is up there to
+   hide any more (it's clipped), so this is chrome, not a cover. */
+.player-title {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 0.7rem 0.9rem 2rem;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  border-radius: 12px 12px 0 0;
+}
+
+.player-title.is-shown {
+  opacity: 1;
+}
+
+.player-title span {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The centre play/pause flash. Opaque on purpose: YouTube draws its own for
+   about 3.6s after every state change, this one covers it and leaves when we
+   say rather than when YouTube does. */
+.player-bezel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  /* Only as big as what YouTube actually paints: its group measures 124x56,
+     but the flanking skip buttons never draw — what shows is the 56px circle
+     in the middle (9.4% of a 594px-wide player). This is that plus a couple
+     of pixels, and nothing more. */
+  width: clamp(52px, 11%, 92px);
+  aspect-ratio: 1;
+  height: auto;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(10, 10, 14, 0.95);
+  color: #fff;
+  pointer-events: none;
+  animation: bezel-out 5200ms ease-out forwards;
+}
+
+.player-bezel svg {
+  width: 40%;
+  height: 40%;
+}
+
+/* It appears, holds, and is removed — no long dissolve, because a fade is a
+   window where YouTube's icon underneath shows through ours. */
+@keyframes bezel-out {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.86); }
+  6% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-bezel {
+    animation: none;
+    opacity: 0.9;
+  }
+}
+
+/* Autoplay lives on the player now, next to the rest of the controls. */
+.pbar-autoplay {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.5rem;
+  height: 30px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pbar-autoplay:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* Sizing lives on .pbar-switch — a rule for the input inside this label
+   would beat it on specificity and hand back a default checkbox. */
+.pbar-autoplay input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.pbar-settings {
+  position: relative;
+  display: inline-flex;
+}
+
+.pbar-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.4rem);
+  min-width: 8.5rem;
+  padding: 0.3rem;
+  border-radius: 10px;
+  background: rgba(12, 12, 16, 0.96);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  text-align: left;
+}
+
+.pbar-menu-head {
+  margin: 0.2rem 0.5rem 0.3rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.pbar-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pbar-menu-item:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.pbar-menu-item.is-on::after {
+  content: "✓";
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+.pbar-btn.is-on {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* ---- header chips ---- */
+
+.meta-chip {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 0;
-  padding: 0.3rem 0.65rem;
+  padding: 0.32rem 0.65rem;
   border: 1px solid var(--border);
   border-radius: 999px;
   font: inherit;
@@ -203,25 +825,20 @@ a:focus-visible {
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
 }
 
-/* A slow sheen crossing the chip every few seconds — enough to catch the eye
-   as something live, not enough to nag. */
+/* A slow sheen crossing the chip every few seconds — enough to read as
+   something live, not enough to nag. */
 .meta-chip::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(
-    115deg,
-    transparent 35%,
-    var(--accent-bg) 48%,
-    transparent 62%
-  );
+  background: linear-gradient(115deg, transparent 35%, var(--accent-bg) 48%, transparent 62%);
   transform: translateX(-120%);
   animation: chip-sheen 7s ease-in-out infinite;
   pointer-events: none;
 }
 
-.meta-chip:nth-of-type(2)::before {
-  animation-delay: 1.4s;
+.meta-chip.room-uptime::before {
+  animation-delay: 1.6s;
 }
 
 @keyframes chip-sheen {
@@ -241,8 +858,9 @@ a:focus-visible {
   transform: scale(0.96);
 }
 
-/* Pressed: green immediately, with a line drawing itself around the border,
-   then back to normal. */
+/* Pressed: green at once, with a line drawing itself round the border, then
+   back to normal. The confirmation is about the click, so it doesn't wait on
+   the clipboard promise. */
 .meta-chip.is-copied {
   border-color: transparent;
   color: #22c55e;
@@ -262,26 +880,28 @@ a:focus-visible {
 
 @keyframes chip-sweep {
   0% { clip-path: inset(0 100% 0 0); }
-  55% { clip-path: inset(0 0 0 0); }
+  55% { clip-path: inset(0 0 0 0); opacity: 1; }
   100% { clip-path: inset(0 0 0 0); opacity: 0; }
 }
 
 .meta-label,
 .meta-value {
-  line-height: 1;
   display: inline-flex;
   align-items: center;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* The value opens out of the chip on hover; collapsed it takes no width and
    no gap, so the chip is exactly as wide as its label. */
 .meta-value {
+  /* Needs a box of its own, or max-width and overflow don't apply and the
+     chip carries the value's width even while it's closed. */
   max-width: 0;
   margin-left: 0;
   overflow: hidden;
   white-space: nowrap;
   font-family: var(--mono);
-  font-size: 0.76rem;
   letter-spacing: 0.04em;
   color: var(--accent);
   opacity: 0;
@@ -293,6 +913,10 @@ a:focus-visible {
   max-width: 9rem;
   margin-left: 0.4rem;
   opacity: 1;
+}
+
+.meta-chip:active {
+  transform: scale(0.96);
 }
 
 @media (prefers-reduced-motion: reduce) {
