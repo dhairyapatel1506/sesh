@@ -420,6 +420,10 @@ app.post("/api/report", async (req, res) => {
     // After the response, and never allowed to affect it: the report is
     // already stored and the person has already been thanked, so a mail
     // provider having a bad afternoon is not their problem.
+    // Said out loud either way: a report that is stored but never emailed
+    // used to look exactly like one that was emailed fine — no line in the
+    // log at all — which cost an afternoon to work out.
+    if (!mailEnabled()) console.log(`report ${id} stored; mail is not configured on this deploy`);
     if (mailEnabled()) {
       const reporter = req.userId ? ((await getUser(req.userId).catch(() => null))?.name ?? null) : null;
       void sendReportMail({

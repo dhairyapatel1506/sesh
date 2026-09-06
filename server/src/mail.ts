@@ -126,6 +126,7 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
           ]
         : undefined,
     );
+    console.log(`emailed report ${report.id}`);
   } catch (err) {
     console.error("couldn't email that bug report:", (err as Error).message);
   }
