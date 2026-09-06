@@ -888,6 +888,10 @@ button:disabled {
   display: inline-flex;
   align-items: baseline;
   min-width: 0;
+  /* A span in the header, so `header span { font-size: 0.85rem }` was
+     catching it — and the label and value, which inherit from it, came out a
+     size larger than the chips that have no inner row (Friends, Invite). */
+  font-size: inherit;
 }
 
 .meta-label,

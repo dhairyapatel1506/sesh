@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { API_BASE, socket } from "./socket";
-import { applyShortcodes, searchEmojis } from "./emoji";
+import { applyShortcodes } from "./emoji";
 import { extractVideoId, loadYouTubeApi, PlayerState, type YTPlayer } from "./youtube";
 import { useAuth } from "./auth";
 import { FriendsPanel, InviteToast, totalUnread, useFriends } from "./Friends";
@@ -2217,6 +2217,7 @@ function Room() {
     flags: "🏳️",
   };
   const [emojiData, setEmojiData] = useState<PickerGroup[]>([]);
+  const [emojiWanted, setEmojiWanted] = useState(false);
   const [emojiTab, setEmojiTab] = useState("smileys_emotion");
   const [recentEmoji, setRecentEmoji] = useState<string[]>(() => {
     try {
@@ -2226,8 +2227,23 @@ function Room() {
     }
   });
 
+  // Fetched when the room goes idle rather than when the picker opens: it
+  // used to open on the curated shortcode list and swap to the full set a
+  // moment later, which is a flash of the wrong thing.
   useEffect(() => {
-    if (!emojiOpen || emojiData.length > 0) return;
+    if (emojiData.length > 0) return;
+    const idle = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    const start = () => setEmojiWanted(true);
+    const handle = idle ? idle(start, { timeout: 4000 }) : window.setTimeout(start, 1500);
+    return () => {
+      if (!idle) window.clearTimeout(handle as number);
+    };
+  }, [emojiData.length]);
+
+  useEffect(() => {
+    if ((!emojiOpen && !emojiWanted) || emojiData.length > 0) return;
     let cancelled = false;
     void import("unicode-emoji-json/data-by-group.json").then((mod) => {
       if (cancelled) return;
@@ -2261,7 +2277,7 @@ function Room() {
     return () => {
       cancelled = true;
     };
-  }, [emojiOpen, emojiData.length]);
+  }, [emojiOpen, emojiWanted, emojiData.length]);
 
   const rememberEmoji = (char: string) => {
     setRecentEmoji((was) => {
@@ -2284,15 +2300,16 @@ function Room() {
   const emojiList: PickerEmoji[] = (() => {
     const query = emojiQuery.trim().toLowerCase();
     if (query) {
-      const all = emojiData.flatMap((g) => g.emojis);
-      const pool = all.length > 0 ? all : searchEmojis("").map((e) => ({ char: e.char, names: e.names }));
-      return pool.filter((e) => e.names.some((name) => name.toLowerCase().includes(query))).slice(0, 120);
+      return emojiData
+        .flatMap((g) => g.emojis)
+        .filter((e) => e.names.some((name) => name.toLowerCase().includes(query)))
+        .slice(0, 120);
     }
     if (emojiTab === "recent") return recentEmoji.map((char) => ({ char, names: ["recent"] }));
     const group = emojiData.find((g) => g.slug === emojiTab);
-    if (group) return group.emojis;
-    // Before the full set has landed, the curated list stands in.
-    return searchEmojis("").map((e) => ({ char: e.char, names: e.names }));
+    // Nothing at all until the set is here: the grid holds its height, so an
+    // empty moment is a still panel rather than a different one.
+    return group ? group.emojis : [];
   })();
 
   const renderEmojiPanel = (target: React.RefObject<HTMLInputElement | null>) =>
@@ -2339,7 +2356,11 @@ function Room() {
               {e.char}
             </button>
           ))}
-          {emojiList.length === 0 && <p className="emoji-empty">Nothing matches that.</p>}
+          {emojiList.length === 0 && (
+            <p className="emoji-empty">
+              {emojiData.length === 0 ? "" : "Nothing matches that."}
+            </p>
+          )}
         </div>
       </div>
     );
