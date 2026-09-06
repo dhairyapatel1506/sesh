@@ -1536,10 +1536,10 @@ function Room() {
     // Confirm on the press, not on the promise: the clipboard write resolves
     // whenever it resolves, and the feedback is about the click.
     setCodeCopied(true);
-    // A shade longer than the lap (1000ms), so the line finishes its circuit
-    // before the chip goes back to being a chip. They used to race, and the
-    // green fell away with the line still halfway round.
-    window.setTimeout(() => setCodeCopied(false), 1250);
+    // Exactly the length of the lap: the line fades out over its last 8%
+    // (see chip-lap) and the chip's colours start easing back at the same
+    // moment, so there is no pause at the finish line.
+    window.setTimeout(() => setCodeCopied(false), 1000);
     void navigator.clipboard?.writeText(roomId).catch(() => {});
   };
 
@@ -2642,7 +2642,7 @@ function Room() {
         <header>
           <h1>
             <Link to="/">
-              <img src="/logo.png" alt="" className="logo-mark" />
+              <img src="/logo.svg" alt="" className="logo-mark" />
               <span className="wordmark">Sesh</span>
             </Link>
           </h1>
@@ -2677,7 +2677,7 @@ function Room() {
       <header>
         <h1>
           <Link to="/">
-            <img src="/logo.png" alt="" className="logo-mark" />
+            <img src="/logo.svg" alt="" className="logo-mark" />
             <span className="wordmark">Sesh</span>
           </Link>
         </h1>
@@ -3026,12 +3026,28 @@ function Room() {
                         aria-label={silent ? "Unmute" : "Mute"}
                       >
                         {silent ? (
-                          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
-                            <path d="M4 9v6h4l5 4V5L8 9H4zm12.5 3l2.7-2.7-1.1-1.1L15.4 11l-2.7-2.8-1.1 1.1L14.3 12l-2.7 2.7 1.1 1.1 2.7-2.7 2.7 2.7 1.1-1.1z" />
+                          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+                            {/* The cone stops at x=11 and the cross starts at
+                                x=14.5 — they used to overlap, which read as a
+                                smudge rather than a muted speaker. */}
+                            <path fill="currentColor" d="M3 9.5v5h3.5L11 18V6L6.5 9.5H3z" />
+                            <path
+                              stroke="currentColor"
+                              strokeWidth="1.9"
+                              strokeLinecap="round"
+                              d="M15 9.5l5 5m0-5l-5 5"
+                            />
                           </svg>
                         ) : (
-                          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
-                            <path d="M4 9v6h4l5 4V5L8 9H4zm11.5 3a4 4 0 0 0-2-3.5v7a4 4 0 0 0 2-3.5zm-2 -7.7v2.1a6 6 0 0 1 0 11.2v2.1a8 8 0 0 0 0-15.4z" />
+                          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+                            <path fill="currentColor" d="M3 9.5v5h3.5L11 18V6L6.5 9.5H3z" />
+                            <path
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.7"
+                              strokeLinecap="round"
+                              d="M14.2 9.2a4 4 0 0 1 0 5.6M17 7a7.5 7.5 0 0 1 0 10"
+                            />
                           </svg>
                         )}
                       </button>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 307" role="img" aria-label="Sesh">
+  <!-- The mark as vector. Traced from logo.png, whose 7px strokes were being
+       scaled to a third of a pixel in the header and shimmering because of
+       it. Geometry read off the bitmap: centres (153, 153.5) and
+       (358.5, 153.5); rings at r=141.5 (7px) and r=107.5 (6px); discs at
+       r=69 with the same top-to-bottom gradient the original has. -->
+  <defs>
+    <linearGradient id="sesh-disc" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d0a8fb" />
+      <stop offset="1" stop-color="#a66ffc" />
+    </linearGradient>
+  </defs>
+  <g fill="none">
+    <circle cx="153" cy="153.5" r="141.5" stroke="#593181" stroke-width="7" />
+    <circle cx="153" cy="153.5" r="107.5" stroke="#a259ec" stroke-width="6" />
+    <circle cx="153" cy="153.5" r="69" fill="url(#sesh-disc)" />
+    <circle cx="358.5" cy="153.5" r="141.5" stroke="#593181" stroke-width="7" />
+    <circle cx="358.5" cy="153.5" r="107.5" stroke="#a259ec" stroke-width="6" />
+    <circle cx="358.5" cy="153.5" r="69" fill="url(#sesh-disc)" />
+  </g>
+</svg>

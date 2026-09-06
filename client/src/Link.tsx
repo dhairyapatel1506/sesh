@@ -48,7 +48,7 @@ function LinkTerminal() {
       <header>
         <h1>
           <Link to="/">
-            <img src="/logo.png" alt="" className="logo-mark" />
+            <img src="/logo.svg" alt="" className="logo-mark" />
             <span className="wordmark">Sesh</span>
           </Link>
         </h1>

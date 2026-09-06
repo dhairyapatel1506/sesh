@@ -852,10 +852,10 @@ button:disabled {
 }
 
 .chip-lap rect {
-  x: 1px;
-  y: 1px;
-  width: calc(100% - 2px);
-  height: calc(100% - 2px);
+  x: 0;
+  y: 0;
+  width: 100%;
+  height: 100%;
   /* ry only, and as a percentage of the height: `rx: 999px` was being clamped
      to half the *width*, which drew a stadium with 60px elliptical ends —
      a curve nothing like the chip's, cutting through the middle of it. With
@@ -873,9 +873,12 @@ button:disabled {
   animation: chip-lap 1000ms linear forwards;
 }
 
+/* Linear the whole way round, then gone in the last 8% — the line used to
+   sit at the finish line while the chip waited to change back. */
 @keyframes chip-lap {
-  from { stroke-dashoffset: 0; }
-  to { stroke-dashoffset: -100; }
+  0% { stroke-dashoffset: 0; opacity: 1; }
+  92% { opacity: 1; }
+  100% { stroke-dashoffset: -100; opacity: 0; }
 }
 
 /* The two texts sit on one baseline — centring their boxes lines up the
