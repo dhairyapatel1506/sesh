@@ -170,6 +170,8 @@ a:focus-visible {
   border-radius: 10px;
 }
 
+
+
 .end-tile:active,
 .queue-action:active,
 .search-result:active {
@@ -815,7 +817,14 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 0;
-  padding: 0.32rem 0.65rem;
+  min-height: 1.85rem;
+  padding: 0.3rem 0.7rem;
+  /* Buttons come out of the UA stylesheet as border-box and a bare span does
+     not, so the same min-height made the span-based chip (Uptime) 13px taller
+     than its neighbours. */
+  box-sizing: border-box;
+  /* A stretchy parent must not make one chip taller than its neighbours. */
+  align-self: center;
   border: 1px solid var(--border);
   border-radius: 999px;
   font: inherit;
@@ -829,26 +838,9 @@ button:disabled {
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
 }
 
-/* A slow sheen crossing the chip every few seconds — enough to read as
-   something live, not enough to nag. */
-.meta-chip::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(115deg, transparent 35%, var(--accent-bg) 48%, transparent 62%);
-  transform: translateX(-120%);
-  animation: chip-sheen 7s ease-in-out infinite;
-  pointer-events: none;
-}
-
-.meta-chip.room-uptime::before {
-  animation-delay: 1.6s;
-}
-
-@keyframes chip-sheen {
-  0%, 62% { transform: translateX(-120%); }
-  78%, 100% { transform: translateX(120%); }
-}
+/* Every chip in the header is this one shape: same height, same padding,
+   same weight, same resting colour. Anything that also carries its own class
+   (Feedback, Friends, Invite) inherits from here and adds nothing. */
 
 .meta-chip:hover:not(:disabled),
 .meta-chip:focus-visible {
@@ -915,6 +907,10 @@ button:disabled {
 .meta-value {
   display: inline-flex;
   align-items: center;
+  /* `header span` sets 0.85rem for the header's own small print, and these
+     are spans in the header — without this the chip's text is a size bigger
+     than the chip was built for, and the chip grows with it. */
+  font-size: inherit;
   line-height: 1;
   white-space: nowrap;
 }
@@ -925,6 +921,7 @@ button:disabled {
   /* Needs a box of its own, or max-width and overflow don't apply and the
      chip carries the value's width even while it's closed. */
   max-width: 0;
+  font-size: inherit;
   margin-left: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -1005,11 +1002,11 @@ button:disabled {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 200%;
-  height: 200%;
-  margin: -100% 0 0 -100%;
+  width: 170%;
+  height: 170%;
+  margin: -85% 0 0 -85%;
   border-radius: 50%;
-  border: 2px solid currentColor;
+  border: 1.5px solid currentColor;
   border-top-color: transparent;
   animation: conn-spin 0.9s linear infinite;
 }
@@ -1304,14 +1301,17 @@ button:disabled {
   color: var(--text-h);
 }
 
+/* stretch, so the copy button is exactly as tall as the box beside it. */
 .invite-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 0.4rem;
   margin-bottom: 0.6rem;
 }
 
 .invite-link {
+  display: flex;
+  align-items: center;
   flex: 1;
   min-width: 0;
   padding: 0.35rem 0.5rem;
@@ -1325,6 +1325,8 @@ button:disabled {
 }
 
 .invite-copy {
+  display: inline-flex;
+  align-items: center;
   padding: 0.35rem 0.7rem;
   font-size: 0.76rem;
   white-space: nowrap;
@@ -2142,6 +2144,9 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  /* The hover box used to run edge to edge against the row's contents. */
+  padding: 0.3rem 0.4rem;
+  border-radius: 10px;
 }
 
 .queue-item img {
@@ -2175,12 +2180,17 @@ button:disabled {
 }
 
 .queue-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
   background: none;
   border: none;
   color: var(--text);
   font-size: 0.85rem;
   line-height: 1;
-  padding: 0.3rem 0.4rem;
   border-radius: 8px;
   flex-shrink: 0;
 }
@@ -2697,27 +2707,7 @@ button:disabled {
   padding-bottom: 0.5rem;
 }
 
-/* It used to be borderless text nobody read as a control. */
-.report-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.45rem 0.9rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text);
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-}
-
-.report-link:hover:not(:disabled) {
-  border-color: var(--accent-border);
-  background: var(--accent-bg);
-  color: var(--accent);
-  filter: none;
-}
+/* Nothing of its own: it is a .meta-chip like the rest of the header. */
 
 .report-link:hover:not(:disabled) {
   background: var(--accent-bg);

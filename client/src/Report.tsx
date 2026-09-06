@@ -102,7 +102,16 @@ export function ReportBug({ roomId }: { roomId?: string }) {
 
   return (
     <>
-      <button className="meta-chip report-link" onClick={() => setOpen(true)}>
+      <button
+        className="meta-chip report-link"
+        // Hover opens it, the same as Friends and Invite. Touch has no hover,
+        // so a tap still does.
+        onPointerEnter={(event) => {
+          if (event.pointerType !== "touch") setOpen(true);
+        }}
+        onClick={() => setOpen(true)}
+        aria-expanded={open}
+      >
         <span className="meta-label">Feedback</span>
       </button>
       {open && <ReportDialog limits={limits} roomId={roomId} onClose={close} />}

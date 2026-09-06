@@ -68,17 +68,26 @@ let lastPingedMessageId: string | null = null;
 
 // Shared by the landing page and the room, which need the same list but act on
 // it differently — one navigates to a friend, the other invites them here.
+// The last list anyone fetched, kept for the life of the page. Every mount of
+// this hook starts from it, so a panel opening for the second time (or a
+// second panel opening at all) shows the friends immediately instead of an
+// empty box that fills in a moment later.
+let cachedFriends: Friend[] = [];
+let cachedLoaded = false;
+
 export function useFriends() {
   const { user } = useAuth();
-  const [friends, setFriends] = useState<Friend[]>([]);
+  const [friends, setFriends] = useState<Friend[]>(cachedFriends);
   // Whether the list has ever come back. An empty array means "none" only
   // after that — before it, an empty array is just "haven't asked yet", and
   // rendering it as "No friends yet" flashed that at people with a full list
   // every time the panel opened.
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(cachedLoaded);
 
   const refresh = useCallback(async () => {
     if (!user) {
+      cachedFriends = [];
+      cachedLoaded = true;
       setFriends([]);
       setLoaded(true);
       return;
@@ -87,7 +96,9 @@ export function useFriends() {
       const res = await fetch(`${API_BASE}/api/friends`, { credentials: "include" });
       if (!res.ok) return;
       const data = await res.json();
-      setFriends(data.friends ?? []);
+      cachedFriends = data.friends ?? [];
+      cachedLoaded = true;
+      setFriends(cachedFriends);
       setLoaded(true);
     } catch {
       // Keep whatever was on screen; the next event or reconnect will correct it.

@@ -1721,9 +1721,14 @@ function Room() {
         (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
       if (typing) {
         if (e.key === "Escape") {
-          // One layer at a time: the emoji panel, then the draft's focus.
+          // One layer at a time, and a layer is a thing on screen — not the
+          // caret. Closing the fullscreen chat takes the focus with it, so
+          // this is one press, not two.
           if (emojiOpen) setEmojiOpen(false);
-          else if (el.matches(".chat-bar input, .fs-chat-bar input")) el.blur();
+          else if (document.fullscreenElement && fsChatOpen) {
+            setFsChatOpen(false);
+            el.blur();
+          } else if (el.matches(".chat-bar input, .fs-chat-bar input")) el.blur();
           e.preventDefault();
         }
         return;
@@ -1891,7 +1896,11 @@ function Room() {
   // was only ever there to cover YouTube's paused overlay — and that is
   // clipped out of the picture now.
   useEffect(() => {
-    showHud(false);
+    // Only if the pointer is still on the player. A play/pause reaches this
+    // effect a moment after the click, and if the mouse has already left by
+    // then, showing the bar again is exactly the sticking the mouse was
+    // trying to get away from.
+    if (pointerOverRef.current) showHud(false);
     return () => window.clearTimeout(hudTimerRef.current);
   }, [localPlaying]);
 
@@ -1904,6 +1913,7 @@ function Room() {
   const BEZEL_MS = 5200;
   useEffect(() => {
     if (!videoId) return;
+    if (!pointerOverRef.current) return;
     setBezel(localPlaying ? "play" : "pause");
     bezelUntilRef.current = Date.now() + BEZEL_MS;
     window.clearTimeout(bezelTimerRef.current);
@@ -2261,15 +2271,28 @@ function Room() {
       const groups = (mod.default ?? mod) as {
         slug: string;
         name: string;
-        emojis: { emoji: string; name: string; slug: string }[];
+        emojis: { emoji: string; name: string; slug: string; emoji_version: string }[];
       }[];
+      // The standard set, not the whole catalogue: everything Unicode had by
+      // 5.0 (2017), which every phone and desktop renders, minus the 260-odd
+      // country flags that nobody scrolls a picker for. About 1,300 rather
+      // than 1,900, and no boxes-with-a-cross on older devices.
+      const KEEP_FLAGS = new Set(["🏁", "🚩", "🏳️", "🏴", "🏳️‍🌈", "🏴‍☠️", "🎌"]);
       setEmojiData(
-        groups.map((group) => ({
-          slug: group.slug,
-          name: group.name,
-          icon: GROUP_ICONS[group.slug] ?? "•",
-          emojis: group.emojis.map((e) => ({ char: e.emoji, names: [e.slug, e.name] })),
-        })),
+        groups
+          .map((group) => ({
+            slug: group.slug,
+            name: group.name,
+            icon: GROUP_ICONS[group.slug] ?? "•",
+            emojis: group.emojis
+              .filter(
+                (e) =>
+                  parseFloat(e.emoji_version) <= 5 &&
+                  (group.slug !== "flags" || KEEP_FLAGS.has(e.emoji)),
+              )
+              .map((e) => ({ char: e.emoji, names: [e.slug, e.name] })),
+          }))
+          .filter((group) => group.emojis.length > 0),
       );
     });
     return () => {
@@ -2358,11 +2381,17 @@ function Room() {
       </div>
     );
 
+  // Opens on hover like the header's menus; a click still works, and once
+  // the pointer is inside the panel it stays put until it leaves the pair.
   const renderEmojiToggle = () => (
     <button
       className="emoji-toggle"
+      onPointerEnter={(e) => {
+        if (e.pointerType !== "touch") setEmojiOpen(true);
+      }}
       onClick={() => setEmojiOpen((open) => !open)}
       aria-label="Emoji picker"
+      aria-expanded={emojiOpen}
     >
       😊
     </button>
@@ -2804,18 +2833,12 @@ function Room() {
                     {linkCopied ? "Copied" : "Copy"}
                   </button>
                 </div>
-                <div className="invite-row">
-                  <code className="invite-link">{roomId}</code>
-                  <button className="invite-copy" onClick={copyRoomCode}>
-                    {codeCopied ? "Copied" : "Copy code"}
-                  </button>
-                </div>
                 {qr ? (
                   <img className="invite-qr" src={qr} alt={`QR code for ${roomLink}`} />
                 ) : (
                   <div className="invite-qr is-loading" aria-hidden />
                 )}
-                <p className="invite-note">Point a phone camera at the code</p>
+                <p className="invite-note">Point a camera at this code</p>
               </div>
             )}
           </div>
@@ -3214,7 +3237,14 @@ function Room() {
                       {renderTyping()}
                     </div>
                     {chatNotice && <p className="chat-notice">{chatNotice}</p>}
-                    {renderEmojiPanel(fsChatInputRef)}
+                    <div
+                      className="fs-emoji-wrap"
+                      onPointerLeave={(e) => {
+                        if (e.pointerType !== "touch") setEmojiOpen(false);
+                      }}
+                    >
+                      {renderEmojiPanel(fsChatInputRef)}
+                    </div>
                     <div className="fs-chat-bar">
                       {renderEmojiToggle()}
                       <input
@@ -3424,7 +3454,12 @@ function Room() {
               {renderTyping()}
             </div>
             {chatNotice && <p className="chat-notice">{chatNotice}</p>}
-            <div className="chat-bar-wrap">
+            <div
+              className="chat-bar-wrap"
+              onPointerLeave={(e) => {
+                if (e.pointerType !== "touch") setEmojiOpen(false);
+              }}
+            >
               {renderEmojiPanel(chatInputRef)}
               <div className="load-bar chat-bar">
                 {renderEmojiToggle()}
