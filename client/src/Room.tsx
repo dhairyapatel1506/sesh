@@ -914,7 +914,11 @@ function Room() {
       window.clearTimeout(settle);
       setConnection("down");
     };
-    const onOnline = () => setConnection((was) => (was === "live" ? "live" : "connecting"));
+    // Amber means "trying and it might work". With the network down it can't,
+    // so a retry while offline leaves the light red — Socket.IO retries on a
+    // timer whether or not there is anything to reach.
+    const onOnline = () =>
+      setConnection((was) => (was === "live" ? "live" : navigator.onLine ? "connecting" : "down"));
     // Socket.IO only notices a dead link when a ping goes unanswered. Our own
     // beat is faster and, unlike theirs, it is an application round trip: if
     // the server doesn't answer within DEAD_AFTER_MS the light goes red
