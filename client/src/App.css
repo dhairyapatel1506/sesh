@@ -58,8 +58,13 @@ header h1 a:hover {
 .logo-mark {
   height: 1.4rem;
   width: auto;
-  /* Measured against the wordmark's own box: with a nudge of -0.06em the
-     text sat 1.7px low, so there isn't one. Flex centring is right here. */
+  /* Aligned by ink, not by box. Flex centring lines up the *boxes*, and the
+     wordmark's line box carries empty descender space below the letters, so
+     centring it leaves the glyphs high and the logo low. Measured off the
+     rendered pixels at 3x: the logo's ink centre sat 3.33px below the text's,
+     hence this. */
+  position: relative;
+  top: -0.065em;
 }
 
 .landing-logo {
@@ -667,21 +672,26 @@ button:disabled {
   top: 50%;
   left: 50%;
   z-index: 2;
-  width: clamp(76px, 17%, 150px);
-  aspect-ratio: 1;
+  /* Measured against YouTube's own centre group: 124x56 in a 594px-wide
+     player, so 21% by 17% of the frame. Ours is a shade larger in each
+     direction and no more — the old circle was both taller than theirs and
+     narrower, which is how it managed to be too big AND leave their icon
+     showing at the sides. */
+  width: clamp(112px, 23%, 240px);
+  height: clamp(56px, 19%, 120px);
   transform: translate(-50%, -50%);
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: rgba(12, 12, 16, 0.86);
+  border-radius: 999px;
+  background: rgba(10, 10, 14, 0.95);
   color: #fff;
   pointer-events: none;
-  animation: bezel-out 4600ms ease-out forwards;
+  animation: bezel-out 5200ms ease-out forwards;
 }
 
 .player-bezel svg {
-  width: 42%;
-  height: 42%;
+  width: clamp(20px, 34%, 42px);
+  height: auto;
 }
 
 /* It appears, holds, and is removed — no long dissolve, because a fade is a
@@ -718,11 +728,10 @@ button:disabled {
   background: rgba(255, 255, 255, 0.16);
 }
 
+/* Sizing lives on .pbar-switch — a rule for the input inside this label
+   would beat it on specificity and hand back a default checkbox. */
 .pbar-autoplay input {
-  width: 0.95rem;
-  height: 0.95rem;
   margin: 0;
-  accent-color: var(--accent, #8b5cf6);
   cursor: pointer;
 }
 
@@ -1065,6 +1074,10 @@ button:disabled {
   opacity: 0.75;
 }
 
+.pbar-cc.is-empty {
+  opacity: 0.42;
+}
+
 .pbar-cc.is-on {
   opacity: 1;
   box-shadow: inset 0 -2px 0 currentColor;
@@ -1145,6 +1158,12 @@ button:disabled {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
+  /* The global input rule adds a border and padding; with those on, the box
+     is taller than the track and the knob sits against the top of it. */
+  border: 0;
+  padding: 0;
+  min-width: 0;
+  box-sizing: content-box;
   width: 30px;
   height: 16px;
   margin: 0;
@@ -1858,7 +1877,8 @@ button:disabled {
 .queue-head.under-tabs {
   gap: 1.1rem;
   padding-bottom: 0.15rem;
-  margin-bottom: 0.75rem;
+  margin-top: -0.35rem;
+  margin-bottom: 0.6rem;
   border-bottom: 1px solid var(--border);
 }
 
@@ -2710,11 +2730,6 @@ button:disabled {
 
 .queue-item.is-current {
   opacity: 0.6;
-}
-
-.under-player .player-fs-button {
-  padding: 0.25rem 0.55rem;
-  font-size: 0.8rem;
 }
 
 /* Says the pause is the room waiting, not the player being stuck. */

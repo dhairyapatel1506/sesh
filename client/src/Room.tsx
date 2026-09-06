@@ -1853,7 +1853,7 @@ function Room() {
   // resume. Ours has to outlast it or its icon is the one left behind — and
   // then go at once rather than fading, because a fade is a window where
   // theirs shows through ours.
-  const BEZEL_MS = 4600;
+  const BEZEL_MS = 5200;
   useEffect(() => {
     if (!videoId) return;
     setBezel(localPlaying ? "play" : "pause");
@@ -1937,8 +1937,13 @@ function Room() {
         setCcOn(false);
         return;
       }
+      // Ask again here rather than trusting the probe on load: the track list
+      // can arrive late, and a button that's dead because we looked too early
+      // is worse than no button.
       player.loadModule?.("captions");
       const list = player.getOption?.("captions", "tracklist");
+      setCcTracks(Array.isArray(list) ? list.length : 0);
+      if (!Array.isArray(list) || list.length === 0) return;
       const tracks = (Array.isArray(list) ? list : []) as { languageCode?: string }[];
       // The viewer's own language if the video has it, English if not, and
       // whatever is first only as a last resort — tracklist order is
@@ -2816,12 +2821,18 @@ function Room() {
                         />
                       </label>
                     )}
-                    {ccTracks > 0 && (
+                    {videoId && (
                       <button
-                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}`}
+                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}${ccTracks === 0 ? " is-empty" : ""}`}
                         onClick={toggleCaptions}
-                        title={ccOn ? "Turn off captions" : "Turn on captions"}
-                        aria-label={ccOn ? "Turn off captions" : "Turn on captions"}
+                        title={
+                          ccTracks === 0
+                            ? "Subtitles — none found for this video"
+                            : ccOn
+                              ? "Turn off subtitles"
+                              : "Turn on subtitles"
+                        }
+                        aria-label={ccOn ? "Turn off subtitles" : "Turn on subtitles"}
                         aria-pressed={ccOn}
                       >
                         CC
