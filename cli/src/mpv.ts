@@ -171,11 +171,11 @@ export class Mpv extends EventEmitter {
         "--really-quiet",
         `--input-ipc-server=${socketPath}`,
         // Audio-only stream keeps startup fast and bandwidth tiny.
-        "--ytdl-format=bestaudio/best",
-        // YouTube's CDN returns 403 for the default android_vr player client's
-        // DASH URLs on certain platforms (Windows). The web client produces URLs
-        // that work universally.
-        "--ytdl-raw-options=extractor-args=youtube:player_client=web",
+        // Prefer m3u8 (HLS) formats — they use a different CDN path that
+        // doesn't trigger YouTube's 403 on Windows' native HTTP stack.
+        // DASH (https) URLs get blocked on Windows but work fine on Linux,
+        // so fall back to bestaudio only when no HLS is available.
+        "--ytdl-format=bestaudio[protocol=m3u8]/bestaudio/best",
         "--cache=yes",
         // On EOF, pause at the end instead of unloading the file — an
         // unloaded player wedges every subsequent seek/play until a reload.
