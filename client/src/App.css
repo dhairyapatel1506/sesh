@@ -609,6 +609,7 @@ button:disabled {
   height: clamp(62px, 12%, 128px);
   background: #0a0a0e;
   border-radius: 0 0 12px 12px;
+  pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -759,7 +760,43 @@ button:disabled {
 .pbar-slider {
   width: 64px;
   margin-left: 0.15rem;
-  accent-color: var(--accent, #8b5cf6);
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--accent, #8b5cf6) 0%,
+    var(--accent, #8b5cf6) var(--vol, 100%),
+    rgba(255, 255, 255, 0.2) var(--vol, 100%),
+    rgba(255, 255, 255, 0.2) 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+
+.pbar-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+}
+
+.pbar-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  border: none;
+}
+
+.pbar-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: transparent;
 }
 
 @media (max-width: 460px) {

@@ -1737,6 +1737,10 @@ function Room() {
   const [hudShown, setHudShown] = useState(true);
   const hudTimerRef = useRef<number | undefined>(undefined);
   const [localPlaying, setLocalPlaying] = useState(false);
+  // YouTube's paused overlay (title bar, Share, etc.) stays visible for ~3.6s
+  // after resuming. Keep our cover bands up through that window.
+  const [overlaySuppressed, setOverlaySuppressed] = useState(false);
+  const overlayTimerRef = useRef<number | undefined>(undefined);
   // Where the scrubber is being dragged to, in seconds. Non-null only while
   // a drag is in progress, so the ticking position doesn't fight the thumb.
   const [scrub, setScrub] = useState<number | null>(null);
@@ -1773,6 +1777,22 @@ function Room() {
     if (!localPlaying) showHud(true);
     else showHud(false);
     return () => window.clearTimeout(hudTimerRef.current);
+  }, [localPlaying]);
+
+  // YouTube's paused overlay lingers ~3.6s after resuming. Keep cover bands
+  // up through that window so the YouTube chrome is never exposed.
+  useEffect(() => {
+    if (localPlaying) {
+      setOverlaySuppressed(true);
+      overlayTimerRef.current = window.setTimeout(
+        () => setOverlaySuppressed(false),
+        4500,
+      );
+    } else {
+      setOverlaySuppressed(false);
+      window.clearTimeout(overlayTimerRef.current);
+    }
+    return () => window.clearTimeout(overlayTimerRef.current);
   }, [localPlaying]);
 
   // Numbers for the bar, only while the bar is on screen. estimatedPosition
@@ -2542,11 +2562,11 @@ function Room() {
                     over the bottom one. Sized against the frame, because
                     YouTube's chrome grows with the player. */}
                 <div
-                  className={`player-topbar${hudShown || !localPlaying ? " is-shown" : ""}`}
+                  className={`player-topbar${hudShown || !localPlaying || overlaySuppressed ? " is-shown" : ""}`}
                 >
                   <span className="player-topbar-title">{videoTitle ?? ""}</span>
                 </div>
-                {!localPlaying && <div className="player-botcover" aria-hidden />}
+                {(!localPlaying || overlaySuppressed) && <div className="player-botcover" aria-hidden />}
                 {/* The click layer: our own play/pause on the picture, and
                     double-click for fullscreen. It sits over the iframe,
                     which with controls=0 has nothing of its own to click. */}
@@ -2620,6 +2640,7 @@ function Room() {
                         step={1}
                         value={silent ? 0 : volume}
                         aria-label="Volume"
+                        style={{ "--vol": `${silent ? 0 : volume}%` } as React.CSSProperties}
                         onChange={(e) => changeVolume(Number(e.target.value))}
                       />
                     </div>
