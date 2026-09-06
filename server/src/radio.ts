@@ -26,6 +26,11 @@ const MIX_SIZE = 25;
 const MIX_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 300;
 const EMPTY_CACHE_TTL_MS = 2 * 60 * 1000;
+// YouTube rate-limits the address a server calls from, and asking again
+// while it is saying 429 is what keeps it saying 429. When that is the
+// answer, sit out much longer than an ordinary empty result.
+const RATE_LIMITED_TTL_MS = 20 * 60 * 1000;
+let rateLimitedUntil = 0;
 
 type Mix = { ids: string[]; fetchedAt: number; source: PickSource };
 const mixCache = new Map<string, Mix>();
@@ -101,7 +106,8 @@ async function mixFor(seed: string): Promise<{ ids: string[]; source: PickSource
   // An empty answer is remembered only briefly: it's as likely a stalled
   // request as a video with nothing beside it, and a day of "nothing to
   // suggest" for a stall is the wrong trade.
-  const fetchedAt = ids.length > 0 ? Date.now() : Date.now() - MIX_CACHE_TTL_MS + EMPTY_CACHE_TTL_MS;
+  const emptyTtl = Date.now() < rateLimitedUntil ? RATE_LIMITED_TTL_MS : EMPTY_CACHE_TTL_MS;
+  const fetchedAt = ids.length > 0 ? Date.now() : Date.now() - MIX_CACHE_TTL_MS + emptyTtl;
   remember(mixCache, seed, { ids, fetchedAt, source });
   return { ids, source };
 }
@@ -164,6 +170,10 @@ function collectVideoIds(root: unknown, seed: string): string[] {
 }
 
 async function watchNextFor(seed: string): Promise<string[]> {
+  if (Date.now() < rateLimitedUntil) {
+    console.log(`radio: watch-next skipped for ${seed} — rate limited for another ${Math.round((rateLimitedUntil - Date.now()) / 1000)}s`);
+    return [];
+  }
   // The watch page first: from Render's network every POST to the internal
   // endpoint stalled past its timeout, whatever client it claimed to be,
   // while a plain GET of the page answered in a second. The page embeds the
@@ -171,14 +181,32 @@ async function watchNextFor(seed: string): Promise<string[]> {
   // the fallback for the day the page's markup changes.
   const pageStarted = Date.now();
   try {
-    const res = await fetch(`https://www.youtube.com/watch?v=${seed}&hl=en`, {
-      headers: { "user-agent": NEXT_CLIENTS[0].ua, "accept-language": "en-US,en;q=0.9" },
-      signal: AbortSignal.timeout(NEXT_ATTEMPT_TIMEOUT_MS),
-    });
+    // Asked the way a browser asks. The consent cookies matter: without
+    // them YouTube answers a datacenter address with a consent interstitial
+    // or a 429 instead of the page, and the interstitial carries no
+    // recommendations. bpctr/has_verified skip the "content warning" page
+    // for the same reason.
+    const res = await fetch(
+      `https://www.youtube.com/watch?v=${seed}&hl=en&bpctr=9999999999&has_verified=1`,
+      {
+        headers: {
+          "user-agent": NEXT_CLIENTS[0].ua,
+          "accept-language": "en-US,en;q=0.9",
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          cookie: "CONSENT=YES+cb; SOCS=CAISAiAD",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "upgrade-insecure-requests": "1",
+        },
+        signal: AbortSignal.timeout(NEXT_ATTEMPT_TIMEOUT_MS),
+      },
+    );
     const html = await res.text();
     const match = html.match(/ytInitialData\s*=\s*(\{.*?\});\s*<\/script>/s);
     const ids = match ? collectVideoIds(JSON.parse(match[1]), seed) : [];
     console.log(`radio: watch-page gave ${ids.length} for ${seed} in ${Date.now() - pageStarted}ms (status ${res.status})`);
+    if (res.status === 429) rateLimitedUntil = Date.now() + RATE_LIMITED_TTL_MS;
     if (ids.length > 0) return ids.slice(0, MIX_SIZE);
   } catch (err) {
     console.warn(`radio: watch-page failed after ${Date.now() - pageStarted}ms: ${(err as Error).message}`);
