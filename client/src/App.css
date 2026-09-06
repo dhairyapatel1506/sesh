@@ -852,19 +852,23 @@ button:disabled {
 }
 
 .chip-lap rect {
-  x: 0.5px;
-  y: 0.5px;
-  width: calc(100% - 1px);
-  height: calc(100% - 1px);
-  rx: 999px;
-  ry: 999px;
+  x: 1px;
+  y: 1px;
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  /* ry only, and as a percentage of the height: `rx: 999px` was being clamped
+     to half the *width*, which drew a stadium with 60px elliptical ends —
+     a curve nothing like the chip's, cutting through the middle of it. With
+     ry alone, rx follows it (SVG2 auto), and the outline is the chip's own
+     pill: circular ends of half its height. */
+  ry: 50%;
   fill: none;
   stroke: #ffffff;
-  stroke-width: 2.5;
+  stroke-width: 2;
   stroke-linecap: round;
   /* pathLength=100 on the element, so these are percentages of the
      perimeter: a 14% dash and the rest a gap. */
-  stroke-dasharray: 14 86;
+  stroke-dasharray: 12 88;
   stroke-dashoffset: 0;
   animation: chip-lap 1000ms linear forwards;
 }

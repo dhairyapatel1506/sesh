@@ -1536,7 +1536,10 @@ function Room() {
     // Confirm on the press, not on the promise: the clipboard write resolves
     // whenever it resolves, and the feedback is about the click.
     setCodeCopied(true);
-    window.setTimeout(() => setCodeCopied(false), 1100);
+    // A shade longer than the lap (1000ms), so the line finishes its circuit
+    // before the chip goes back to being a chip. They used to race, and the
+    // green fell away with the line still halfway round.
+    window.setTimeout(() => setCodeCopied(false), 1250);
     void navigator.clipboard?.writeText(roomId).catch(() => {});
   };
 
