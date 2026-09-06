@@ -914,11 +914,10 @@ function Room() {
       window.clearTimeout(settle);
       setConnection("down");
     };
-    // Amber means "trying and it might work". With the network down it can't,
-    // so a retry while offline leaves the light red — Socket.IO retries on a
-    // timer whether or not there is anything to reach.
-    const onOnline = () =>
-      setConnection((was) => (was === "live" ? "live" : navigator.onLine ? "connecting" : "down"));
+    // Amber is not a state of its own: it's the half-second between the
+    // connection coming back and the light saying so. While anything is
+    // actually down the light stays red, however many times Socket.IO
+    // retries in the background.
     // Socket.IO only notices a dead link when a ping goes unanswered. Our own
     // beat is faster and, unlike theirs, it is an application round trip: if
     // the server doesn't answer within DEAD_AFTER_MS the light goes red
@@ -947,17 +946,13 @@ function Room() {
     }, BEAT_MS);
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
-    socket.io.on("reconnect_attempt", onOnline);
     window.addEventListener("offline", onOffline);
-    window.addEventListener("online", onOnline);
     return () => {
       window.clearTimeout(settle);
       window.clearInterval(beat);
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
-      socket.io.off("reconnect_attempt", onOnline);
       window.removeEventListener("offline", onOffline);
-      window.removeEventListener("online", onOnline);
     };
   }, []);
 
@@ -1854,11 +1849,6 @@ function Room() {
   const silent = muted || volume === 0;
   const [ccTracks, setCcTracks] = useState(0);
   const [ccOn, setCcOn] = useState(false);
-  // Our own centre play/pause flash. It exists to sit on top of YouTube's,
-  // which it draws for ~3.6s after every state change and which no parameter
-  // switches off — ours is opaque, covers it, and goes when we say.
-  const [bezel, setBezel] = useState<"play" | "pause" | null>(null);
-  const bezelTimerRef = useRef<number | undefined>(undefined);
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Ignore sub-pixel pointer jitter — only restart the HUD hide timer when
   // the mouse has actually moved a meaningful distance.
@@ -1867,27 +1857,16 @@ function Room() {
   // can leave together without yanking the bar out from under a cursor.
   const pointerOverRef = useRef(false);
 
-  // While the centre flash is up, the bar stays with it: they cover
-  // YouTube's own flash between them, and they have to leave together or the
-  // one that goes first leaves the other looking stranded.
-  const bezelUntilRef = useRef(0);
-  const holdFor = () => Math.max(HUD_IDLE_MS, bezelUntilRef.current - Date.now());
-
   const showHud = (sticky: boolean) => {
     window.clearTimeout(hudTimerRef.current);
     setHudShown(true);
     if (sticky) return;
-    hudTimerRef.current = window.setTimeout(() => setHudShown(false), holdFor());
+    hudTimerRef.current = window.setTimeout(() => setHudShown(false), HUD_IDLE_MS);
   };
 
-  // Off the player, off the screen — bar and flash together, now, not when
-  // some timer says so. (YouTube's own flash underneath runs its ~4.4s
-  // whatever we do; ours simply stops being part of it.)
+  // Off the player, off the screen.
   const hideHud = () => {
     window.clearTimeout(hudTimerRef.current);
-    window.clearTimeout(bezelTimerRef.current);
-    bezelUntilRef.current = 0;
-    setBezel(null);
     setHudShown(false);
   };
 
@@ -1903,29 +1882,6 @@ function Room() {
     if (pointerOverRef.current) showHud(false);
     return () => window.clearTimeout(hudTimerRef.current);
   }, [localPlaying]);
-
-  // The centre flash, timed to outlast YouTube's own so its icon is never
-  // the one left on screen.
-  // Measured: YouTube's own centre glyph is still painted 4.4s after a
-  // resume. Ours has to outlast it or its icon is the one left behind — and
-  // then go at once rather than fading, because a fade is a window where
-  // theirs shows through ours.
-  const BEZEL_MS = 5200;
-  useEffect(() => {
-    if (!videoId) return;
-    if (!pointerOverRef.current) return;
-    setBezel(localPlaying ? "play" : "pause");
-    bezelUntilRef.current = Date.now() + BEZEL_MS;
-    window.clearTimeout(bezelTimerRef.current);
-    bezelTimerRef.current = window.setTimeout(() => {
-      setBezel(null);
-      bezelUntilRef.current = 0;
-      // Whatever the bar was waiting for is over; if the pointer has gone,
-      // it goes now, in the same frame the flash does.
-      if (!pointerOverRef.current) setHudShown(false);
-    }, BEZEL_MS);
-    return () => window.clearTimeout(bezelTimerRef.current);
-  }, [localPlaying, videoId]);
 
   // Escape belongs to the page while fullscreen, or the chat and the emoji
   // panel can never use it: the browser would take the key and drop out of
@@ -2958,16 +2914,6 @@ function Room() {
                     <span>{videoTitle}</span>
                   </div>
                 )}
-                {/* Our centre flash, over YouTube's (see the bezel effect). */}
-                {bezel && (
-                  <div className={`player-bezel is-${bezel}`} aria-hidden>
-                    {bezel === "play" ? (
-                      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5l13 7.5-13 7.5z" /></svg>
-                    ) : (
-                      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z" /></svg>
-                    )}
-                  </div>
-                )}
                 {/* The click layer: our own play/pause on the picture, and
                     double-click for fullscreen. It sits over the iframe,
                     which with controls=0 has nothing of its own to click. */}
@@ -3340,7 +3286,7 @@ function Room() {
                           aria-label="Play again"
                           onClick={() => loadVideo(entry.videoId)}
                         >
-                          ▶
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden><path d="M7 4.5l13 7.5-13 7.5z" /></svg>
                         </button>
                       )}
                     </li>
@@ -3388,7 +3334,7 @@ function Room() {
                           aria-label="Play now"
                           onClick={() => loadVideo(upnext.videoId)}
                         >
-                          ▶
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden><path d="M7 4.5l13 7.5-13 7.5z" /></svg>
                         </button>
                       </li>
                     </ul>
@@ -3414,7 +3360,7 @@ function Room() {
                             aria-label="Play now"
                             onClick={() => socket.emit("queue:play", { id: item.id })}
                           >
-                            ▶
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden><path d="M7 4.5l13 7.5-13 7.5z" /></svg>
                           </button>
                           <button
                             className="queue-action"
@@ -3513,7 +3459,11 @@ function Room() {
                       aria-label={`Play ${r.title} now`}
                       onClick={() => loadVideo(r.videoId)}
                     >
-                      ▶
+                      {/* Drawn rather than typed: ▶ and + carry their own font
+                          metrics and sit off-centre in a square button. */}
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden>
+                        <path d="M7 4.5l13 7.5-13 7.5z" />
+                      </svg>
                     </button>
                     <button
                       className="queue-action"
@@ -3521,7 +3471,9 @@ function Room() {
                       aria-label={`Add ${r.title} to the queue`}
                       onClick={() => socket.emit("queue:add", { videoId: r.videoId, title: r.title })}
                     >
-                      +
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden>
+                        <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />
+                      </svg>
                     </button>
                   </li>
                 ))}

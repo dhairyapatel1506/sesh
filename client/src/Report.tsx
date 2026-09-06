@@ -84,6 +84,13 @@ const asSize = (bytes: number) =>
 export function ReportBug({ roomId }: { roomId?: string }) {
   const [limits, setLimits] = useState<Limits | null>(null);
   const [open, setOpen] = useState(false);
+  // Set the moment anything inside the panel is used. A hover panel that
+  // closes when the pointer wanders is fine for a list; for a form it is a
+  // way to lose what someone just wrote.
+  const pinnedRef = useRef(false);
+  const pin = useCallback(() => {
+    pinnedRef.current = true;
+  }, []);
   // Held still deliberately. A room re-renders every second (the uptime clock),
   // and a closure recreated each time would restart the dialog's timers with
   // it — the thank-you would never get to the end of its two and a half
@@ -101,21 +108,30 @@ export function ReportBug({ roomId }: { roomId?: string }) {
   if (!limits?.enabled) return null;
 
   return (
-    <>
-      <button
-        className="meta-chip report-link"
+    <div
+      className="feedback-menu hover-menu"
+      onPointerEnter={(event) => {
         // Hover opens it, the same as Friends and Invite. Touch has no hover,
         // so a tap still does.
-        onPointerEnter={(event) => {
-          if (event.pointerType !== "touch") setOpen(true);
-        }}
-        onClick={() => setOpen(true)}
-        aria-expanded={open}
-      >
+        if (event.pointerType !== "touch") setOpen(true);
+      }}
+      onPointerLeave={(event) => {
+        // Not while it's being filled in: leaving with a draft in the box (or
+        // the caret in it) would throw the words away, which no amount of
+        // tidiness is worth.
+        if (event.pointerType === "touch" || pinnedRef.current) return;
+        setOpen(false);
+      }}
+    >
+      <button className="meta-chip report-link" onClick={() => setOpen(true)} aria-expanded={open}>
         <span className="meta-label">Feedback</span>
       </button>
-      {open && <ReportDialog limits={limits} roomId={roomId} onClose={close} />}
-    </>
+      {open && (
+        <div className="feedback-popover">
+          <ReportDialog limits={limits} roomId={roomId} onClose={close} onPin={pin} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -123,7 +139,9 @@ function ReportDialog({
   limits,
   roomId,
   onClose,
+  onPin,
 }: {
+  onPin?: () => void;
   limits: Limits;
   roomId?: string;
   onClose: () => void;
@@ -213,7 +231,8 @@ function ReportDialog({
         // Signed in, the report gets a name on it; anonymous, it's still filed.
         credentials: "include",
         body: JSON.stringify({
-          text: `[${kind === "bug" ? "Bug" : "Feature request"}] ${text.trim()}`,
+          text: text.trim(),
+          kind,
           client: "web",
           ...(roomId ? { roomId } : {}),
           ...(image ? { image: image.dataUrl } : {}),
@@ -236,16 +255,10 @@ function ReportDialog({
   };
 
   return (
-    <div
-      className="report-backdrop"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <div className="report-shell" onPointerDown={onPin} onFocusCapture={onPin}>
       <div
         className={dragging ? "report-dialog is-dragging" : "report-dialog"}
         role="dialog"
-        aria-modal="true"
         aria-label="Send feedback"
         onDragOver={(event) => {
           event.preventDefault();

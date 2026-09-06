@@ -684,49 +684,6 @@ button:disabled {
 /* The centre play/pause flash. Opaque on purpose: YouTube draws its own for
    about 3.6s after every state change, this one covers it and leaves when we
    say rather than when YouTube does. */
-.player-bezel {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  z-index: 2;
-  /* Only as big as what YouTube actually paints: its group measures 124x56,
-     but the flanking skip buttons never draw — what shows is the 56px circle
-     in the middle (9.4% of a 594px-wide player). This is that plus a couple
-     of pixels, and nothing more. */
-  width: clamp(52px, 11%, 92px);
-  aspect-ratio: 1;
-  height: auto;
-  transform: translate(-50%, -50%);
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: rgba(10, 10, 14, 0.95);
-  color: #fff;
-  pointer-events: none;
-  animation: bezel-out 5200ms ease-out forwards;
-}
-
-.player-bezel svg {
-  width: 40%;
-  height: 40%;
-}
-
-/* It appears, holds, and is removed — no long dissolve, because a fade is a
-   window where YouTube's icon underneath shows through ours. */
-@keyframes bezel-out {
-  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.86); }
-  6% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .player-bezel {
-    animation: none;
-    opacity: 0.9;
-  }
-}
-
-/* Autoplay lives on the player now, next to the rest of the controls. */
 .pbar-autoplay {
   display: inline-flex;
   align-items: center;
@@ -874,18 +831,26 @@ button:disabled {
    The conic gradient is masked to the border ring; --lap is animated, which
    needs @property to interpolate. */
 @property --lap {
-  syntax: "<percentage>";
+  syntax: "<angle>";
   inherits: false;
-  initial-value: 0%;
+  initial-value: 0deg;
 }
 
 .meta-chip.is-copied::after {
   content: "";
   position: absolute;
-  inset: -2px;
-  padding: 2px;
+  inset: -3px;
+  padding: 3px;
   border-radius: inherit;
-  background: conic-gradient(from -90deg, #ffffff var(--lap), transparent 0);
+  /* A short segment that travels: the gradient's start angle rotates, rather
+     than an arc that grows from a fixed point and swallows the border. Three
+     pixels of ring, because two disappeared against the chip it runs around. */
+  background: conic-gradient(
+    from calc(-90deg + var(--lap)),
+    transparent 0 4%,
+    #ffffff 6% 16%,
+    transparent 18% 100%
+  );
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -899,8 +864,8 @@ button:disabled {
 }
 
 @keyframes chip-lap {
-  from { --lap: 0%; }
-  to { --lap: 100%; }
+  from { --lap: 0deg; }
+  to { --lap: 360deg; }
 }
 
 .meta-label,
@@ -1257,17 +1222,23 @@ button:disabled {
 .hover-menu {
   position: relative;
   display: inline-flex;
+  /* The hit area reaches down to where the panel starts, so travelling from
+     the chip to the panel never passes over anything outside the menu — the
+     gap used to close it before the pointer arrived. */
+  padding-bottom: 0.5rem;
+  margin-bottom: -0.5rem;
 }
 
 /* The gap between chip and panel would end the hover on the way down, so the
    panel reaches up to meet it. */
 .friends-popover,
-.invite-popover {
+.invite-popover,
+.feedback-popover {
   position: absolute;
   top: 100%;
   right: 0;
   z-index: 40;
-  margin-top: 0.45rem;
+  margin-top: 0;
   padding: 0.75rem;
   min-width: 15rem;
   border: 1px solid var(--border);
@@ -1279,7 +1250,8 @@ button:disabled {
 }
 
 .friends-popover::before,
-.invite-popover::before {
+.invite-popover::before,
+.feedback-popover::before {
   content: "";
   position: absolute;
   left: 0;
@@ -1347,6 +1319,42 @@ button:disabled {
   font-size: 0.72rem;
   color: var(--text);
   text-align: center;
+}
+
+/* The feedback form is a panel under its chip now, not a dialog in the middle
+   of the screen — it opens on hover like the rest of the header, so it has to
+   belong to the thing that opened it. Narrower and tighter than the modal it
+   used to be. */
+.feedback-popover {
+  width: 21rem;
+  padding: 0;
+}
+
+.feedback-popover .report-dialog {
+  width: 100%;
+  max-height: min(28rem, 70svh);
+  padding: 0.85rem;
+  border: 0;
+  border-radius: 12px;
+  box-shadow: none;
+  gap: 0.4rem;
+}
+
+.feedback-popover .report-title {
+  font-size: 0.95rem;
+}
+
+.feedback-popover .report-lead {
+  font-size: 0.78rem;
+}
+
+.feedback-popover .report-text {
+  min-height: 5rem;
+}
+
+.feedback-popover .report-kind button {
+  padding: 0.35rem 0.4rem;
+  font-size: 0.76rem;
 }
 
 /* ---- emoji picker ---- */
@@ -1907,15 +1915,10 @@ button:disabled {
 
 /* Quiet, like the copy-link button beside it — neither is the reason you're
    on this page, and two filled buttons in the toolbar shout over the video. */
+/* Nothing of its own but the badge spacing: the look is .meta-chip's. */
 .friends-toggle {
-  display: inline-flex;
-  align-items: center;
   gap: 0.4rem;
   white-space: nowrap;
-  font-size: 0.85rem;
-  font-weight: 500;
-  background: transparent;
-  color: var(--accent);
 }
 
 .friends-toggle:hover:not(:disabled),
@@ -2185,6 +2188,9 @@ button:disabled {
   justify-content: center;
   width: 1.75rem;
   height: 1.75rem;
+  /* A typed "+" carries its font's own bearings and sits off-centre in a
+     square; the drawn ones below don't. */
+  line-height: 0;
   padding: 0;
   background: none;
   border: none;
@@ -2363,6 +2369,15 @@ button:disabled {
 .emoji-toggle:hover:not(:disabled) {
   background: var(--accent-bg);
   filter: none;
+}
+
+.emoji-panel::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 0.6rem;
 }
 
 .emoji-panel {

@@ -54,6 +54,9 @@ type ReportMail = {
   userAgent: string | null;
   image: { data: Buffer; mime: string } | null;
   dashboardUrl: string | null;
+  // What the person said it was. A feature request arriving under "Sesh bug"
+  // reads as a complaint, which is the opposite of what it is.
+  kind?: "bug" | "idea";
 };
 
 type Attachment = { name: string; content: string };
@@ -102,11 +105,13 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
     }
 
     const where = report.roomId ? `room ${report.roomId}` : "no room";
+    const kind = report.kind === "idea" ? "feature request" : "bug report";
     const who = report.reporter ?? "someone signed out";
     const lines = [
       report.text,
       "",
       "—",
+      `kind:    ${kind}`,
       `from:    ${who} (${report.client}, ${where})`,
       report.userAgent ? `browser: ${report.userAgent}` : null,
       report.dashboardUrl ? `all reports: ${report.dashboardUrl}` : null,
@@ -115,7 +120,7 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
     await post(
       // The first line of the report itself, so the inbox is scannable without
       // opening anything.
-      `Sesh bug: ${report.text.replace(/\s+/g, " ").slice(0, 70)}`,
+      `${report.kind === "idea" ? "Sesh idea" : "Sesh bug"}: ${report.text.replace(/\s+/g, " ").slice(0, 70)}`,
       lines.join("\n"),
       report.image
         ? [

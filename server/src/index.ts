@@ -429,6 +429,7 @@ app.post("/api/report", async (req, res) => {
       void sendReportMail({
         id,
         text,
+        kind: req.body?.kind === "idea" ? "idea" : "bug",
         client: req.body?.client === "cli" ? "cli" : "web",
         roomId,
         reporter,
