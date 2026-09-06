@@ -58,10 +58,8 @@ header h1 a:hover {
 .logo-mark {
   height: 1.4rem;
   width: auto;
-  /* The glyph's optical centre sits above its box centre, which left the
-     wordmark reading low against it. */
-  position: relative;
-  top: -0.06em;
+  /* Measured against the wordmark's own box: with a nudge of -0.06em the
+     text sat 1.7px low, so there isn't one. Flex centring is right here. */
 }
 
 .landing-logo {
@@ -114,11 +112,66 @@ button {
   background: var(--accent);
   /* --bg flips with the theme, so this stays high-contrast in both. */
   color: var(--bg);
-  transition: filter 0.15s ease;
+  transition: filter 0.15s ease, transform 0.12s ease, background 0.15s ease,
+    border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 button:hover:not(:disabled) {
   filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+/* Every control answers a press. Small on purpose — the point is that the
+   click registered, not that something happened on screen. */
+button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 0.06s;
+}
+
+button:focus-visible,
+.meta-chip:focus-visible,
+.under-tab:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Anything that reacts to a pointer says so before it's pressed. */
+.queue-item,
+.search-result-row,
+.end-tile,
+.user-chip {
+  transition: background 0.15s ease, transform 0.12s ease, border-color 0.15s ease;
+}
+
+.queue-item:hover,
+.search-result-row:hover {
+  background: var(--accent-bg);
+  border-radius: 10px;
+}
+
+.end-tile:active,
+.queue-action:active,
+.search-result:active {
+  transform: scale(0.97);
+}
+
+.queue-action,
+.search-result-queue,
+.search-results-close,
+.report-link,
+.emoji-toggle {
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .queue-item,
+  .end-tile,
+  .meta-chip {
+    transition: none !important;
+    transform: none !important;
+  }
 }
 
 button:disabled {
@@ -614,7 +667,7 @@ button:disabled {
   top: 50%;
   left: 50%;
   z-index: 2;
-  width: clamp(64px, 13%, 116px);
+  width: clamp(76px, 17%, 150px);
   aspect-ratio: 1;
   transform: translate(-50%, -50%);
   display: grid;
@@ -623,7 +676,7 @@ button:disabled {
   background: rgba(12, 12, 16, 0.86);
   color: #fff;
   pointer-events: none;
-  animation: bezel-out 4700ms ease-out forwards;
+  animation: bezel-out 4600ms ease-out forwards;
 }
 
 .player-bezel svg {
@@ -631,13 +684,12 @@ button:disabled {
   height: 42%;
 }
 
-/* Fades most of the way out early — by the time it is faint, YouTube's own
-   icon underneath is fading too, so neither is what's left on screen. */
+/* It appears, holds, and is removed — no long dissolve, because a fade is a
+   window where YouTube's icon underneath shows through ours. */
 @keyframes bezel-out {
-  0% { opacity: 1; transform: translate(-50%, -50%) scale(0.92); }
-  8% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  25% { opacity: 0.95; }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.1); }
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.86); }
+  6% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -737,47 +789,65 @@ button:disabled {
 .meta-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.2rem 0.55rem;
+  gap: 0;
+  padding: 0.25rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: 999px;
+  font: inherit;
   font-size: 0.78rem;
+  font-weight: 600;
   line-height: 1.5;
-  color: var(--text);
+  color: var(--text-h);
   background: var(--bg);
-  cursor: default;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
 }
 
-.meta-chip:hover {
+.meta-chip:hover:not(:disabled),
+.meta-chip:focus-visible {
   border-color: var(--accent-border);
-  color: var(--text-h);
+  background: var(--accent-bg);
+  color: var(--accent);
+  filter: none;
+}
+
+.meta-chip:active {
+  transform: scale(0.96);
+}
+
+.meta-chip.is-copied {
+  border-color: #22c55e;
+  color: #22c55e;
+  background: transparent;
 }
 
 .meta-label {
   white-space: nowrap;
 }
 
-/* The value takes the place of the label on hover — the label is what the
-   chip is for, the value is what you came to read. */
+/* The value opens out of the chip on hover; collapsed it takes no width and
+   no gap, so the chip is exactly as wide as its label. */
 .meta-value {
+  /* inline-block, or max-width and overflow simply don't apply and the chip
+     carries the value's width even while it's meant to be closed. */
+  display: inline-block;
   max-width: 0;
+  margin-left: 0;
   overflow: hidden;
   white-space: nowrap;
   font-family: var(--mono);
   letter-spacing: 0.04em;
   color: var(--accent);
-  transition: max-width 0.22s ease, opacity 0.18s ease;
   opacity: 0;
+  transition: max-width 0.22s ease, margin 0.22s ease, opacity 0.18s ease;
 }
 
 .meta-chip:hover .meta-value,
 .meta-chip:focus-visible .meta-value {
   max-width: 9rem;
+  margin-left: 0.4rem;
   opacity: 1;
 }
-
-/* ---- connection light ---- */
 
 .conn {
   display: inline-flex;
@@ -788,11 +858,15 @@ button:disabled {
   cursor: default;
 }
 
-.conn.is-on {
+.conn.is-live {
   color: #22c55e;
 }
 
-.conn.is-off {
+.conn.is-connecting {
+  color: #eab308;
+}
+
+.conn.is-down {
   color: #ef4444;
 }
 
@@ -807,7 +881,7 @@ button:disabled {
 
 /* Alive: a slow halo pulsing outward. Down: the same dot with a ring turning
    around it, which reads as "trying" rather than "broken". */
-.conn.is-on .conn-dot::after {
+.conn.is-live .conn-dot::after {
   content: "";
   position: absolute;
   inset: -0.25rem;
@@ -817,7 +891,8 @@ button:disabled {
   animation: conn-pulse 1.8s ease-out infinite;
 }
 
-.conn.is-off .conn-dot::after {
+.conn.is-connecting .conn-dot::after,
+.conn.is-down .conn-dot::after {
   content: "";
   position: absolute;
   inset: -0.3rem;
@@ -1023,24 +1098,18 @@ button:disabled {
    it — the gap to the timestamp is part of the transition. */
 .pbar-volume:hover .pbar-slider,
 .pbar-volume:focus-within .pbar-slider {
-  width: 72px;
-  margin-left: 0.35rem;
-  margin-right: 0.15rem;
+  width: 78px;
+  margin-left: 0.4rem;
+  margin-right: 0.2rem;
   opacity: 1;
 }
 
-.pbar-slider-fill,
-.pbar-slider-thumb {
+/* The rail is inset by the thumb's radius at both ends, so a thumb at 0 or
+   at 100 is a whole circle rather than the half of one that fits. */
+.pbar-slider-rail {
   position: absolute;
-  top: 50%;
-  pointer-events: none;
-}
-
-.pbar-slider::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
+  left: 6px;
+  right: 6px;
   top: 50%;
   height: 4px;
   margin-top: -2px;
@@ -1049,19 +1118,66 @@ button:disabled {
 }
 
 .pbar-slider-fill {
-  left: 0;
+  position: absolute;
+  left: 6px;
+  top: 50%;
   height: 4px;
   margin-top: -2px;
   border-radius: 999px;
   background: var(--accent, #8b5cf6);
+  pointer-events: none;
 }
 
 .pbar-slider-thumb {
+  position: absolute;
+  top: 50%;
   width: 11px;
   height: 11px;
   margin: -5.5px 0 0 -5.5px;
   border-radius: 50%;
   background: #fff;
+  pointer-events: none;
+}
+
+/* ---- autoplay switch ---- */
+
+.pbar-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 30px;
+  height: 16px;
+  margin: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  transition: background 0.18s ease;
+  flex: none;
+}
+
+.pbar-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s ease;
+}
+
+.pbar-switch:checked {
+  background: var(--accent, #8b5cf6);
+}
+
+.pbar-switch:checked::after {
+  transform: translateX(14px);
+}
+
+.pbar-switch:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 
 .pbar-time {

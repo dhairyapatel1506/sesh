@@ -79,6 +79,12 @@ const io = new Server(httpServer, {
   // credentials here too: the socket handshake carries the session cookie,
   // which is how presence knows who connected.
   cors: isProd ? undefined : { origin: "http://localhost:5173", credentials: true },
+  // A dropped connection with no clean close is only noticed when a ping goes
+  // unanswered, and the defaults (25s between pings, 20s of grace) mean a
+  // room can show someone as present for the better part of a minute after
+  // their wifi died. These are still generous next to a real round trip.
+  pingInterval: 10000,
+  pingTimeout: 8000,
 });
 
 // Which deploy this is — "staging" on the staging service, "production"

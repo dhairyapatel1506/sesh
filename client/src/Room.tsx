@@ -45,19 +45,6 @@ type UpNextPick = {
 // clock reading at which it starts playing.
 type CountdownPick = UpNextPick & { startsAt: number };
 
-// YouTube's own names for its quality levels, in the words people use.
-const QUALITY_LABELS: Record<string, string> = {
-  tiny: "144p",
-  small: "240p",
-  medium: "360p",
-  large: "480p",
-  hd720: "720p",
-  hd1080: "1080p",
-  hd1440: "1440p",
-  hd2160: "2160p",
-  highres: "Highest",
-};
-
 type ChatMessage = {
   id: string;
   senderId: string;
@@ -253,7 +240,11 @@ function Room() {
   const clientIdRef = useRef(getClientId());
   const { user: authUser, loading: authLoading } = useAuth();
 
-  const [connected, setConnected] = useState(socket.connected);
+  // Three states, not two: connected, trying, and gone. A reconnect passes
+  // through "trying" on the way back so the light never jumps red to green.
+  const [connection, setConnection] = useState<"live" | "connecting" | "down">(
+    socket.connected ? "live" : "connecting",
+  );
   const [urlInput, setUrlInput] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
@@ -903,13 +894,36 @@ function Room() {
 
   // Track connection status.
   useEffect(() => {
-    const onConnect = () => setConnected(true);
-    const onDisconnect = () => setConnected(false);
+    // Green only after a beat of "connecting", which is what makes a
+    // reconnect legible instead of a flicker.
+    let settle: number | undefined;
+    const onConnect = () => {
+      setConnection((was) => (was === "live" ? "live" : "connecting"));
+      window.clearTimeout(settle);
+      settle = window.setTimeout(() => setConnection("live"), 550);
+    };
+    const onDisconnect = () => {
+      window.clearTimeout(settle);
+      setConnection(navigator.onLine ? "connecting" : "down");
+    };
+    // The browser knows the network went before any ping can time out.
+    const onOffline = () => {
+      window.clearTimeout(settle);
+      setConnection("down");
+    };
+    const onOnline = () => setConnection((was) => (was === "live" ? "live" : "connecting"));
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
+    socket.io.on("reconnect_attempt", onOnline);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
     return () => {
+      window.clearTimeout(settle);
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
+      socket.io.off("reconnect_attempt", onOnline);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
     };
   }, []);
 
@@ -1482,6 +1496,19 @@ function Room() {
     };
   }, [unreadCount]);
 
+  // The room code is the one thing in the header anyone needs to pass on, so
+  // the chip is the copy button for it.
+  const [codeCopied, setCodeCopied] = useState(false);
+  const copyRoomCode = () => {
+    void navigator.clipboard
+      ?.writeText(roomId)
+      .then(() => {
+        setCodeCopied(true);
+        window.setTimeout(() => setCodeCopied(false), 1400);
+      })
+      .catch(() => {});
+  };
+
   const toggleChatMuted = () => {
     setChatMuted((muted) => {
       const next = !muted;
@@ -1795,9 +1822,6 @@ function Room() {
   // switches off — ours is opaque, covers it, and goes when we say.
   const [bezel, setBezel] = useState<"play" | "pause" | null>(null);
   const bezelTimerRef = useRef<number | undefined>(undefined);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [qualities, setQualities] = useState<string[]>([]);
-  const [quality, setQuality] = useState<string>("auto");
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Ignore sub-pixel pointer jitter — only restart the HUD hide timer when
   // the mouse has actually moved a meaningful distance.
@@ -1826,8 +1850,10 @@ function Room() {
   // The centre flash, timed to outlast YouTube's own so its icon is never
   // the one left on screen.
   // Measured: YouTube's own centre glyph is still painted 4.4s after a
-  // resume. Ours has to outlast it or its icon is the one left behind.
-  const BEZEL_MS = 4700;
+  // resume. Ours has to outlast it or its icon is the one left behind — and
+  // then go at once rather than fading, because a fade is a window where
+  // theirs shows through ours.
+  const BEZEL_MS = 4600;
   useEffect(() => {
     if (!videoId) return;
     setBezel(localPlaying ? "play" : "pause");
@@ -1835,40 +1861,6 @@ function Room() {
     bezelTimerRef.current = window.setTimeout(() => setBezel(null), BEZEL_MS);
     return () => window.clearTimeout(bezelTimerRef.current);
   }, [localPlaying, videoId]);
-
-  // What resolutions this video offers. YouTube decides the actual quality
-  // itself these days and may ignore the request, so the menu only appears
-  // when the player names more than one level.
-  useEffect(() => {
-    if (!videoId) return;
-    setQualities([]);
-    setQuality("auto");
-    const timer = window.setTimeout(() => {
-      const player = readyPlayer();
-      const levels = player?.getAvailableQualityLevels?.() ?? [];
-      setQualities(levels.filter((level) => level !== "auto"));
-      setQuality(player?.getPlaybackQuality?.() ?? "auto");
-    }, 2500);
-    return () => window.clearTimeout(timer);
-  }, [videoId]);
-
-  // Any click outside the settings menu closes it, the way a menu should.
-  useEffect(() => {
-    if (!settingsOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const el = e.target as HTMLElement;
-      if (!el.closest(".pbar-settings")) setSettingsOpen(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [settingsOpen]);
-
-  const chooseQuality = (level: string) => {
-    const player = readyPlayer();
-    player?.setPlaybackQuality?.(level);
-    setQuality(level);
-    setSettingsOpen(false);
-  };
 
   // Escape belongs to the page while fullscreen, or the chat and the emoji
   // panel can never use it: the browser would take the key and drop out of
@@ -2059,6 +2051,14 @@ function Room() {
       return;
     }
     togglePlay();
+  };
+
+  // Where a click on the volume rail lands, in 0-100, measured against the
+  // rail's inset ends rather than the box so the extremes are reachable.
+  const volumeAt = (el: HTMLElement, clientX: number) => {
+    const box = el.getBoundingClientRect();
+    const usable = Math.max(1, box.width - 12);
+    return Math.max(0, Math.min(100, Math.round(((clientX - box.left - 6) / usable) * 100)));
   };
 
   const clockTime = (seconds: number) => {
@@ -2501,10 +2501,14 @@ function Room() {
         <div className="header-meta">
           {/* Each chip says what it is and shows the value on hover, so the
               header reads as a header rather than a row of bare figures. */}
-          <span className="meta-chip room-code" title={`Room code ${roomId}`}>
-            <span className="meta-label">Room code</span>
+          <button
+            className={`meta-chip room-code${codeCopied ? " is-copied" : ""}`}
+            title={`Room code ${roomId} — click to copy`}
+            onClick={copyRoomCode}
+          >
+            <span className="meta-label">{codeCopied ? "Copied" : "Room code"}</span>
             <span className="meta-value">{roomId}</span>
-          </span>
+          </button>
           {roomCreatedAt && (
             <span
               className="meta-chip room-uptime"
@@ -2515,11 +2519,19 @@ function Room() {
             </span>
           )}
           <span
-            className={`conn ${connected ? "is-on" : "is-off"}`}
-            title={connected ? "Connected to the room" : "Reconnecting…"}
+            className={`conn is-${connection}`}
+            title={
+              connection === "live"
+                ? "Connected to the room"
+                : connection === "connecting"
+                  ? "Reconnecting…"
+                  : "No connection"
+            }
           >
             <span className="conn-dot" aria-hidden />
-            <span className="conn-text">{connected ? "Live" : "Reconnecting…"}</span>
+            <span className="conn-text">
+              {connection === "live" ? "Live" : connection === "connecting" ? "Connecting…" : "Offline"}
+            </span>
           </span>
         </div>
       </header>
@@ -2765,20 +2777,26 @@ function Room() {
                         aria-valuemax={100}
                         aria-valuenow={silent ? 0 : volume}
                         onPointerDown={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const pct = Math.round(((e.clientX - rect.left) / rect.width) * 100);
-                          changeVolume(Math.max(0, Math.min(100, pct)));
+                          changeVolume(volumeAt(e.currentTarget, e.clientX));
                           e.currentTarget.setPointerCapture(e.pointerId);
                         }}
                         onPointerMove={(e) => {
                           if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const pct = Math.round(((e.clientX - rect.left) / rect.width) * 100);
-                          changeVolume(Math.max(0, Math.min(100, pct)));
+                          changeVolume(volumeAt(e.currentTarget, e.clientX));
                         }}
                       >
-                        <div className="pbar-slider-fill" style={{ width: `${silent ? 0 : volume}%` }} />
-                        <div className="pbar-slider-thumb" style={{ left: `${silent ? 0 : volume}%` }} />
+                        <div className="pbar-slider-rail" />
+                        {/* Positions run between the rail's inset ends, which
+                            is what keeps a full circle visible at 0 and 100
+                            instead of the half that fits inside the box. */}
+                        <div
+                          className="pbar-slider-fill"
+                          style={{ width: `calc((100% - 12px) * ${(silent ? 0 : volume) / 100})` }}
+                        />
+                        <div
+                          className="pbar-slider-thumb"
+                          style={{ left: `calc(6px + (100% - 12px) * ${(silent ? 0 : volume) / 100})` }}
+                        />
                       </div>
                     </div>
                     <span className="pbar-time">
@@ -2789,50 +2807,14 @@ function Room() {
                         moves when the server says everyone's did. */}
                     {radio.available && (
                       <label className="pbar-autoplay" title="Keep the room playing when the queue runs out">
+                        <span>Autoplay</span>
                         <input
                           type="checkbox"
+                          className="pbar-switch"
                           checked={radio.autoplay}
                           onChange={(e) => socket.emit("radio:set", { on: e.target.checked })}
                         />
-                        <span>Autoplay</span>
                       </label>
-                    )}
-                    {qualities.length > 1 && (
-                      <div className="pbar-settings">
-                        <button
-                          className={`pbar-btn${settingsOpen ? " is-on" : ""}`}
-                          onClick={() => setSettingsOpen((open) => !open)}
-                          title="Quality"
-                          aria-label="Quality"
-                          aria-expanded={settingsOpen}
-                        >
-                          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
-                            <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9.4 4a7.5 7.5 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2-1.2L16.5 3h-4l-.4 2.6a7.6 7.6 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.5 7.5 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1c.6.5 1.3.9 2 1.2l.4 2.6h4l.4-2.6c.7-.3 1.4-.7 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z" />
-                          </svg>
-                        </button>
-                        {settingsOpen && (
-                          <div className="pbar-menu" role="menu">
-                            <p className="pbar-menu-head">Quality</p>
-                            <button
-                              className={`pbar-menu-item${quality === "auto" ? " is-on" : ""}`}
-                              role="menuitem"
-                              onClick={() => chooseQuality("default")}
-                            >
-                              Auto
-                            </button>
-                            {qualities.map((level) => (
-                              <button
-                                key={level}
-                                className={`pbar-menu-item${quality === level ? " is-on" : ""}`}
-                                role="menuitem"
-                                onClick={() => chooseQuality(level)}
-                              >
-                                {QUALITY_LABELS[level] ?? level}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
                     )}
                     {ccTracks > 0 && (
                       <button
