@@ -1392,6 +1392,14 @@ function Room() {
           `clock offset ${clockOffsetRef.current.toFixed(0)}ms`,
           `start lag ${(playStartLagRef.current * 1000).toFixed(0)}ms`,
           `rate ${playbackRateRef.current}`,
+          // Silence has two causes that look identical from the outside —
+          // muted, or the volume at zero — and a report of "no sound" is
+          // only diagnosable if it says which.
+          `sound ${
+            playerRef.current
+              ? `${playerRef.current.isMuted() ? "muted" : "on"} vol ${playerRef.current.getVolume()}`
+              : "no player"
+          }`,
         ].join(" · "),
       );
     }, 250);
