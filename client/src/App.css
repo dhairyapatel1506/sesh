@@ -542,6 +542,86 @@ button:disabled {
    instant the pointer leaves the frame, which is the whole reason it exists:
    YouTube's own chrome sits there for ~3.6s and no page can tell someone
    else's iframe that the mouse has gone. */
+/* Covers for YouTube's paused overlay (see Room.tsx). Sized as a share of
+   the frame with a floor, because YouTube's chrome scales with the player —
+   a fixed 56px band that works windowed leaves its title bar poking out in
+   fullscreen. */
+.player-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: clamp(52px, 9%, 104px);
+  display: flex;
+  align-items: center;
+  padding: 0 0.85rem;
+  background: #0a0a0e;
+  color: #fff;
+  text-align: left;
+  border-radius: 12px 12px 0 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+/* A short fade off the bottom edge of each cover, so a solid band doesn't
+   cut the picture with a hard line. */
+.player-topbar::after,
+.player-botcover::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 18px;
+  pointer-events: none;
+}
+
+.player-topbar::after {
+  top: 100%;
+  background: linear-gradient(to bottom, #0a0a0e, rgba(10, 10, 14, 0));
+}
+
+.player-botcover::after {
+  bottom: 100%;
+  background: linear-gradient(to top, #0a0a0e, rgba(10, 10, 14, 0));
+}
+
+.player-topbar.is-shown {
+  opacity: 1;
+}
+
+.player-topbar-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-botcover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  height: clamp(62px, 12%, 128px);
+  background: #0a0a0e;
+  border-radius: 0 0 12px 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-topbar {
+    transition: none;
+  }
+}
+
+.player-frame.is-fullscreen .player-topbar,
+.player-frame.is-fullscreen .player-botcover {
+  border-radius: 0;
+}
+
 .player-click {
   position: absolute;
   inset: 0;
@@ -672,19 +752,20 @@ button:disabled {
   align-items: center;
 }
 
+/* Always its full width. It used to grow from nothing on hover, which put a
+   live slider under a pointer that was aiming for the speaker button — one
+   click at the left end sets the volume to zero, and YouTube remembers that
+   for every later video in that browser. */
 .pbar-slider {
-  width: 0;
-  opacity: 0;
-  margin: 0;
+  width: 64px;
+  margin-left: 0.15rem;
   accent-color: var(--accent, #8b5cf6);
-  transition: width 120ms ease, opacity 120ms ease;
 }
 
-.pbar-volume:hover .pbar-slider,
-.pbar-slider:focus-visible {
-  width: 68px;
-  opacity: 1;
-  margin-left: 0.25rem;
+@media (max-width: 460px) {
+  .pbar-slider {
+    display: none;
+  }
 }
 
 .pbar-time {

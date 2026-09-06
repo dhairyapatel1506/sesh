@@ -1722,7 +1722,10 @@ function Room() {
   // the wall clock, so one person at 1.5x isn't watching the same thing as
   // everyone else — the drift corrector would spend the whole video fighting
   // them. Quality is absent because YouTube ignores setPlaybackQuality now.
-  const HUD_IDLE_MS = 2600;
+  // Slightly longer than YouTube's own ~3.6s autohide, on purpose: its
+  // chrome wakes on things we don't control (a video loading, a pause), and
+  // ours has to still be over the top of it when it does.
+  const HUD_IDLE_MS = 3800;
   const [hudShown, setHudShown] = useState(true);
   const hudTimerRef = useRef<number | undefined>(undefined);
   const [localPlaying, setLocalPlaying] = useState(false);
@@ -1733,6 +1736,13 @@ function Room() {
   const [clip, setClip] = useState({ position: 0, duration: 0, buffered: 0 });
   const [volume, setVolume] = useState(100);
   const [muted, setMuted] = useState(false);
+  // Whether this person has touched the volume themselves. YouTube's player
+  // remembers its volume in its own storage, per browser — so a slider left
+  // at zero once comes back at zero on every video after it, on a tab that
+  // reports itself unmuted. Silence nobody chose gets the prompt; silence
+  // somebody chose is left alone.
+  const volumeChosenRef = useRef(false);
+  const silent = muted || volume === 0;
   const [ccTracks, setCcTracks] = useState(0);
   const [ccOn, setCcOn] = useState(false);
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -1851,9 +1861,13 @@ function Room() {
   const toggleMute = () => {
     const player = readyPlayer();
     if (!player) return;
+    volumeChosenRef.current = true;
     if (player.isMuted() || player.getVolume() === 0) {
       player.unMute();
-      if (player.getVolume() === 0) player.setVolume(60);
+      if (player.getVolume() === 0) {
+        player.setVolume(100);
+        setVolume(100);
+      }
       mutedByUsRef.current = false;
       autoplayGrantedRef.current = true;
     } else {
@@ -1865,6 +1879,7 @@ function Room() {
   const changeVolume = (level: number) => {
     const player = readyPlayer();
     if (!player) return;
+    volumeChosenRef.current = true;
     player.setVolume(level);
     setVolume(level);
     if (level > 0 && player.isMuted()) {
@@ -2158,8 +2173,10 @@ function Room() {
         setNeedsUnmute(false);
         return;
       }
-      // Only ask when we genuinely can't do it ourselves.
-      setNeedsUnmute(mutedByUsRef.current && silent);
+      // Only ask when we genuinely can't do it ourselves — and also when
+      // the player is silent for a reason nobody in this room chose, which
+      // is what a volume of zero remembered from some earlier visit is.
+      setNeedsUnmute(silent && (mutedByUsRef.current || !volumeChosenRef.current));
     }, 1000);
     return () => window.clearInterval(interval);
   }, [videoId]);
@@ -2501,10 +2518,27 @@ function Room() {
                 ref={playerFrameRef}
                 onPointerMove={() => showHud(localPlaying)}
                 onPointerLeave={() => {
-                  if (!scrubRef.current) hideHud();
+                  // Never while paused: YouTube's own paused overlay is
+                  // underneath ours, and our bar (with the covers below) is
+                  // what hides it.
+                  if (!scrubRef.current && localPlaying) hideHud();
                 }}
               >
                 <div id="yt-player" ref={playerContainerRef} />
+                {/* YouTube's paused overlay — its title bar at the top, and
+                    share / Watch Later / "More videos" / the logo along the
+                    bottom — appears the moment the video is paused and does
+                    not fade. controls=0 doesn't touch it and nothing on this
+                    side of the iframe can. So it gets covered: a title band
+                    of ours over the top strip, a plain band under our bar
+                    over the bottom one. Sized against the frame, because
+                    YouTube's chrome grows with the player. */}
+                <div
+                  className={`player-topbar${hudShown || !localPlaying ? " is-shown" : ""}`}
+                >
+                  <span className="player-topbar-title">{videoTitle ?? ""}</span>
+                </div>
+                {!localPlaying && <div className="player-botcover" aria-hidden />}
                 {/* The click layer: our own play/pause on the picture, and
                     double-click for fullscreen. It sits over the iframe,
                     which with controls=0 has nothing of its own to click. */}
@@ -2557,10 +2591,10 @@ function Room() {
                       <button
                         className="pbar-btn"
                         onClick={toggleMute}
-                        title={muted ? "Unmute (m)" : "Mute (m)"}
-                        aria-label={muted ? "Unmute" : "Mute"}
+                        title={silent ? "Unmute (m)" : "Mute (m)"}
+                        aria-label={silent ? "Unmute" : "Mute"}
                       >
-                        {muted || volume === 0 ? (
+                        {silent ? (
                           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
                             <path d="M4 9v6h4l5 4V5L8 9H4zm12.5 3l2.7-2.7-1.1-1.1L15.4 11l-2.7-2.8-1.1 1.1L14.3 12l-2.7 2.7 1.1 1.1 2.7-2.7 2.7 2.7 1.1-1.1z" />
                           </svg>
@@ -2576,7 +2610,7 @@ function Room() {
                         min={0}
                         max={100}
                         step={1}
-                        value={muted ? 0 : volume}
+                        value={silent ? 0 : volume}
                         aria-label="Volume"
                         onChange={(e) => changeVolume(Number(e.target.value))}
                       />
