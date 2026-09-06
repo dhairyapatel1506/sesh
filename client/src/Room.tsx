@@ -976,10 +976,18 @@ function Room() {
             // mismatch entirely.
             const iframe = playerRef.current?.getIframe();
             if (iframe) {
+              // The iframe is deliberately taller than the picture and sits
+              // pulled up inside #yt-player, which clips it — that's what
+              // takes YouTube's own chrome off the screen (see the CSS).
+              // Set here as well as in CSS because the API writes width and
+              // height attributes of its own onto this node.
               iframe.style.display = "block";
+              iframe.style.position = "absolute";
+              iframe.style.left = "0";
+              iframe.style.top = "calc(-1 * var(--yt-clip))";
               iframe.style.width = "100%";
-              iframe.style.height = "auto";
-              iframe.style.aspectRatio = "16 / 9";
+              iframe.style.height = "calc(100% + 2 * var(--yt-clip))";
+              iframe.style.aspectRatio = "auto";
             }
             if (selfLoadRef.current === videoId) {
               // This tab loaded the video itself before a player existed.
@@ -1736,10 +1744,6 @@ function Room() {
   const [hudShown, setHudShown] = useState(true);
   const hudTimerRef = useRef<number | undefined>(undefined);
   const [localPlaying, setLocalPlaying] = useState(false);
-  // YouTube's paused overlay lingers ~3.6s after resuming — keep covers up
-  // through that window so the chrome is never exposed.
-  const [overlaySuppressed, setOverlaySuppressed] = useState(false);
-  const overlayTimerRef = useRef<number | undefined>(undefined);
   // Where the scrubber is being dragged to, in seconds. Non-null only while
   // a drag is in progress, so the ticking position doesn't fight the thumb.
   const [scrub, setScrub] = useState<number | null>(null);
@@ -1779,22 +1783,6 @@ function Room() {
     if (!localPlaying) showHud(true);
     else showHud(false);
     return () => window.clearTimeout(hudTimerRef.current);
-  }, [localPlaying]);
-
-  // YouTube's paused overlay lingers ~3.6s after resuming. Keep cover bands
-  // up through that window so the chrome is never exposed.
-  useEffect(() => {
-    if (localPlaying) {
-      setOverlaySuppressed(true);
-      overlayTimerRef.current = window.setTimeout(
-        () => setOverlaySuppressed(false),
-        4500,
-      );
-    } else {
-      setOverlaySuppressed(false);
-      window.clearTimeout(overlayTimerRef.current);
-    }
-    return () => window.clearTimeout(overlayTimerRef.current);
   }, [localPlaying]);
 
   // Numbers for the bar, only while the bar is on screen. estimatedPosition
@@ -2542,6 +2530,10 @@ function Room() {
                 className={[
                   "player-frame",
                   isFullscreen && "is-fullscreen",
+                  // Fullscreen with the controls gone should be picture only,
+                  // cursor included — there's nothing else on screen for it
+                  // to point at.
+                  isFullscreen && !hudShown && "is-idle",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -2552,27 +2544,21 @@ function Room() {
                   const dy = prev ? e.clientY - prev.y : 0;
                   lastPointerRef.current = { x: e.clientX, y: e.clientY };
                   if (prev && Math.abs(dx) + Math.abs(dy) < 3) return;
-                  showHud(localPlaying);
+                  // sticky === "stay up until something else hides it", which
+                  // is what a *paused* video wants. Playing wants the timer.
+                  // This argument was inverted, which is why the bar never
+                  // went away on its own — and why the title band sat over
+                  // the top of the picture for the whole video.
+                  showHud(!localPlaying);
                 }}
                 onPointerLeave={() => {
                   lastPointerRef.current = null;
-                  // Never while paused: YouTube's own paused overlay is
-                  // underneath ours, and our bar (with the covers below) is
-                  // what hides it.
+                  // Not while paused: a paused video has nothing to watch,
+                  // and the bar is how you start it again.
                   if (!scrubRef.current && localPlaying) hideHud();
                 }}
               >
                 <div id="yt-player" ref={playerContainerRef} />
-                {/* Our title band + a bottom cover hide YouTube's paused
-                    overlay. The topbar is always shown when paused; the
-                    botcover stays up for 4.5s after resume while YouTube's
-                    own chrome fades. */}
-                <div
-                  className={`player-topbar${hudShown || !localPlaying || overlaySuppressed ? " is-shown" : ""}`}
-                >
-                  <span className="player-topbar-title">{videoTitle ?? ""}</span>
-                </div>
-                {(!localPlaying || overlaySuppressed) && <div className="player-botcover" aria-hidden />}
                 {/* The click layer: our own play/pause on the picture, and
                     double-click for fullscreen. It sits over the iframe,
                     which with controls=0 has nothing of its own to click. */}
