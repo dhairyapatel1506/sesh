@@ -68,6 +68,10 @@ header h1 a:hover {
    baseline makes the box the letters themselves. Where that isn't supported,
    the measured nudge gets close. */
 .wordmark {
+  /* `header span` sets 0.85rem for the little status labels, and this span
+     was being caught by it — hence a wordmark a third of its proper size. */
+  font-size: inherit;
+  font-weight: inherit;
   line-height: 1;
   text-box: trim-both cap alphabetic;
 }
@@ -861,27 +865,50 @@ button:disabled {
 /* Pressed: green at once, with a line drawing itself round the border, then
    back to normal. The confirmation is about the click, so it doesn't wait on
    the clipboard promise. */
-.meta-chip.is-copied {
-  border-color: transparent;
-  color: #22c55e;
-  background: transparent;
+/* Pressed: the whole chip goes green for exactly as long as the lap takes,
+   then drops back to whatever it would have been — hover or rest. */
+.meta-chip.is-copied,
+.meta-chip.is-copied:hover {
+  border-color: #22c55e;
+  background: #22c55e;
+  color: #fff;
+}
+
+.meta-chip.is-copied .meta-value {
+  color: #fff;
+}
+
+/* And a line runs one lap of the border, from the top and back to the top.
+   The conic gradient is masked to the border ring; --lap is animated, which
+   needs @property to interpolate. */
+@property --lap {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
 }
 
 .meta-chip.is-copied::after {
   content: "";
   position: absolute;
-  inset: 0;
-  border: 1px solid #22c55e;
+  inset: -2px;
+  padding: 2px;
   border-radius: inherit;
-  clip-path: inset(0 100% 0 0);
-  animation: chip-sweep 1000ms ease-out forwards;
+  background: conic-gradient(from -90deg, #ffffff var(--lap), transparent 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: chip-lap 1000ms linear forwards;
   pointer-events: none;
 }
 
-@keyframes chip-sweep {
-  0% { clip-path: inset(0 100% 0 0); }
-  55% { clip-path: inset(0 0 0 0); opacity: 1; }
-  100% { clip-path: inset(0 0 0 0); opacity: 0; }
+@keyframes chip-lap {
+  from { --lap: 0%; }
+  to { --lap: 100%; }
 }
 
 .meta-label,
@@ -957,21 +984,30 @@ button:disabled {
 
 /* Alive: a slow halo pulsing outward. Down: the same dot with a ring turning
    around it, which reads as "trying" rather than "broken". */
+/* Centred on the dot itself — an inset box grows from its own edges, which
+   read as a halo sliding rather than one spreading. */
 .conn.is-live .conn-dot::after {
   content: "";
   position: absolute;
-  inset: -0.25rem;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  margin: -50% 0 0 -50%;
   border-radius: 50%;
   background: currentColor;
-  opacity: 0.5;
-  animation: conn-pulse 1.8s ease-out infinite;
+  animation: conn-pulse 1.9s ease-out infinite;
 }
 
-.conn.is-connecting .conn-dot::after,
-.conn.is-down .conn-dot::after {
+/* Trying: a ring turning around the dot. Down: the dot alone, still. */
+.conn.is-connecting .conn-dot::after {
   content: "";
   position: absolute;
-  inset: -0.3rem;
+  top: 50%;
+  left: 50%;
+  width: 200%;
+  height: 200%;
+  margin: -100% 0 0 -100%;
   border-radius: 50%;
   border: 2px solid currentColor;
   border-top-color: transparent;
@@ -979,8 +1015,8 @@ button:disabled {
 }
 
 @keyframes conn-pulse {
-  0% { transform: scale(0.6); opacity: 0.55; }
-  100% { transform: scale(1.6); opacity: 0; }
+  0% { transform: scale(1); opacity: 0.45; }
+  100% { transform: scale(2.1); opacity: 0; }
 }
 
 @keyframes conn-spin {
@@ -1217,6 +1253,140 @@ button:disabled {
   border-radius: 50%;
   background: #fff;
   pointer-events: none;
+}
+
+/* ---- chips that open something on hover ---- */
+
+.hover-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+/* The gap between chip and panel would end the hover on the way down, so the
+   panel reaches up to meet it. */
+.friends-popover,
+.invite-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 40;
+  margin-top: 0.45rem;
+  padding: 0.75rem;
+  min-width: 15rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  text-align: left;
+  animation: menu-in 130ms ease-out;
+}
+
+.friends-popover::before,
+.invite-popover::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 0.55rem;
+}
+
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.invite-head {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+}
+
+.invite-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.invite-link {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.invite-copy {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.invite-qr {
+  display: block;
+  width: 9.5rem;
+  height: 9.5rem;
+  margin: 0 auto;
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.35rem;
+}
+
+.invite-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text);
+  text-align: center;
+}
+
+/* ---- emoji picker ---- */
+
+.emoji-tabs {
+  display: flex;
+  gap: 0.1rem;
+  margin-bottom: 0.4rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.emoji-tabs button {
+  flex: none;
+  padding: 0.25rem 0.35rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.55;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.emoji-tabs button:hover {
+  opacity: 1;
+  background: var(--accent-bg);
+  filter: none;
+}
+
+.emoji-tabs button.is-active {
+  opacity: 1;
+  background: var(--accent-bg);
+}
+
+.emoji-empty {
+  grid-column: 1 / -1;
+  margin: 0.5rem 0;
+  font-size: 0.8rem;
+  color: var(--text);
+  text-align: center;
 }
 
 /* ---- autoplay switch ---- */
@@ -2848,7 +3018,8 @@ button:disabled {
    the fixed rails goes to the picture. */
 @media (min-width: 1200px) {
   #root:has(.app.room) {
-    width: 1180px;
+    /* No rails to keep clear of any more, so the room takes the width. */
+    width: min(1280px, calc(100vw - 2rem));
   }
 }
 
@@ -2869,11 +3040,12 @@ button:disabled {
   #root:has(.app.room .room-recs) {
     /* Grows with the screen rather than in steps, up to a point past which a
        wider video stops being a better one. */
-    width: min(1660px, calc(100vw - 3rem));
+    width: min(1860px, calc(100vw - 2rem));
   }
 
   .room-main:has(.room-recs) {
-    --rail: 270px;
+    /* Wider now the frame has no rails of its own to leave room for. */
+    --rail: 300px;
     grid-template-columns: var(--rail) minmax(0, 1fr) var(--rail);
     grid-template-areas: "recs video chat";
   }

@@ -51,11 +51,12 @@
 }
 
 #root {
-  width: 1126px;
-  max-width: 100%;
+  /* Full width, no rails. The page used to sit in a 1126px column with a
+     line down each side; the room has more to show than that column had room
+     for, so the space is the room's now. */
+  width: 100%;
   margin: 0 auto;
   text-align: center;
-  border-inline: 1px solid var(--border);
   min-height: 100svh;
   display: flex;
   flex-direction: column;

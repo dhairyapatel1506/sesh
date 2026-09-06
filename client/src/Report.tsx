@@ -102,11 +102,8 @@ export function ReportBug({ roomId }: { roomId?: string }) {
 
   return (
     <>
-      <button className="report-link" onClick={() => setOpen(true)}>
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden>
-          <path d="M4 3h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9l-5 4V5a2 2 0 0 1 2-2z" />
-        </svg>
-        Send feedback
+      <button className="meta-chip report-link" onClick={() => setOpen(true)}>
+        <span className="meta-label">Feedback</span>
       </button>
       {open && <ReportDialog limits={limits} roomId={roomId} onClose={close} />}
     </>

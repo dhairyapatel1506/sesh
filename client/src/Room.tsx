@@ -821,6 +821,7 @@ function Room() {
   // inline they pushed the page down and dragged the chat with them, so typing
   // a message meant scrolling past the whole list.
   const [friendsOpen, setFriendsOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const friendsMenuRef = useRef<HTMLDivElement>(null);
   const { friends } = useFriends();
   // Around, not watching: anyone with Sesh open counts, whether or not they're
@@ -902,9 +903,11 @@ function Room() {
       window.clearTimeout(settle);
       settle = window.setTimeout(() => setConnection("live"), 550);
     };
+    // A dropped socket is a dropped connection, said plainly and at once —
+    // "connecting" is for the way back, not for the moment it goes.
     const onDisconnect = () => {
       window.clearTimeout(settle);
-      setConnection(navigator.onLine ? "connecting" : "down");
+      setConnection("down");
     };
     // The browser knows the network went before any ping can time out.
     const onOffline = () => {
@@ -912,6 +915,32 @@ function Room() {
       setConnection("down");
     };
     const onOnline = () => setConnection((was) => (was === "live" ? "live" : "connecting"));
+    // Socket.IO only notices a dead link when a ping goes unanswered. Our own
+    // beat is faster and, unlike theirs, it is an application round trip: if
+    // the server doesn't answer within DEAD_AFTER_MS the light goes red
+    // whatever the transport still believes.
+    const BEAT_MS = 4000;
+    const DEAD_AFTER_MS = 3000;
+    const beat = window.setInterval(() => {
+      if (!socket.connected) return;
+      let answered = false;
+      const timer = window.setTimeout(() => {
+        if (!answered) setConnection("down");
+      }, DEAD_AFTER_MS);
+      socket.timeout(DEAD_AFTER_MS).emit("clock:ping", (err: unknown) => {
+        answered = true;
+        window.clearTimeout(timer);
+        if (err) return;
+        // Answering again is how a red light gets back to green: amber first,
+        // then live a beat later, the same path a reconnect takes.
+        setConnection((was) => {
+          if (was === "live") return "live";
+          window.clearTimeout(settle);
+          settle = window.setTimeout(() => setConnection("live"), 550);
+          return "connecting";
+        });
+      });
+    }, BEAT_MS);
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.io.on("reconnect_attempt", onOnline);
@@ -919,6 +948,7 @@ function Room() {
     window.addEventListener("online", onOnline);
     return () => {
       window.clearTimeout(settle);
+      window.clearInterval(beat);
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.io.off("reconnect_attempt", onOnline);
@@ -1841,13 +1871,14 @@ function Room() {
     hudTimerRef.current = window.setTimeout(() => setHudShown(false), holdFor());
   };
 
+  // Off the player, off the screen — bar and flash together, now, not when
+  // some timer says so. (YouTube's own flash underneath runs its ~4.4s
+  // whatever we do; ours simply stops being part of it.)
   const hideHud = () => {
     window.clearTimeout(hudTimerRef.current);
-    const wait = bezelUntilRef.current - Date.now();
-    if (wait > 0) {
-      hudTimerRef.current = window.setTimeout(() => setHudShown(false), wait);
-      return;
-    }
+    window.clearTimeout(bezelTimerRef.current);
+    bezelUntilRef.current = 0;
+    setBezel(null);
     setHudShown(false);
   };
 
@@ -2187,6 +2218,93 @@ function Room() {
   // input it types into differs. It was written inline in the page chat, which
   // is why the fullscreen overlay — same conversation, same draft — had no way
   // to reach the emoji at all.
+
+  // ---- the emoji picker's data ----
+  //
+  // The curated list stays for :shortcodes: in chat; the picker itself shows
+  // the whole standard set, grouped the way every other picker groups it.
+  // Loaded on first open so the page doesn't carry 1,900 emoji it may never
+  // show. "Recent" is this session's own, newest first.
+  type PickerEmoji = { char: string; names: string[] };
+  type PickerGroup = { slug: string; name: string; icon: string; emojis: PickerEmoji[] };
+  const GROUP_ICONS: Record<string, string> = {
+    recent: "🕘",
+    smileys_emotion: "😀",
+    people_body: "👋",
+    animals_nature: "🐻",
+    food_drink: "🍔",
+    travel_places: "✈️",
+    activities: "⚽",
+    objects: "💡",
+    symbols: "❤️",
+    flags: "🏳️",
+  };
+  const [emojiData, setEmojiData] = useState<PickerGroup[]>([]);
+  const [emojiTab, setEmojiTab] = useState("smileys_emotion");
+  const [recentEmoji, setRecentEmoji] = useState<string[]>(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem("sesh-recent-emoji") ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    if (!emojiOpen || emojiData.length > 0) return;
+    let cancelled = false;
+    void import("unicode-emoji-json/data-by-group.json").then((mod) => {
+      if (cancelled) return;
+      const groups = (mod.default ?? mod) as {
+        slug: string;
+        name: string;
+        emojis: { emoji: string; name: string; slug: string }[];
+      }[];
+      setEmojiData(
+        groups.map((group) => ({
+          slug: group.slug,
+          name: group.name,
+          icon: GROUP_ICONS[group.slug] ?? "•",
+          emojis: group.emojis.map((e) => ({ char: e.emoji, names: [e.slug, e.name] })),
+        })),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [emojiOpen, emojiData.length]);
+
+  const rememberEmoji = (char: string) => {
+    setRecentEmoji((was) => {
+      const next = [char, ...was.filter((c) => c !== char)].slice(0, 32);
+      try {
+        sessionStorage.setItem("sesh-recent-emoji", JSON.stringify(next));
+      } catch {
+        // A private window keeps nothing; the picker still works.
+      }
+      return next;
+    });
+  };
+
+  const emojiGroups: { slug: string; name: string; icon: string }[] = [
+    ...(recentEmoji.length > 0 ? [{ slug: "recent", name: "Recent", icon: GROUP_ICONS.recent }] : []),
+    ...emojiData.map((g) => ({ slug: g.slug, name: g.name, icon: g.icon })),
+  ];
+
+  // What the grid shows: search results across everything, or the open tab.
+  const emojiList: PickerEmoji[] = (() => {
+    const query = emojiQuery.trim().toLowerCase();
+    if (query) {
+      const all = emojiData.flatMap((g) => g.emojis);
+      const pool = all.length > 0 ? all : searchEmojis("").map((e) => ({ char: e.char, names: e.names }));
+      return pool.filter((e) => e.names.some((name) => name.toLowerCase().includes(query))).slice(0, 120);
+    }
+    if (emojiTab === "recent") return recentEmoji.map((char) => ({ char, names: ["recent"] }));
+    const group = emojiData.find((g) => g.slug === emojiTab);
+    if (group) return group.emojis;
+    // Before the full set has landed, the curated list stands in.
+    return searchEmojis("").map((e) => ({ char: e.char, names: e.names }));
+  })();
+
   const renderEmojiPanel = (target: React.RefObject<HTMLInputElement | null>) =>
     emojiOpen && (
       <div className="emoji-panel">
@@ -2197,19 +2315,41 @@ function Room() {
           placeholder="Search emoji…"
           autoFocus
         />
+        {/* Categories, the way every other picker does it — and Recent first,
+            because the emoji someone just used is the one they want again.
+            The full set (about 1,900) is a dynamic import, so it costs
+            nothing until the picker is opened. */}
+        {!emojiQuery.trim() && (
+          <div className="emoji-tabs" role="tablist">
+            {emojiGroups.map((group) => (
+              <button
+                key={group.slug}
+                role="tab"
+                aria-selected={emojiTab === group.slug}
+                className={emojiTab === group.slug ? "is-active" : ""}
+                title={group.name}
+                onClick={() => setEmojiTab(group.slug)}
+              >
+                {group.icon}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="emoji-grid">
-          {searchEmojis(emojiQuery).map((e) => (
+          {emojiList.map((e) => (
             <button
               key={e.char}
-              title={`:${e.names[0]}:`}
+              title={e.names[0]?.replace(/_/g, " ")}
               onClick={() => {
                 setChatInput((v) => v + e.char);
+                rememberEmoji(e.char);
                 target.current?.focus();
               }}
             >
               {e.char}
             </button>
           ))}
+          {emojiList.length === 0 && <p className="emoji-empty">Nothing matches that.</p>}
         </div>
       </div>
     );
@@ -2468,12 +2608,33 @@ function Room() {
     setNickname(trimmed);
   };
 
+  // The link people share, without whatever query string this tab happens to
+  // be carrying.
+  const roomLink = `${window.location.origin}/room/${roomId}`;
+
   const copyLink = () => {
-    navigator.clipboard.writeText(window.location.href).then(() => {
-      setLinkCopied(true);
-      window.setTimeout(() => setLinkCopied(false), 1500);
-    });
+    // Confirmed on the press, like the room code: the clipboard promise
+    // resolves when it resolves, and the feedback is about the click.
+    setLinkCopied(true);
+    window.setTimeout(() => setLinkCopied(false), 1000);
+    void navigator.clipboard?.writeText(roomLink).catch(() => {});
   };
+
+  // The same link as something a phone camera can take. Drawn once per room,
+  // in the page rather than from a service, so nothing leaves the browser.
+  const [qr, setQr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!inviteOpen || qr) return;
+    let cancelled = false;
+    void import("qrcode").then((QR) =>
+      QR.toDataURL(roomLink, { margin: 1, width: 320, color: { dark: "#1b1620", light: "#ffffff" } })
+        .then((url) => !cancelled && setQr(url))
+        .catch(() => {}),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteOpen, qr, roomLink]);
 
   if (!nickname || !joined) {
     // A name is submitted but membership isn't confirmed yet — stay on the
@@ -2558,7 +2719,7 @@ function Room() {
           >
             <span className="conn-dot" aria-hidden />
             <span className="conn-text">
-              {connection === "live" ? "Live" : connection === "connecting" ? "Connecting…" : "Offline"}
+              {connection === "live" ? "Live" : connection === "connecting" ? "Connecting…" : "Disconnected"}
             </span>
           </span>
         </div>
@@ -2576,9 +2737,19 @@ function Room() {
         </div>
         <div className="toolbar-actions">
           {authUser && (
-            <div className="friends-menu" ref={friendsMenuRef}>
+            <div
+              className="friends-menu hover-menu"
+              ref={friendsMenuRef}
+              onPointerEnter={(e) => {
+                // Touch has no hover: there, the tap on the button opens it.
+                if (e.pointerType !== "touch") setFriendsOpen(true);
+              }}
+              onPointerLeave={(e) => {
+                if (e.pointerType !== "touch") setFriendsOpen(false);
+              }}
+            >
               <button
-                className="friends-toggle"
+                className="meta-chip friends-toggle"
                 aria-expanded={friendsOpen}
                 onClick={() => setFriendsOpen((open) => !open)}
               >
@@ -2602,9 +2773,48 @@ function Room() {
               )}
             </div>
           )}
-          <button className="copy-link" onClick={copyLink}>
-            {linkCopied ? "Copied!" : "Copy invite link"}
-          </button>
+          {/* Everything that gets someone else into this room, in one place
+              that opens where the pointer already is. */}
+          <div
+            className="invite-menu hover-menu"
+            onPointerEnter={(e) => {
+              if (e.pointerType !== "touch") setInviteOpen(true);
+            }}
+            onPointerLeave={(e) => {
+              if (e.pointerType !== "touch") setInviteOpen(false);
+            }}
+          >
+            <button
+              className={`meta-chip invite-toggle${linkCopied ? " is-copied" : ""}`}
+              aria-expanded={inviteOpen}
+              onClick={() => setInviteOpen((open) => !open)}
+            >
+              {linkCopied ? "Copied" : "Invite"}
+            </button>
+            {inviteOpen && (
+              <div className="invite-popover">
+                <p className="invite-head">Invite someone</p>
+                <div className="invite-row">
+                  <code className="invite-link">{roomLink}</code>
+                  <button className="invite-copy" onClick={copyLink}>
+                    {linkCopied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <div className="invite-row">
+                  <code className="invite-link">{roomId}</code>
+                  <button className="invite-copy" onClick={copyRoomCode}>
+                    {codeCopied ? "Copied" : "Copy code"}
+                  </button>
+                </div>
+                {qr ? (
+                  <img className="invite-qr" src={qr} alt={`QR code for ${roomLink}`} />
+                ) : (
+                  <div className="invite-qr is-loading" aria-hidden />
+                )}
+                <p className="invite-note">Point a phone camera at the code</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
