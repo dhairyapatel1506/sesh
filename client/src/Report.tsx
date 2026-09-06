@@ -84,12 +84,10 @@ const asSize = (bytes: number) =>
 export function ReportBug({ roomId }: { roomId?: string }) {
   const [limits, setLimits] = useState<Limits | null>(null);
   const [open, setOpen] = useState(false);
-  // Only pinned once there is something to lose. An empty form closes when
-  // the pointer wanders, like every other menu in the header; a form with
-  // words in it stays, and those words are kept for the session either way,
-  // so closing it by accident costs nothing.
-  const [pinned, setPinned] = useState(false);
-  const pin = useCallback((hasText: boolean) => setPinned(hasText), []);
+  // The panel closes when the pointer leaves, always — it's a hover menu like
+  // the others. What survives is the draft: whatever was typed is kept for
+  // the session, so wandering off costs nothing and coming back resumes.
+  // Cancel is the one thing that throws it away.
   // Held still deliberately. A room re-renders every second (the uptime clock),
   // and a closure recreated each time would restart the dialog's timers with
   // it — the thank-you would never get to the end of its two and a half
@@ -115,10 +113,7 @@ export function ReportBug({ roomId }: { roomId?: string }) {
         if (event.pointerType !== "touch") setOpen(true);
       }}
       onPointerLeave={(event) => {
-        // Not while it's being filled in: leaving with a draft in the box (or
-        // the caret in it) would throw the words away, which no amount of
-        // tidiness is worth.
-        if (event.pointerType === "touch" || pinned) return;
+        if (event.pointerType === "touch") return;
         setOpen(false);
       }}
     >
@@ -127,7 +122,7 @@ export function ReportBug({ roomId }: { roomId?: string }) {
       </button>
       {open && (
         <div className="feedback-popover">
-          <ReportDialog limits={limits} roomId={roomId} onClose={close} onPin={pin} />
+          <ReportDialog limits={limits} roomId={roomId} onClose={close} />
         </div>
       )}
     </div>
@@ -138,9 +133,8 @@ function ReportDialog({
   limits,
   roomId,
   onClose,
-  onPin,
 }: {
-  onPin?: (hasText: boolean) => void;
+
   limits: Limits;
   roomId?: string;
   onClose: () => void;
@@ -333,7 +327,6 @@ function ReportDialog({
               value={text}
               onChange={(e) => {
                 setText(e.target.value);
-                onPin?.(e.target.value.trim().length > 0);
                 try {
                   sessionStorage.setItem(DRAFT_KEY, e.target.value);
                 } catch {
@@ -391,7 +384,21 @@ function ReportDialog({
             {error && <p className="load-error report-error">{error}</p>}
 
             <div className="report-actions">
-              <button className="report-cancel" onClick={onClose}>
+              <button
+                className="report-cancel"
+                onClick={() => {
+                  // Cancel means "forget it" — the draft goes with it. Just
+                  // moving the pointer away keeps everything.
+                  setText("");
+                  setImage(null);
+                  try {
+                    sessionStorage.removeItem(DRAFT_KEY);
+                  } catch {
+                    // Nothing to clear in a window that kept nothing.
+                  }
+                  onClose();
+                }}
+              >
                 Cancel
               </button>
               <button onClick={() => void submit()} disabled={!canSend}>

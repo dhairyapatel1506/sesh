@@ -2686,16 +2686,29 @@ function Room() {
             title={`Room code ${roomId} — click to copy`}
             onClick={copyRoomCode}
           >
-            <span className="meta-label">{codeCopied ? "Copied" : "Room code"}</span>
-            <span className="meta-value">{roomId}</span>
+            <span className="meta-inner">
+              <span className="meta-label">{codeCopied ? "Copied" : "Room code"}</span>
+              <span className="meta-value">{roomId}</span>
+            </span>
+            {/* The lap: a stroked outline of the chip with a dashed pattern
+                travelling round it. A conic gradient couldn't do this — its
+                angle moves at a constant rate, which on a shape this wide
+                races along the top and crawls at the ends. */}
+            {codeCopied && (
+              <svg className="chip-lap" aria-hidden>
+                <rect pathLength={100} />
+              </svg>
+            )}
           </button>
           {roomCreatedAt && (
             <span
               className="meta-chip room-uptime"
               title={`Open for ${formatUptime(uptimeTick - roomCreatedAt)}`}
             >
-              <span className="meta-label">Uptime</span>
-              <span className="meta-value">{formatUptime(uptimeTick - roomCreatedAt)}</span>
+              <span className="meta-inner">
+                <span className="meta-label">Uptime</span>
+                <span className="meta-value">{formatUptime(uptimeTick - roomCreatedAt)}</span>
+              </span>
             </span>
           )}
           {/* Up here where it can be found, rather than at the bottom of the
@@ -2779,11 +2792,11 @@ function Room() {
             }}
           >
             <button
-              className={`meta-chip invite-toggle${linkCopied ? " is-copied" : ""}`}
+              className="meta-chip invite-toggle"
               aria-expanded={inviteOpen}
               onClick={() => setInviteOpen((open) => !open)}
             >
-              {linkCopied ? "Copied" : "Invite"}
+              <span className="meta-label">Invite</span>
             </button>
             {inviteOpen && (
               <div className="invite-popover">
