@@ -103,7 +103,10 @@ export function ReportBug({ roomId }: { roomId?: string }) {
   return (
     <>
       <button className="report-link" onClick={() => setOpen(true)}>
-        Report a bug
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden>
+          <path d="M4 3h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9l-5 4V5a2 2 0 0 1 2-2z" />
+        </svg>
+        Send feedback
       </button>
       {open && <ReportDialog limits={limits} roomId={roomId} onClose={close} />}
     </>
@@ -126,6 +129,9 @@ function ReportDialog({
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [sent, setSent] = useState(false);
+  // The same form takes both kinds of message; what it is rides along at the
+  // top of the text, so a report reads as what it is wherever it lands.
+  const [kind, setKind] = useState<"bug" | "idea">("bug");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -201,7 +207,7 @@ function ReportDialog({
         // Signed in, the report gets a name on it; anonymous, it's still filed.
         credentials: "include",
         body: JSON.stringify({
-          text: text.trim(),
+          text: `[${kind === "bug" ? "Bug" : "Feature request"}] ${text.trim()}`,
           client: "web",
           ...(roomId ? { roomId } : {}),
           ...(image ? { image: image.dataUrl } : {}),
@@ -234,7 +240,7 @@ function ReportDialog({
         className={dragging ? "report-dialog is-dragging" : "report-dialog"}
         role="dialog"
         aria-modal="true"
-        aria-label="Report a bug"
+        aria-label="Send feedback"
         onDragOver={(event) => {
           event.preventDefault();
           setDragging(true);
@@ -254,16 +260,40 @@ function ReportDialog({
         {sent ? (
           <>
             <h2 className="report-title">Thanks — that's filed.</h2>
-            <p className="report-lead">We read these. Sorry about whatever it was.</p>
+            <p className="report-lead">
+              {kind === "bug"
+                ? "We read these. Sorry about whatever it was."
+                : "We read every one of these. Good ideas do get built."}
+            </p>
             <div className="report-actions">
               <button onClick={onClose}>Close</button>
             </div>
           </>
         ) : (
           <>
-            <h2 className="report-title">Report a bug</h2>
+            <h2 className="report-title">Send feedback</h2>
+            <div className="report-kind" role="radiogroup" aria-label="What kind of feedback">
+              <button
+                className={kind === "bug" ? "is-on" : ""}
+                role="radio"
+                aria-checked={kind === "bug"}
+                onClick={() => setKind("bug")}
+              >
+                🐞 Something's broken
+              </button>
+              <button
+                className={kind === "idea" ? "is-on" : ""}
+                role="radio"
+                aria-checked={kind === "idea"}
+                onClick={() => setKind("idea")}
+              >
+                💡 Idea for a feature
+              </button>
+            </div>
             <p className="report-lead">
-              What went wrong? A screenshot helps more than anything.
+              {kind === "bug"
+                ? "What went wrong? A screenshot helps more than anything."
+                : "What would you like Sesh to do? Sketches and screenshots welcome."}
               {roomId && ` We'll include the room code (${roomId}).`}
             </p>
 
@@ -274,7 +304,11 @@ function ReportDialog({
               onChange={(e) => setText(e.target.value)}
               maxLength={limits.maxLength}
               rows={5}
-              placeholder="What happened, and what you expected instead…"
+              placeholder={
+                kind === "bug"
+                  ? "What happened, and what you expected instead…"
+                  : "What should it do, and when would you use it…"
+              }
             />
             <p className="report-count">
               {text.trim().length < limits.minLength

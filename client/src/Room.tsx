@@ -45,6 +45,19 @@ type UpNextPick = {
 // clock reading at which it starts playing.
 type CountdownPick = UpNextPick & { startsAt: number };
 
+// YouTube's own names for its quality levels, in the words people use.
+const QUALITY_LABELS: Record<string, string> = {
+  tiny: "144p",
+  small: "240p",
+  medium: "360p",
+  large: "480p",
+  hd720: "720p",
+  hd1080: "1080p",
+  hd1440: "1440p",
+  hd2160: "2160p",
+  highres: "Highest",
+};
+
 type ChatMessage = {
   id: string;
   senderId: string;
@@ -1648,7 +1661,12 @@ function Room() {
         !!el &&
         (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
       if (typing) {
-        if (e.key === "Escape" && el.matches(".chat-bar input, .fs-chat-bar input")) el.blur();
+        if (e.key === "Escape") {
+          // One layer at a time: the emoji panel, then the draft's focus.
+          if (emojiOpen) setEmojiOpen(false);
+          else if (el.matches(".chat-bar input, .fs-chat-bar input")) el.blur();
+          e.preventDefault();
+        }
         return;
       }
       const player = readyPlayer();
@@ -1694,8 +1712,20 @@ function Room() {
           }
           break;
         case "Escape":
+          // Innermost thing first, the way Escape works everywhere else: the
+          // emoji panel, then the fullscreen chat, then fullscreen itself.
+          // The exit is ours to perform because the keyboard lock above stops
+          // the browser doing it on the first press.
+          if (emojiOpen) {
+            setEmojiOpen(false);
+            break;
+          }
           if (!document.fullscreenElement) return;
-          setFsChatOpen(false);
+          if (fsChatOpen) {
+            setFsChatOpen(false);
+            break;
+          }
+          toggleFullscreen();
           break;
         default:
           return;
@@ -1704,7 +1734,7 @@ function Room() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [emojiOpen, fsChatOpen]);
 
   // A click on the video puts keyboard focus inside YouTube's frame, where
   // our shortcuts can't hear it (and YouTube's own differ: C is captions, F
@@ -1760,6 +1790,14 @@ function Room() {
   const silent = muted || volume === 0;
   const [ccTracks, setCcTracks] = useState(0);
   const [ccOn, setCcOn] = useState(false);
+  // Our own centre play/pause flash. It exists to sit on top of YouTube's,
+  // which it draws for ~3.6s after every state change and which no parameter
+  // switches off — ours is opaque, covers it, and goes when we say.
+  const [bezel, setBezel] = useState<"play" | "pause" | null>(null);
+  const bezelTimerRef = useRef<number | undefined>(undefined);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [qualities, setQualities] = useState<string[]>([]);
+  const [quality, setQuality] = useState<string>("auto");
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Ignore sub-pixel pointer jitter — only restart the HUD hide timer when
   // the mouse has actually moved a meaningful distance.
@@ -1784,6 +1822,66 @@ function Room() {
     else showHud(false);
     return () => window.clearTimeout(hudTimerRef.current);
   }, [localPlaying]);
+
+  // The centre flash, timed to outlast YouTube's own so its icon is never
+  // the one left on screen.
+  // Measured: YouTube's own centre glyph is still painted 4.4s after a
+  // resume. Ours has to outlast it or its icon is the one left behind.
+  const BEZEL_MS = 4700;
+  useEffect(() => {
+    if (!videoId) return;
+    setBezel(localPlaying ? "play" : "pause");
+    window.clearTimeout(bezelTimerRef.current);
+    bezelTimerRef.current = window.setTimeout(() => setBezel(null), BEZEL_MS);
+    return () => window.clearTimeout(bezelTimerRef.current);
+  }, [localPlaying, videoId]);
+
+  // What resolutions this video offers. YouTube decides the actual quality
+  // itself these days and may ignore the request, so the menu only appears
+  // when the player names more than one level.
+  useEffect(() => {
+    if (!videoId) return;
+    setQualities([]);
+    setQuality("auto");
+    const timer = window.setTimeout(() => {
+      const player = readyPlayer();
+      const levels = player?.getAvailableQualityLevels?.() ?? [];
+      setQualities(levels.filter((level) => level !== "auto"));
+      setQuality(player?.getPlaybackQuality?.() ?? "auto");
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [videoId]);
+
+  // Any click outside the settings menu closes it, the way a menu should.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement;
+      if (!el.closest(".pbar-settings")) setSettingsOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [settingsOpen]);
+
+  const chooseQuality = (level: string) => {
+    const player = readyPlayer();
+    player?.setPlaybackQuality?.(level);
+    setQuality(level);
+    setSettingsOpen(false);
+  };
+
+  // Escape belongs to the page while fullscreen, or the chat and the emoji
+  // panel can never use it: the browser would take the key and drop out of
+  // fullscreen instead. Chrome and Edge allow exactly this; elsewhere the
+  // lock is refused and Escape keeps its usual meaning.
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const keyboard = (navigator as unknown as {
+      keyboard?: { lock?: (keys: string[]) => Promise<void>; unlock?: () => void };
+    }).keyboard;
+    void keyboard?.lock?.(["Escape"]).catch(() => {});
+    return () => keyboard?.unlock?.();
+  }, [isFullscreen]);
 
   // Numbers for the bar, only while the bar is on screen. estimatedPosition
   // is the same extrapolated playhead the sync loop uses, so the scrubber
@@ -2401,10 +2499,27 @@ function Room() {
           </Link>
         </h1>
         <div className="header-meta">
-          <span className="room-code">{roomId}</span>
-          {roomCreatedAt && <span className="room-uptime">up {formatUptime(uptimeTick - roomCreatedAt)}</span>}
-          <span className={connected ? "ok" : "bad"}>
-            {connected ? "connected" : "reconnecting…"}
+          {/* Each chip says what it is and shows the value on hover, so the
+              header reads as a header rather than a row of bare figures. */}
+          <span className="meta-chip room-code" title={`Room code ${roomId}`}>
+            <span className="meta-label">Room code</span>
+            <span className="meta-value">{roomId}</span>
+          </span>
+          {roomCreatedAt && (
+            <span
+              className="meta-chip room-uptime"
+              title={`Open for ${formatUptime(uptimeTick - roomCreatedAt)}`}
+            >
+              <span className="meta-label">Uptime</span>
+              <span className="meta-value">{formatUptime(uptimeTick - roomCreatedAt)}</span>
+            </span>
+          )}
+          <span
+            className={`conn ${connected ? "is-on" : "is-off"}`}
+            title={connected ? "Connected to the room" : "Reconnecting…"}
+          >
+            <span className="conn-dot" aria-hidden />
+            <span className="conn-text">{connected ? "Live" : "Reconnecting…"}</span>
           </span>
         </div>
       </header>
@@ -2530,10 +2645,9 @@ function Room() {
                 className={[
                   "player-frame",
                   isFullscreen && "is-fullscreen",
-                  // Fullscreen with the controls gone should be picture only,
-                  // cursor included — there's nothing else on screen for it
-                  // to point at.
-                  isFullscreen && !hudShown && "is-idle",
+                  // Controls gone, cursor gone — windowed as well as
+                  // fullscreen. It returns with them on the next movement.
+                  !hudShown && "is-idle",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -2559,6 +2673,24 @@ function Room() {
                 }}
               >
                 <div id="yt-player" ref={playerContainerRef} />
+                {/* What's playing, where a player puts it. Comes and goes with
+                    the controls, over a gradient rather than a band — there is
+                    nothing of YouTube's left up there to hide. */}
+                {videoTitle && (
+                  <div className={`player-title${hudShown ? " is-shown" : ""}`}>
+                    <span>{videoTitle}</span>
+                  </div>
+                )}
+                {/* Our centre flash, over YouTube's (see the bezel effect). */}
+                {bezel && (
+                  <div className={`player-bezel is-${bezel}`} aria-hidden>
+                    {bezel === "play" ? (
+                      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5l13 7.5-13 7.5z" /></svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z" /></svg>
+                    )}
+                  </div>
+                )}
                 {/* The click layer: our own play/pause on the picture, and
                     double-click for fullscreen. It sits over the iframe,
                     which with controls=0 has nothing of its own to click. */}
@@ -2653,6 +2785,55 @@ function Room() {
                       {clockTime(shownPosition)} <span className="pbar-dim">/ {clockTime(clip.duration)}</span>
                     </span>
                     <span className="pbar-gap" />
+                    {/* The room's setting, not this tab's — the checkbox
+                        moves when the server says everyone's did. */}
+                    {radio.available && (
+                      <label className="pbar-autoplay" title="Keep the room playing when the queue runs out">
+                        <input
+                          type="checkbox"
+                          checked={radio.autoplay}
+                          onChange={(e) => socket.emit("radio:set", { on: e.target.checked })}
+                        />
+                        <span>Autoplay</span>
+                      </label>
+                    )}
+                    {qualities.length > 1 && (
+                      <div className="pbar-settings">
+                        <button
+                          className={`pbar-btn${settingsOpen ? " is-on" : ""}`}
+                          onClick={() => setSettingsOpen((open) => !open)}
+                          title="Quality"
+                          aria-label="Quality"
+                          aria-expanded={settingsOpen}
+                        >
+                          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                            <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9.4 4a7.5 7.5 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2-1.2L16.5 3h-4l-.4 2.6a7.6 7.6 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.5 7.5 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1c.6.5 1.3.9 2 1.2l.4 2.6h4l.4-2.6c.7-.3 1.4-.7 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z" />
+                          </svg>
+                        </button>
+                        {settingsOpen && (
+                          <div className="pbar-menu" role="menu">
+                            <p className="pbar-menu-head">Quality</p>
+                            <button
+                              className={`pbar-menu-item${quality === "auto" ? " is-on" : ""}`}
+                              role="menuitem"
+                              onClick={() => chooseQuality("default")}
+                            >
+                              Auto
+                            </button>
+                            {qualities.map((level) => (
+                              <button
+                                key={level}
+                                className={`pbar-menu-item${quality === level ? " is-on" : ""}`}
+                                role="menuitem"
+                                onClick={() => chooseQuality(level)}
+                              >
+                                {QUALITY_LABELS[level] ?? level}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {ccTracks > 0 && (
                       <button
                         className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}`}
@@ -2872,24 +3053,8 @@ function Room() {
                     everyone, which is what moves it. So a click that doesn't
                     reach the server visibly doesn't take, which is honest —
                     the setting really didn't change for anyone. */}
-                {radio.available && (
-                  <label className="autoplay-toggle">
-                    <input
-                      type="checkbox"
-                      checked={radio.autoplay}
-                      onChange={(e) => socket.emit("radio:set", { on: e.target.checked })}
-                    />
-                    Autoplay
-                  </label>
-                )}
-                {videoId && !isFullscreen && (
-                  <button className="player-fs-button" onClick={toggleFullscreen} title="Fullscreen">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                      <path d="M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zM3 15h2v4h4v2H3v-6zm16 0h2v6h-6v-2h4v-4z" />
-                    </svg>
-                    Fullscreen
-                  </button>
-                )}
+                {/* Autoplay and fullscreen both live on the player itself
+                    now — this row is the tabs and nothing else. */}
               </div>
               {underTab === "history" ? (
                 <ul className="queue-list history-list">

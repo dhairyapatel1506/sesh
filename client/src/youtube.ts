@@ -15,6 +15,9 @@ export interface YTPlayer {
   isMuted(): boolean;
   getVolume(): number;
   getVideoLoadedFraction?(): number;
+  getAvailableQualityLevels?(): string[];
+  getPlaybackQuality?(): string;
+  setPlaybackQuality?(quality: string): void;
   // Undocumented but long-lived: how an embed's captions are driven from
   // outside. Optional, because nothing may answer and the button is only
   // shown when something does.
