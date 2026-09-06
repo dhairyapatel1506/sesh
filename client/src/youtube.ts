@@ -14,6 +14,13 @@ export interface YTPlayer {
   getIframe(): HTMLIFrameElement;
   isMuted(): boolean;
   getVolume(): number;
+  getVideoLoadedFraction?(): number;
+  // Undocumented but long-lived: how an embed's captions are driven from
+  // outside. Optional, because nothing may answer and the button is only
+  // shown when something does.
+  loadModule?(module: string): void;
+  getOption?(module: string, option: string): unknown;
+  setOption?(module: string, option: string, value: unknown): void;
   setVolume(volume: number): void;
   loadVideoById(videoId: string, startSeconds?: number): void;
   cueVideoById(videoId: string, startSeconds?: number): void;

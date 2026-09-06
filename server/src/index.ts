@@ -747,6 +747,9 @@ app.get("/api/related", async (req, res) => {
   }
   const picks = await radioRelated(videoId, new Set(), 8);
   res.json({
+    // "Recommended" is a promise the channel fallback can't keep, so the
+    // client is told what it is actually looking at.
+    source: picks[0]?.source ?? null,
     results: picks.map((pick) => ({
       videoId: pick.videoId,
       title: pick.title,

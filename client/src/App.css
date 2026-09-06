@@ -374,36 +374,11 @@ button:disabled {
   filter: none;
 }
 
-/* Bottom-right, raised clear of YouTube's control bar — including the
-   progress bar riding above it (~4.6rem up), whose grab area reaches higher
-   than the bar looks. Only rendered in fullscreen, where floating is the
-   only option. */
-.player-fs-toggle {
-  position: absolute;
-  right: 0.75rem;
-  bottom: 6.5rem;
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  cursor: pointer;
-}
-
-.player-fs-toggle:hover {
-  background: rgba(0, 0, 0, 0.85);
-}
-
+/* Above our control bar, clear of it whether the bar is showing or not. */
 .fs-chat-toggle {
   position: absolute;
   right: 0.75rem;
-  bottom: 9.5rem;
+  bottom: 4rem;
   z-index: 4;
   display: flex;
   align-items: center;
@@ -430,24 +405,19 @@ button:disabled {
 
 /* Floating controls behave like YouTube's chrome: awake on pointer activity,
    faded out after a beat of stillness. */
-.player-fs-toggle,
 .fs-chat-toggle {
   opacity: 1;
   transition: opacity 0.25s ease;
 }
 
-/* These used to fade out after a beat of stillness and wake on pointer
-   movement over the video. Nothing of ours sits over the iframe any more, so
-   there is no movement to wake them with — they'd fade once and never return.
-   They sit quietly instead: dim enough not to compete with the picture, full
-   strength the moment the pointer is on one. */
-.player-frame .player-fs-toggle,
+/* Dim enough not to compete with the picture, full strength the moment the
+   pointer is on it. Deliberately not tied to the control bar's show/hide:
+   the unread badge rides on this button, and a badge that only appears when
+   you move the mouse is a badge nobody sees. */
 .player-frame .fs-chat-toggle {
   opacity: 0.4;
 }
 
-.player-frame .player-fs-toggle:hover,
-.player-frame .player-fs-toggle:focus-visible,
 .player-frame .fs-chat-toggle:hover,
 .player-frame .fs-chat-toggle:focus-visible {
   opacity: 1;
@@ -567,6 +537,171 @@ button:disabled {
 
 /* Our own recommendations in place of YouTube's wall of tiles — the ones here
    play in the room instead of opening youtube.com. */
+/* ---- our own player controls ----
+   The embed runs with controls=0; everything here is ours. It hides the
+   instant the pointer leaves the frame, which is the whole reason it exists:
+   YouTube's own chrome sits there for ~3.6s and no page can tell someone
+   else's iframe that the mouse has gone. */
+.player-click {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  cursor: pointer;
+}
+
+.player-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  padding: 1.6rem 0.6rem 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0));
+  border-radius: 0 0 12px 12px;
+  color: #fff;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.player-bar.is-shown {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-bar {
+    transition: none;
+  }
+}
+
+/* A generous hit area around a thin rail: 3px of paint, 14px of target. */
+.pbar-track {
+  position: relative;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.pbar-rail,
+.pbar-buffered,
+.pbar-played {
+  position: absolute;
+  left: 0;
+  height: 3px;
+  border-radius: 3px;
+}
+
+.pbar-rail {
+  right: 0;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.pbar-buffered {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.pbar-played {
+  background: var(--accent, #8b5cf6);
+}
+
+.pbar-knob {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
+  border-radius: 50%;
+  background: var(--accent, #8b5cf6);
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+.pbar-track:hover .pbar-knob,
+.pbar-track:active .pbar-knob {
+  opacity: 1;
+}
+
+.pbar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 0.35rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pbar-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.pbar-cc {
+  letter-spacing: 0.03em;
+  opacity: 0.75;
+}
+
+.pbar-cc.is-on {
+  opacity: 1;
+  box-shadow: inset 0 -2px 0 currentColor;
+}
+
+/* The slider stays out of the way until the volume corner is wanted — the
+   same trick YouTube uses, and it keeps a narrow player readable. */
+.pbar-volume {
+  display: flex;
+  align-items: center;
+}
+
+.pbar-slider {
+  width: 0;
+  opacity: 0;
+  margin: 0;
+  accent-color: var(--accent, #8b5cf6);
+  transition: width 120ms ease, opacity 120ms ease;
+}
+
+.pbar-volume:hover .pbar-slider,
+.pbar-slider:focus-visible {
+  width: 68px;
+  opacity: 1;
+  margin-left: 0.25rem;
+}
+
+.pbar-time {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  padding-left: 0.2rem;
+  white-space: nowrap;
+}
+
+.pbar-dim {
+  opacity: 0.7;
+}
+
+.pbar-gap {
+  flex: 1;
+}
+
 .end-overlay-close {
   position: absolute;
   top: 0.5rem;

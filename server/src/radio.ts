@@ -13,10 +13,14 @@ import { env } from "./db.js";
 
 // Where a pick came from. A mix is YouTube's music radio: one song after
 // another, and YouTube itself plays them back-to-back with no interruption,
-// which is what a room listening to music wants. Anything else came from the
-// watch page's "up next", where YouTube shows a countdown you can cancel —
-// and so do we.
-export type PickSource = "mix" | "watch";
+// which is what a room listening to music wants. "watch" is the watch page's
+// own "up next", where YouTube shows a countdown you can cancel — and so do
+// we. "channel" is the safety net for when YouTube won't answer the watch
+// page at all (it rate-limits the address a server calls from): the rest of
+// that channel's videos, which the official API always answers. The client
+// is told which, because "Recommended" and "More from this channel" are
+// different promises and only one of them would be true.
+export type PickSource = "mix" | "watch" | "channel";
 export type RadioPick = { videoId: string; title: string; channel: string; source: PickSource };
 
 const MIX_SIZE = 25;
@@ -102,6 +106,10 @@ async function mixFor(seed: string): Promise<{ ids: string[]; source: PickSource
   if (ids.length === 0) {
     ids = await watchNextFor(seed);
     source = "watch";
+  }
+  if (ids.length === 0) {
+    ids = await channelUploadsFor(seed);
+    source = "channel";
   }
   // An empty answer is remembered only briefly: it's as likely a stalled
   // request as a video with nothing beside it, and a day of "nothing to
@@ -237,6 +245,61 @@ async function watchNextFor(seed: string): Promise<string[]> {
     }
   }
   return [];
+}
+
+// The last resort, and the only route here that can't be blocked or
+// throttled: the channel's own uploads, through the official API. Every
+// channel has an uploads playlist whose id is its channel id with the "UC"
+// prefix swapped for "UU" — a documented, unchanging fact of the Data API.
+// Two quota units in total (one to learn the channel, one to read it), which
+// next to a search's hundred is nothing.
+const channelCache = new Map<string, string | null>();
+
+async function channelUploadsFor(seed: string): Promise<string[]> {
+  const key = env("YOUTUBE_API_KEY");
+  if (!key) return [];
+  try {
+    let channelId = channelCache.get(seed);
+    if (channelId === undefined) {
+      const url = new URL("https://www.googleapis.com/youtube/v3/videos");
+      url.search = new URLSearchParams({ part: "snippet", id: seed, key }).toString();
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const data = (await res.json()) as { items?: { snippet?: { channelId?: string } }[] };
+      channelId = data.items?.[0]?.snippet?.channelId ?? null;
+      remember(channelCache, seed, channelId);
+    }
+    if (!channelId || !channelId.startsWith("UC")) return [];
+
+    const listUrl = new URL("https://www.googleapis.com/youtube/v3/playlistItems");
+    listUrl.search = new URLSearchParams({
+      part: "snippet",
+      playlistId: `UU${channelId.slice(2)}`,
+      maxResults: String(MIX_SIZE),
+      key,
+    }).toString();
+    const listRes = await fetch(listUrl);
+    if (!listRes.ok) {
+      console.warn(`radio: channel uploads answered ${listRes.status} for ${seed}`);
+      return [];
+    }
+    const list = (await listRes.json()) as {
+      items?: { snippet: { resourceId?: { videoId?: string }; title?: string } }[];
+    };
+    const ids: string[] = [];
+    for (const item of list.items ?? []) {
+      const id = item.snippet?.resourceId?.videoId;
+      const title = item.snippet?.title ?? "";
+      if (!id || id === seed) continue;
+      if (title === "Deleted video" || title === "Private video") continue;
+      ids.push(id);
+    }
+    console.log(`radio: channel uploads gave ${ids.length} for ${seed}`);
+    return ids;
+  } catch (err) {
+    console.warn(`radio: channel uploads failed for ${seed}: ${(err as Error).message}`);
+    return [];
+  }
 }
 
 // What videos.list has to be asked before believing a video will embed.

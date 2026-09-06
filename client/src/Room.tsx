@@ -315,7 +315,11 @@ function Room() {
     return () => window.clearTimeout(t);
   }, [waitingForRoom]);
   const [related, setRelated] = useState<RelatedResult[] | null>(null);
+  // What the list actually is: YouTube's own suggestions, or the channel's
+  // other videos when YouTube wouldn't answer.
+  const [relatedSource, setRelatedSource] = useState<string | null>(null);
   const [upnext, setUpnext] = useState<UpNextPick | null>(null);
+  const relatedLabel = relatedSource === "channel" ? "More from this channel" : "Recommended";
   // Autoplay's countdown between videos, when there is one. The server names
   // the video and the moment it starts, so every tab counts down to the same
   // instant — and whoever cancels or skips does it for the room.
@@ -953,9 +957,15 @@ function Room() {
       // path. fs=0 hides YouTube's own fullscreen button: its native
       // fullscreen contains only the iframe, which would strand every overlay
       // we draw (chat, end screen). Our own button fullscreens the wrapper.
+      // controls=0 takes the rest of YouTube's chrome with it, because the
+      // bar under the video is ours now (see the player controls below):
+      // theirs lingers ~3.6s after the pointer has left, and no page can tell
+      // someone else's iframe that the mouse has gone. disablekb=1 for the
+      // same reason — the keys are ours. iv_load_policy=3 drops annotations.
       target.src =
         `https://www.youtube.com/embed/${encodeURIComponent(videoId)}` +
-        `?enablejsapi=1&fs=0&origin=${encodeURIComponent(window.location.origin)}`;
+        `?enablejsapi=1&fs=0&controls=0&disablekb=1&modestbranding=1&playsinline=1&iv_load_policy=3` +
+        `&origin=${encodeURIComponent(window.location.origin)}`;
       playerContainerRef.current.appendChild(target);
       playerRef.current = new YT.Player(target, {
         events: {
@@ -999,7 +1009,11 @@ function Room() {
             // resync tries to resume — which restarts an ended video from 0.
             // No hidden/suppress guards here: ending isn't a user action, it
             // happens on every client at once, and reporting it is idempotent.
+            if (event.data === PlayerState.PLAYING || event.data === PlayerState.PAUSED) {
+              setLocalPlaying(event.data === PlayerState.PLAYING);
+            }
             if (event.data === PlayerState.ENDED) {
+              setLocalPlaying(false);
               // Our own end screen replaces YouTube's recommendation wall.
               // Pure UI — the sync reporting below is unchanged.
               setEnded(true);
@@ -1549,16 +1563,21 @@ function Room() {
   useEffect(() => {
     if (!videoId) {
       setRelated(null);
+      setRelatedSource(null);
       return;
     }
     let cancelled = false;
     fetch(`${API_BASE}/api/related?videoId=${videoId}`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { results?: RelatedResult[] } | null) => {
-        if (!cancelled) setRelated(data?.results ?? []);
+      .then((data: { results?: RelatedResult[]; source?: string | null } | null) => {
+        if (cancelled) return;
+        setRelated(data?.results ?? []);
+        setRelatedSource(data?.source ?? null);
       })
       .catch(() => {
-        if (!cancelled) setRelated([]);
+        if (cancelled) return;
+        setRelated([]);
+        setRelatedSource(null);
       });
     return () => {
       cancelled = true;
@@ -1688,6 +1707,241 @@ function Room() {
     return () => window.removeEventListener("blur", onBlur);
   }, []);
 
+
+
+  // ---- our own player controls ----
+  //
+  // The embed runs with controls=0 and everything below is ours. The reason
+  // is measured, not aesthetic: YouTube's own chrome hides ~3.6s after the
+  // last mouse movement *it* sees, and it never sees the pointer leave —
+  // blurring the iframe, pointer-events:none, synthetic mouseout and
+  // flashing its visibility all left the same 3.6s. Ours goes the moment the
+  // pointer does, the way youtube.com's own does.
+  //
+  // Playback speed is deliberately absent: the room is synchronized against
+  // the wall clock, so one person at 1.5x isn't watching the same thing as
+  // everyone else — the drift corrector would spend the whole video fighting
+  // them. Quality is absent because YouTube ignores setPlaybackQuality now.
+  const HUD_IDLE_MS = 2600;
+  const [hudShown, setHudShown] = useState(true);
+  const hudTimerRef = useRef<number | undefined>(undefined);
+  const [localPlaying, setLocalPlaying] = useState(false);
+  // Where the scrubber is being dragged to, in seconds. Non-null only while
+  // a drag is in progress, so the ticking position doesn't fight the thumb.
+  const [scrub, setScrub] = useState<number | null>(null);
+  const scrubRef = useRef(false);
+  const [clip, setClip] = useState({ position: 0, duration: 0, buffered: 0 });
+  const [volume, setVolume] = useState(100);
+  const [muted, setMuted] = useState(false);
+  const [ccTracks, setCcTracks] = useState(0);
+  const [ccOn, setCcOn] = useState(false);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+
+  const showHud = (sticky: boolean) => {
+    window.clearTimeout(hudTimerRef.current);
+    setHudShown(true);
+    if (sticky) return;
+    hudTimerRef.current = window.setTimeout(() => setHudShown(false), HUD_IDLE_MS);
+  };
+
+  const hideHud = () => {
+    window.clearTimeout(hudTimerRef.current);
+    setHudShown(false);
+  };
+
+  // A paused video keeps its controls: there's nothing to watch, and the bar
+  // is how you start it again.
+  useEffect(() => {
+    if (!localPlaying) showHud(true);
+    else showHud(false);
+    return () => window.clearTimeout(hudTimerRef.current);
+  }, [localPlaying]);
+
+  // Numbers for the bar, only while the bar is on screen. estimatedPosition
+  // is the same extrapolated playhead the sync loop uses, so the scrubber
+  // moves smoothly instead of stepping with the player's cached time.
+  useEffect(() => {
+    if (!videoId || !hudShown) return;
+    const tick = () => {
+      const player = readyPlayer();
+      if (!player) return;
+      setClip({
+        position: estimatedPosition(),
+        duration: player.getDuration() || 0,
+        buffered: player.getVideoLoadedFraction?.() ?? 0,
+      });
+      setMuted(player.isMuted());
+      const level = player.getVolume();
+      if (typeof level === "number") setVolume(Math.round(level));
+    };
+    tick();
+    const timer = window.setInterval(tick, 200);
+    return () => window.clearInterval(timer);
+  }, [videoId, hudShown]);
+
+  // Captions are the one thing worth keeping from YouTube's own menu, and
+  // the iframe API can drive them — undocumented, so ask politely and only
+  // show the button if a track list comes back.
+  useEffect(() => {
+    if (!videoId) return;
+    setCcTracks(0);
+    setCcOn(false);
+    let cancelled = false;
+    const ask = window.setTimeout(() => {
+      const player = readyPlayer();
+      if (!player || cancelled) return;
+      try {
+        player.loadModule?.("captions");
+        window.setTimeout(() => {
+          if (cancelled) return;
+          const list = player.getOption?.("captions", "tracklist");
+          setCcTracks(Array.isArray(list) ? list.length : 0);
+          // Loading the module also switches captions on, and asking whether
+          // a video has any is not the same as wanting them. Put them back.
+          player.setOption?.("captions", "track", {});
+        }, 1200);
+      } catch {
+        // No captions module on this video: the button simply doesn't appear.
+      }
+    }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(ask);
+    };
+  }, [videoId]);
+
+  const toggleCaptions = () => {
+    const player = readyPlayer();
+    if (!player) return;
+    try {
+      if (ccOn) {
+        player.setOption?.("captions", "track", {});
+        setCcOn(false);
+        return;
+      }
+      player.loadModule?.("captions");
+      const list = player.getOption?.("captions", "tracklist");
+      const tracks = (Array.isArray(list) ? list : []) as { languageCode?: string }[];
+      // The viewer's own language if the video has it, English if not, and
+      // whatever is first only as a last resort — tracklist order is
+      // YouTube's, and its first entry is regularly some language nobody in
+      // the room reads.
+      const mine = navigator.language?.slice(0, 2).toLowerCase();
+      const chosen =
+        tracks.find((t) => t.languageCode?.toLowerCase().startsWith(mine ?? "")) ??
+        tracks.find((t) => t.languageCode?.toLowerCase().startsWith("en")) ??
+        tracks[0];
+      player.setOption?.("captions", "track", chosen ?? { languageCode: "en" });
+      setCcOn(true);
+    } catch {
+      setCcTracks(0);
+    }
+  };
+
+  // Play/pause and mute go through the player, exactly as the keyboard
+  // shortcuts do: the resulting state change is what tells the room, so
+  // there is no second path to keep in step with the first.
+  const togglePlay = () => {
+    const player = readyPlayer();
+    if (!player) return;
+    if (player.getPlayerState() === PlayerState.PLAYING) player.pauseVideo();
+    else player.playVideo();
+  };
+
+  const toggleMute = () => {
+    const player = readyPlayer();
+    if (!player) return;
+    if (player.isMuted() || player.getVolume() === 0) {
+      player.unMute();
+      if (player.getVolume() === 0) player.setVolume(60);
+      mutedByUsRef.current = false;
+      autoplayGrantedRef.current = true;
+    } else {
+      player.mute();
+    }
+    setMuted(player.isMuted());
+  };
+
+  const changeVolume = (level: number) => {
+    const player = readyPlayer();
+    if (!player) return;
+    player.setVolume(level);
+    setVolume(level);
+    if (level > 0 && player.isMuted()) {
+      player.unMute();
+      mutedByUsRef.current = false;
+      autoplayGrantedRef.current = true;
+    }
+    setMuted(player.isMuted());
+  };
+
+  // Scrubbing. The seek itself is a plain seekTo — detectLocalSeek watches
+  // the playhead for exactly this kind of discontinuity and announces it to
+  // the room once playback is genuinely rolling again, which is the same
+  // path a drag on YouTube's own bar used to take.
+  const seekFromEvent = (clientX: number): number | null => {
+    const track = trackRef.current;
+    const player = readyPlayer();
+    if (!track || !player) return null;
+    const duration = player.getDuration();
+    if (!(duration > 0)) return null;
+    const box = track.getBoundingClientRect();
+    const fraction = Math.min(1, Math.max(0, (clientX - box.left) / box.width));
+    return fraction * duration;
+  };
+
+  const onTrackPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const at = seekFromEvent(e.clientX);
+    if (at === null) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    scrubRef.current = true;
+    setScrub(at);
+    showHud(true);
+  };
+
+  const onTrackPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!scrubRef.current) return;
+    const at = seekFromEvent(e.clientX);
+    if (at !== null) setScrub(at);
+  };
+
+  const onTrackPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!scrubRef.current) return;
+    const at = seekFromEvent(e.clientX) ?? scrub;
+    scrubRef.current = false;
+    setScrub(null);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (at === null) return;
+    positionSampleRef.current = null;
+    readyPlayer()?.seekTo(at, true);
+    setClip((c) => ({ ...c, position: at }));
+    showHud(localPlaying ? false : true);
+  };
+
+  // A click on the picture plays or pauses, as it does everywhere else. On a
+  // touchscreen there is no hover, so the first tap is what summons the bar
+  // and only a tap with the bar already up toggles playback.
+  const onStageClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const touch = (e.nativeEvent as PointerEvent).pointerType === "touch";
+    if (touch && !hudShown) {
+      showHud(false);
+      return;
+    }
+    togglePlay();
+  };
+
+  const clockTime = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
+    const whole = Math.floor(seconds);
+    const hours = Math.floor(whole / 3600);
+    const minutes = Math.floor((whole % 3600) / 60);
+    const secs = whole % 60;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${minutes}:${pad(secs)}`;
+  };
+
+  const shownPosition = scrub ?? clip.position;
+  const playedFraction = clip.duration > 0 ? Math.min(1, shownPosition / clip.duration) : 0;
 
   // Unread badge for the fullscreen chat toggle: counted as messages arrive
   // (see onMessage), cleared whenever the panel is open or fullscreen ends.
@@ -2245,8 +2499,121 @@ function Room() {
                   .filter(Boolean)
                   .join(" ")}
                 ref={playerFrameRef}
+                onPointerMove={() => showHud(localPlaying)}
+                onPointerLeave={() => {
+                  if (!scrubRef.current) hideHud();
+                }}
               >
                 <div id="yt-player" ref={playerContainerRef} />
+                {/* The click layer: our own play/pause on the picture, and
+                    double-click for fullscreen. It sits over the iframe,
+                    which with controls=0 has nothing of its own to click. */}
+                <div
+                  className="player-click"
+                  onClick={onStageClick}
+                  onDoubleClick={() => toggleFullscreen()}
+                />
+                {/* Our control bar. `is-shown` is the whole point of it: see
+                    the measurement in the controls block above. */}
+                <div className={`player-bar${hudShown ? " is-shown" : ""}`}>
+                  <div
+                    className="pbar-track"
+                    ref={trackRef}
+                    role="slider"
+                    tabIndex={-1}
+                    aria-label="Seek"
+                    aria-valuemin={0}
+                    aria-valuemax={Math.round(clip.duration)}
+                    aria-valuenow={Math.round(shownPosition)}
+                    aria-valuetext={`${clockTime(shownPosition)} of ${clockTime(clip.duration)}`}
+                    onPointerDown={onTrackPointerDown}
+                    onPointerMove={onTrackPointerMove}
+                    onPointerUp={onTrackPointerUp}
+                    onPointerCancel={onTrackPointerUp}
+                  >
+                    <div className="pbar-rail" />
+                    <div className="pbar-buffered" style={{ width: `${clip.buffered * 100}%` }} />
+                    <div className="pbar-played" style={{ width: `${playedFraction * 100}%` }} />
+                    <div className="pbar-knob" style={{ left: `${playedFraction * 100}%` }} />
+                  </div>
+                  <div className="pbar-row">
+                    <button
+                      className="pbar-btn"
+                      onClick={togglePlay}
+                      title={localPlaying ? "Pause (space)" : "Play (space)"}
+                      aria-label={localPlaying ? "Pause" : "Play"}
+                    >
+                      {localPlaying ? (
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                          <path d="M7 5h4v14H7zM13 5h4v14h-4z" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                          <path d="M7 4.5l13 7.5-13 7.5z" />
+                        </svg>
+                      )}
+                    </button>
+                    <div className="pbar-volume">
+                      <button
+                        className="pbar-btn"
+                        onClick={toggleMute}
+                        title={muted ? "Unmute (m)" : "Mute (m)"}
+                        aria-label={muted ? "Unmute" : "Mute"}
+                      >
+                        {muted || volume === 0 ? (
+                          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                            <path d="M4 9v6h4l5 4V5L8 9H4zm12.5 3l2.7-2.7-1.1-1.1L15.4 11l-2.7-2.8-1.1 1.1L14.3 12l-2.7 2.7 1.1 1.1 2.7-2.7 2.7 2.7 1.1-1.1z" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                            <path d="M4 9v6h4l5 4V5L8 9H4zm11.5 3a4 4 0 0 0-2-3.5v7a4 4 0 0 0 2-3.5zm-2 -7.7v2.1a6 6 0 0 1 0 11.2v2.1a8 8 0 0 0 0-15.4z" />
+                          </svg>
+                        )}
+                      </button>
+                      <input
+                        className="pbar-slider"
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={muted ? 0 : volume}
+                        aria-label="Volume"
+                        onChange={(e) => changeVolume(Number(e.target.value))}
+                      />
+                    </div>
+                    <span className="pbar-time">
+                      {clockTime(shownPosition)} <span className="pbar-dim">/ {clockTime(clip.duration)}</span>
+                    </span>
+                    <span className="pbar-gap" />
+                    {ccTracks > 0 && (
+                      <button
+                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}`}
+                        onClick={toggleCaptions}
+                        title={ccOn ? "Turn off captions" : "Turn on captions"}
+                        aria-label={ccOn ? "Turn off captions" : "Turn on captions"}
+                        aria-pressed={ccOn}
+                      >
+                        CC
+                      </button>
+                    )}
+                    <button
+                      className="pbar-btn"
+                      onClick={() => toggleFullscreen()}
+                      title={isFullscreen ? "Exit fullscreen (f)" : "Fullscreen (f)"}
+                      aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                    >
+                      {isFullscreen ? (
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                          <path d="M8 3H6v3H3v2h5V3zm8 0h2v3h3v2h-5V3zM8 21H6v-3H3v-2h5v5zm8 0h2v-3h3v-2h-5v5z" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                          <path d="M3 3h7v2H5v5H3V3zm11 0h7v7h-2V5h-5V3zM3 14h2v5h5v2H3v-7zm16 0h2v7h-7v-2h5v-5z" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                </div>
                 {needsUnmute && (
                   <button className="unmute-nudge" onClick={enableSound}>
                     🔇 Tap for sound
@@ -2321,7 +2688,11 @@ function Room() {
                         <p className="end-overlay-head">Video ended</p>
                         {related && related.length > 0 && (
                           <>
-                            <p className="end-overlay-sub">Keep the sesh going:</p>
+                            <p className="end-overlay-sub">
+                          {relatedSource === "channel"
+                            ? "More from this channel:"
+                            : "Keep the sesh going:"}
+                        </p>
                             <div className="end-overlay-grid">
                               {related.map((r) => (
                                 <button
@@ -2340,24 +2711,6 @@ function Room() {
                       </>
                     )}
                   </div>
-                )}
-                {/* Only in fullscreen does this have to float over the video —
-                    there's nowhere else for it to be. Windowed, it lives in a
-                    row under the player (below), where it can't half-share the
-                    frame with YouTube's chrome: ours fades on our timer,
-                    YouTube's on its own, and no amount of tuning makes two
-                    independent timers look deliberate. */}
-                {isFullscreen && (
-                  <button
-                    className="player-fs-toggle"
-                    onClick={toggleFullscreen}
-                    title="Exit fullscreen"
-                    aria-label="Exit fullscreen"
-                  >
-                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
-                      <path d="M8 3H6v3H3v2h5V3zm8 0h2v3h3v2h-5V3zM8 21H6v-3H3v-2h5v5zm8 0h2v-3h3v-2h-5v5z" />
-                    </svg>
-                  </button>
                 )}
                 {/* Chat inside fullscreen: a toggle with an unread badge, and
                     a compact panel over the right edge — the same messages
@@ -2642,7 +2995,7 @@ function Room() {
           <div className="room-recs">
             <div className="queue recommended">
               <div className="queue-head">
-                <span>Recommended</span>
+                <span>{relatedLabel}</span>
               </div>
               {related === null && <p className="autoplay-note">Looking for something…</p>}
               {related !== null && related.length === 0 && (
