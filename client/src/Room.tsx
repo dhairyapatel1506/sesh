@@ -266,6 +266,8 @@ function Room() {
   const usersRef = useRef<User[]>([]);
   const [linkCopied, setLinkCopied] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  // Which result the arrow keys are on; -1 is "none, Enter searches again".
+  const [searchIndex, setSearchIndex] = useState(-1);
   const [searching, setSearching] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -901,7 +903,7 @@ function Room() {
     const onConnect = () => {
       setConnection((was) => (was === "live" ? "live" : "connecting"));
       window.clearTimeout(settle);
-      settle = window.setTimeout(() => setConnection("live"), 550);
+      settle = window.setTimeout(() => setConnection("live"), SETTLE_MS);
     };
     // A dropped socket is a dropped connection, said plainly and at once —
     // "connecting" is for the way back, not for the moment it goes.
@@ -924,6 +926,8 @@ function Room() {
     // whatever the transport still believes.
     const BEAT_MS = 4000;
     const DEAD_AFTER_MS = 3000;
+    // Long enough to be read as a state changing rather than a flicker.
+    const SETTLE_MS = 1400;
     const beat = window.setInterval(() => {
       if (!socket.connected) return;
       let answered = false;
@@ -939,7 +943,7 @@ function Room() {
         setConnection((was) => {
           if (was === "live") return "live";
           window.clearTimeout(settle);
-          settle = window.setTimeout(() => setConnection("live"), 550);
+          settle = window.setTimeout(() => setConnection("live"), SETTLE_MS);
           return "connecting";
         });
       });
@@ -2581,6 +2585,7 @@ function Room() {
         return;
       }
       setSearchResults(data.results);
+      setSearchIndex(-1);
     } catch {
       setSearchResults(null);
       setLoadError("Search failed — check your connection.");
@@ -2810,8 +2815,35 @@ function Room() {
           }}
           placeholder="Search YouTube or paste a link..."
           onKeyDown={(e) => {
-            if (e.key === "Enter") handleSubmit();
-            if (e.key === "Escape") setSearchResults(null);
+            // The results are a list, so the arrow keys walk it and Enter
+            // plays whatever is highlighted — reaching for the mouse to pick
+            // the second result was the only way before.
+            if (e.key === "ArrowDown" && searchResults?.length) {
+              e.preventDefault();
+              setSearchIndex((i) => (i + 1) % searchResults.length);
+              return;
+            }
+            if (e.key === "ArrowUp" && searchResults?.length) {
+              e.preventDefault();
+              setSearchIndex((i) => (i <= 0 ? searchResults.length - 1 : i - 1));
+              return;
+            }
+            if (e.key === "Enter") {
+              const picked = searchResults && searchIndex >= 0 ? searchResults[searchIndex] : null;
+              if (picked) {
+                loadVideo(picked.videoId);
+                setSearchResults(null);
+                setSearchIndex(-1);
+                return;
+              }
+              handleSubmit();
+              return;
+            }
+            if (e.key === "Escape") {
+              setSearchResults(null);
+              setSearchIndex(-1);
+              (e.target as HTMLInputElement).blur();
+            }
           }}
         />
         <button onClick={handleSubmit} disabled={searching}>
@@ -2844,8 +2876,14 @@ function Room() {
             </button>
           </div>
           <ul className="search-results-list">
-            {searchResults.map((result) => (
-              <li key={result.videoId} className="search-result-row">
+            {searchResults.map((result, i) => (
+              <li
+                key={result.videoId}
+                className={i === searchIndex ? "search-result-row is-active" : "search-result-row"}
+                ref={(el) => {
+                  if (i === searchIndex) el?.scrollIntoView({ block: "nearest" });
+                }}
+              >
                 <button className="search-result" onClick={() => loadVideo(result.videoId)}>
                   <img src={result.thumbnail} alt="" loading="lazy" />
                   <span className="search-result-info">
@@ -2862,7 +2900,9 @@ function Room() {
                   aria-label={`Add ${result.title} to queue`}
                   onClick={() => void queueVideo(result.videoId, result.title)}
                 >
-                  +
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden>
+                    <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />
+                  </svg>
                 </button>
               </li>
             ))}

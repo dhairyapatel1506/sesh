@@ -164,6 +164,13 @@ a:focus-visible {
   transition: background 0.15s ease, transform 0.12s ease, border-color 0.15s ease;
 }
 
+/* Where the arrow keys are, drawn the same as a hover so the keyboard and
+   the mouse agree about what is selected. */
+.search-result-row.is-active {
+  background: var(--accent-bg);
+  border-radius: 10px;
+}
+
 .queue-item:hover,
 .search-result-row:hover {
   background: var(--accent-bg);
@@ -274,12 +281,16 @@ button:disabled {
 }
 
 .search-result-queue {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
   background: none;
   border: none;
   color: var(--accent);
-  font-size: 1.3rem;
-  line-height: 1;
-  padding: 0.35rem 0.55rem;
+  line-height: 0;
   border-radius: 8px;
   flex-shrink: 0;
 }
@@ -790,7 +801,6 @@ button:disabled {
   line-height: 1;
   color: var(--text-h);
   background: var(--bg);
-  overflow: hidden;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
 }
@@ -961,28 +971,26 @@ button:disabled {
   animation: conn-pulse 1.9s ease-out infinite;
 }
 
-/* Trying: a ring turning around the dot. Down: the dot alone, still. */
+/* Trying: the same halo as live, in amber and quicker. A ring turning around
+   the dot never sat right against it — a rotating arc is asymmetric by
+   nature, so in any given frame it reads as off-centre. Down: the dot alone,
+   no halo at all. */
 .conn.is-connecting .conn-dot::after {
   content: "";
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 170%;
-  height: 170%;
-  margin: -85% 0 0 -85%;
+  width: 100%;
+  height: 100%;
+  margin: -50% 0 0 -50%;
   border-radius: 50%;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
-  animation: conn-spin 0.9s linear infinite;
+  background: currentColor;
+  animation: conn-pulse 1.1s ease-out infinite;
 }
 
 @keyframes conn-pulse {
   0% { transform: scale(1); opacity: 0.45; }
   100% { transform: scale(2.1); opacity: 0; }
-}
-
-@keyframes conn-spin {
-  to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1175,7 +1183,7 @@ button:disabled {
    rest of the row slides right to make room rather than sitting on top of
    it — the gap to the timestamp is part of the transition. */
 .pbar-volume:hover .pbar-slider,
-.pbar-volume:focus-within .pbar-slider {
+.pbar-volume:has(:focus-visible) .pbar-slider {
   width: 78px;
   margin-left: 0.4rem;
   margin-right: 0.2rem;
@@ -1299,6 +1307,7 @@ button:disabled {
 .invite-copy {
   display: inline-flex;
   align-items: center;
+  line-height: 1;
   padding: 0.35rem 0.7rem;
   font-size: 0.76rem;
   white-space: nowrap;
@@ -1306,6 +1315,7 @@ button:disabled {
 
 .invite-qr {
   display: block;
+  margin-top: 0.8rem;
   width: 9.5rem;
   height: 9.5rem;
   margin: 0 auto;
@@ -2408,6 +2418,9 @@ button:disabled {
 }
 
 .emoji-grid {
+  height: 11.5rem;
+  overflow-y: auto;
+  align-content: start;
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   gap: 0.1rem;
@@ -2883,6 +2896,16 @@ button:disabled {
   justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 0.25rem;
+}
+
+/* In the panel there is no room to push them into a corner: they share the
+   width. */
+.feedback-popover .report-actions {
+  justify-content: stretch;
+}
+
+.feedback-popover .report-actions button {
+  flex: 1;
 }
 
 .report-cancel {

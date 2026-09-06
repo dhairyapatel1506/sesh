@@ -84,13 +84,12 @@ const asSize = (bytes: number) =>
 export function ReportBug({ roomId }: { roomId?: string }) {
   const [limits, setLimits] = useState<Limits | null>(null);
   const [open, setOpen] = useState(false);
-  // Set the moment anything inside the panel is used. A hover panel that
-  // closes when the pointer wanders is fine for a list; for a form it is a
-  // way to lose what someone just wrote.
-  const pinnedRef = useRef(false);
-  const pin = useCallback(() => {
-    pinnedRef.current = true;
-  }, []);
+  // Only pinned once there is something to lose. An empty form closes when
+  // the pointer wanders, like every other menu in the header; a form with
+  // words in it stays, and those words are kept for the session either way,
+  // so closing it by accident costs nothing.
+  const [pinned, setPinned] = useState(false);
+  const pin = useCallback((hasText: boolean) => setPinned(hasText), []);
   // Held still deliberately. A room re-renders every second (the uptime clock),
   // and a closure recreated each time would restart the dialog's timers with
   // it — the thank-you would never get to the end of its two and a half
@@ -119,7 +118,7 @@ export function ReportBug({ roomId }: { roomId?: string }) {
         // Not while it's being filled in: leaving with a draft in the box (or
         // the caret in it) would throw the words away, which no amount of
         // tidiness is worth.
-        if (event.pointerType === "touch" || pinnedRef.current) return;
+        if (event.pointerType === "touch" || pinned) return;
         setOpen(false);
       }}
     >
@@ -141,12 +140,19 @@ function ReportDialog({
   onClose,
   onPin,
 }: {
-  onPin?: () => void;
+  onPin?: (hasText: boolean) => void;
   limits: Limits;
   roomId?: string;
   onClose: () => void;
 }) {
-  const [text, setText] = useState("");
+  const DRAFT_KEY = "sesh-feedback-draft";
+  const [text, setText] = useState(() => {
+    try {
+      return sessionStorage.getItem(DRAFT_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [image, setImage] = useState<{ dataUrl: string; bytes: number } | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -247,6 +253,11 @@ function ReportDialog({
         return;
       }
       setSent(true);
+      try {
+        sessionStorage.removeItem(DRAFT_KEY);
+      } catch {
+        // Nothing to clear in a window that kept nothing.
+      }
     } catch {
       setError("Couldn't reach the server — check your connection.");
     } finally {
@@ -255,7 +266,7 @@ function ReportDialog({
   };
 
   return (
-    <div className="report-shell" onPointerDown={onPin} onFocusCapture={onPin}>
+    <div className="report-shell">
       <div
         className={dragging ? "report-dialog is-dragging" : "report-dialog"}
         role="dialog"
@@ -312,7 +323,7 @@ function ReportDialog({
             <p className="report-lead">
               {kind === "bug"
                 ? "What went wrong? A screenshot helps more than anything."
-                : "What would you like Sesh to do? Sketches and screenshots welcome."}
+                : "What would you like Sesh to do? Sketches and screenshots are welcome."}
               {roomId && ` We'll include the room code (${roomId}).`}
             </p>
 
@@ -320,7 +331,15 @@ function ReportDialog({
               ref={textRef}
               className="report-text"
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                onPin?.(e.target.value.trim().length > 0);
+                try {
+                  sessionStorage.setItem(DRAFT_KEY, e.target.value);
+                } catch {
+                  // A private window keeps nothing; the form still works.
+                }
+              }}
               maxLength={limits.maxLength}
               rows={5}
               placeholder={
