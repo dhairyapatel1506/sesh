@@ -41,6 +41,10 @@ type UpNextPick = {
   channel: string;
 };
 
+// The same pick, once autoplay has committed to it: `startsAt` is the server
+// clock reading at which it starts playing.
+type CountdownPick = UpNextPick & { startsAt: number };
+
 type ChatMessage = {
   id: string;
   senderId: string;
@@ -312,6 +316,11 @@ function Room() {
   }, [waitingForRoom]);
   const [related, setRelated] = useState<RelatedResult[] | null>(null);
   const [upnext, setUpnext] = useState<UpNextPick | null>(null);
+  // Autoplay's countdown between videos, when there is one. The server names
+  // the video and the moment it starts, so every tab counts down to the same
+  // instant — and whoever cancels or skips does it for the room.
+  const [countdown, setCountdown] = useState<CountdownPick | null>(null);
+  const [countdownLeft, setCountdownLeft] = useState(0);
 
   // Latest authoritative playback state (from the server or our own emits),
   // used by the local drift-check loop between server resyncs.
@@ -1061,9 +1070,14 @@ function Room() {
               // them, without this, staring at YouTube's paused-recommendations
               // wall (whose every tile opens youtube.com) instead of our end
               // screen. A pause anywhere else clears ended, covering replays.
+              // ...and only when the pause came from the room, which is what
+              // the suppress window marks. Someone pausing a couple of seconds
+              // from the end themselves is still watching: showing them the
+              // end screen there was plain wrong.
               const duration = playerRef.current.getDuration();
               const position = playerRef.current.getCurrentTime();
-              setEnded(duration > 0 && duration - position <= 2);
+              const fromRoom = suppressUntilRef.current && !contradictsRemote(false);
+              setEnded(fromRoom && duration > 0 && duration - position <= 2);
             }
             if ("mediaSession" in navigator) {
               navigator.mediaSession.playbackState =
@@ -1496,12 +1510,35 @@ function Room() {
     };
   }, []);
 
+  // The countdown itself. Only videos that came from YouTube's "up next" get
+  // one — a music mix plays straight through, the way a mix does on YouTube.
+  useEffect(() => {
+    const onCountdown = (pick: CountdownPick | null) => setCountdown(pick);
+    socket.on("radio:countdown", onCountdown);
+    return () => {
+      socket.off("radio:countdown", onCountdown);
+    };
+  }, []);
+
+  // Rendered from the server clock rather than a local timer, so a tab that
+  // was asleep, or that joined halfway through, shows the true remaining
+  // time instead of its own idea of how long it has been counting.
+  useEffect(() => {
+    if (!countdown) return;
+    const tick = () =>
+      setCountdownLeft(Math.max(0, Math.ceil((countdown.startsAt - serverNow()) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 200);
+    return () => window.clearInterval(timer);
+  }, [countdown]);
+
   // A video change resets everything end-of-video: the overlay, its tiles,
   // and the previous video's radio pick (the server re-announces for the new
   // one, but don't show a stale pick in the gap).
   useEffect(() => {
     setEnded(false);
     setUpnext(null);
+    setCountdown(null);
   }, [videoId]);
 
   // Recommendations for whatever is playing. Fetched as soon as there IS a
@@ -2220,7 +2257,7 @@ function Room() {
                 {/* Our end screen, fully covering the iframe so YouTube's
                     recommendation wall underneath can't be clicked. Tiles play
                     in the room via the same path as a search-result click. */}
-                {ended && (
+                {(ended || countdown) && (
                   <div className="end-overlay">
                     {/* Dismissable: the overlay covers the whole picture, and
                         someone who wants the last frame, or YouTube's own
@@ -2244,23 +2281,62 @@ function Room() {
                         />
                       </svg>
                     </button>
-                    <p className="end-overlay-head">Video ended</p>
-                    {related && related.length > 0 && (
+                    {/* Autoplay has chosen: name it, count down, and offer
+                        both ways out — the way YouTube's own end screen does.
+                        Music never gets here; a mix plays straight on. */}
+                    {countdown ? (
                       <>
-                        <p className="end-overlay-sub">Keep the sesh going:</p>
-                        <div className="end-overlay-grid">
-                          {related.map((r) => (
-                            <button
-                              key={r.videoId}
-                              className="end-tile"
-                              onClick={() => loadVideo(r.videoId)}
-                            >
-                              <img src={r.thumbnail} alt="" loading="lazy" />
-                              <span className="end-tile-title">{r.title}</span>
-                              <span className="end-tile-channel">{r.channel}</span>
-                            </button>
-                          ))}
+                        <p className="end-overlay-head">Up next</p>
+                        <div className="end-next">
+                          <img
+                            className="end-next-thumb"
+                            src={`https://i.ytimg.com/vi/${countdown.videoId}/mqdefault.jpg`}
+                            alt=""
+                          />
+                          <div className="end-next-meta">
+                            <span className="end-next-title">{countdown.title}</span>
+                            <span className="end-next-channel">{countdown.channel}</span>
+                            <span className="end-next-count">
+                              Playing in {countdownLeft}s
+                            </span>
+                          </div>
                         </div>
+                        <div className="end-next-actions">
+                          <button
+                            className="end-next-play"
+                            onClick={() => socket.emit("radio:next-now")}
+                          >
+                            ▶ Play now
+                          </button>
+                          <button
+                            className="end-next-cancel"
+                            onClick={() => socket.emit("radio:next-cancel")}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="end-overlay-head">Video ended</p>
+                        {related && related.length > 0 && (
+                          <>
+                            <p className="end-overlay-sub">Keep the sesh going:</p>
+                            <div className="end-overlay-grid">
+                              {related.map((r) => (
+                                <button
+                                  key={r.videoId}
+                                  className="end-tile"
+                                  onClick={() => loadVideo(r.videoId)}
+                                >
+                                  <img src={r.thumbnail} alt="" loading="lazy" />
+                                  <span className="end-tile-title">{r.title}</span>
+                                  <span className="end-tile-channel">{r.channel}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </>
                     )}
                   </div>

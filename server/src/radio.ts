@@ -11,7 +11,13 @@ import { env } from "./db.js";
 // *one* quota unit against the 10,000/day allowance where a search costs a
 // hundred. Autoplay would have been unaffordable the other way.
 
-export type RadioPick = { videoId: string; title: string; channel: string };
+// Where a pick came from. A mix is YouTube's music radio: one song after
+// another, and YouTube itself plays them back-to-back with no interruption,
+// which is what a room listening to music wants. Anything else came from the
+// watch page's "up next", where YouTube shows a countdown you can cancel —
+// and so do we.
+export type PickSource = "mix" | "watch";
+export type RadioPick = { videoId: string; title: string; channel: string; source: PickSource };
 
 const MIX_SIZE = 25;
 // Mixes are personalised-ish and change slowly; a day is well inside how long
@@ -21,7 +27,7 @@ const MIX_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 300;
 const EMPTY_CACHE_TTL_MS = 2 * 60 * 1000;
 
-type Mix = { ids: string[]; fetchedAt: number };
+type Mix = { ids: string[]; fetchedAt: number; source: PickSource };
 const mixCache = new Map<string, Mix>();
 
 // Whether a video can actually be played in an embedded player, which a mix
@@ -48,12 +54,14 @@ function decodeEntities(text: string): string {
     .replace(/&amp;/g, "&");
 }
 
-async function mixFor(seed: string): Promise<string[]> {
+async function mixFor(seed: string): Promise<{ ids: string[]; source: PickSource }> {
   const cached = mixCache.get(seed);
-  if (cached && Date.now() - cached.fetchedAt < MIX_CACHE_TTL_MS) return cached.ids;
+  if (cached && Date.now() - cached.fetchedAt < MIX_CACHE_TTL_MS) {
+    return { ids: cached.ids, source: cached.source };
+  }
 
   const key = env("YOUTUBE_API_KEY");
-  if (!key) return [];
+  if (!key) return { ids: [], source: "watch" };
 
   const url = new URL("https://www.googleapis.com/youtube/v3/playlistItems");
   url.search = new URLSearchParams({
@@ -85,13 +93,17 @@ async function mixFor(seed: string): Promise<string[]> {
   // No mix (YouTube only builds them for music): ask for what YouTube's own
   // watch page shows beside this video. Free, and right for every kind of
   // video.
-  if (ids.length === 0) ids = await watchNextFor(seed);
+  let source: PickSource = "mix";
+  if (ids.length === 0) {
+    ids = await watchNextFor(seed);
+    source = "watch";
+  }
   // An empty answer is remembered only briefly: it's as likely a stalled
   // request as a video with nothing beside it, and a day of "nothing to
   // suggest" for a stall is the wrong trade.
   const fetchedAt = ids.length > 0 ? Date.now() : Date.now() - MIX_CACHE_TTL_MS + EMPTY_CACHE_TTL_MS;
-  remember(mixCache, seed, { ids, fetchedAt });
-  return ids;
+  remember(mixCache, seed, { ids, fetchedAt, source });
+  return { ids, source };
 }
 
 // The "Up next" column of YouTube's own watch page, fetched the way the page
@@ -289,13 +301,14 @@ export async function radioRelated(
   limit: number,
 ): Promise<RadioPick[]> {
   try {
-    const candidates = (await mixFor(seed)).filter((id) => !exclude.has(id));
+    const { ids, source } = await mixFor(seed);
+    const candidates = ids.filter((id) => !exclude.has(id));
     if (candidates.length === 0) return [];
     await detailsFor(candidates);
     const picks: RadioPick[] = [];
     for (const id of candidates) {
       const details = detailCache.get(id);
-      if (details?.playable) picks.push({ videoId: id, title: details.title, channel: details.channel });
+      if (details?.playable) picks.push({ videoId: id, title: details.title, channel: details.channel, source });
       if (picks.length >= limit) break;
     }
     return picks;

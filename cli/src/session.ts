@@ -71,6 +71,10 @@ export type UiState = {
   autoplay: boolean;
   radioAvailable: boolean;
   radioSearching: boolean;
+  // Autoplay picked a video and is counting down before it starts, which
+  // only happens for videos that came from YouTube's "up next" — a music mix
+  // plays straight on. `startsAt` is on the server's clock.
+  countdown: { videoId: string; title: string; channel: string; startsAt: number } | null;
 
   // What this server will take as a bug report — asked for rather than
   // guessed, because the numbers are enforced at the far end and a client
@@ -164,6 +168,7 @@ export class Session extends EventEmitter {
       autoplay: true,
       radioAvailable: true,
       radioSearching: false,
+      countdown: null,
       reportLimits: null,
       account: opts.account ?? null,
       accountsEnabled: true,
@@ -402,6 +407,7 @@ export class Session extends EventEmitter {
     this.socket.on("video:load", ({ videoId }: { videoId: string }) => {
       this.prepare = null;
       this.pendingLocal = null;
+      if (this.state.countdown) this.update({ countdown: null });
       this.lastState = { videoId, isPlaying: true, time: 0, at: this.serverNow() };
       void this.applyState(this.lastState);
     });
@@ -441,6 +447,8 @@ export class Session extends EventEmitter {
     this.socket.on("video:prepare", ({ videoId }: { videoId: string }) => {
       this.prepare = videoId;
       this.pendingLocal = null;
+      // Whatever was counting down has either started or been overtaken.
+      if (this.state.countdown) this.update({ countdown: null });
       this.lastState = { videoId, isPlaying: false, time: 0, at: this.serverNow() };
       void (async () => {
         // Resolving a stream with yt-dlp takes longer than a browser tab
@@ -958,6 +966,16 @@ export class Session extends EventEmitter {
     this.socket.emit("radio:set", { on });
   }
 
+  // The countdown belongs to the room, so both of these are room-wide — the
+  // same two buttons the web client draws on its end screen.
+  playNextNow(): void {
+    this.socket.emit("radio:next-now");
+  }
+
+  cancelNext(): void {
+    this.socket.emit("radio:next-cancel");
+  }
+
   // ---- bug reports ----
 
   // Deliberately usable signed out — the people most likely to hit a bug are
@@ -1140,6 +1158,7 @@ export class Session extends EventEmitter {
       // The room being left may have been mid-lookup; the room being joined
       // will say what its own radio is doing in its room:join reply.
       radioSearching: false,
+      countdown: null,
       // The invite has been taken up (or abandoned by going somewhere else);
       // either way it's no longer something to accept.
       invite: null,

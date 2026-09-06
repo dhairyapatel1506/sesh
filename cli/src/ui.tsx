@@ -305,6 +305,18 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
     const t = setInterval(() => setDotFrame((f) => (f + 1) % 3), 400);
     return () => clearInterval(t);
   }, [s.typers.length > 0]);
+  // Autoplay's countdown, counted on the server's clock like everything else
+  // that has to read the same on every screen at once.
+  const [countdownTick, setCountdownTick] = useState(0);
+  useEffect(() => {
+    if (!s.countdown) return;
+    const t = setInterval(() => setCountdownTick((n) => n + 1), 250);
+    return () => clearInterval(t);
+  }, [s.countdown?.startsAt]);
+  void countdownTick;
+  const countdownLeft = s.countdown
+    ? Math.max(0, Math.ceil((s.countdown.startsAt - session.serverNow()) / 1000))
+    : 0;
   // The server's clock, and stepped on ITS second boundaries. roomCreatedAt is
   // a server timestamp, so counting from a local Date.now() measures how wrong
   // this machine's clock is rather than how old the room is. And a plain
@@ -511,6 +523,16 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
         session.setAutoplay(wanted === "on");
         break;
       }
+      case "next": {
+        if (!s.countdown) return session.setStatus("nothing is counting down");
+        session.playNextNow();
+        break;
+      }
+      case "cancel": {
+        if (!s.countdown) return session.setStatus("nothing is counting down");
+        session.cancelNext();
+        break;
+      }
       case "bug": {
         if (!arg.trim()) return session.setStatus(usage("bug"));
         void session.reportBug(arg);
@@ -712,7 +734,12 @@ export function App({ session, serverUrl }: { session: Session; serverUrl: strin
             where the playback it decides is being read. Hidden outright on a
             server that can't do it — a state nobody can change is noise. */}
         {s.radioAvailable &&
-          (s.radioSearching ? (
+          (s.countdown ? (
+            <Text color="magenta" wrap="truncate">
+              up next: {s.countdown.title} · in {countdownLeft}s ·{" "}
+              <Text color="gray">/next plays it · /cancel stops it</Text>
+            </Text>
+          ) : s.radioSearching ? (
             <Text color="magenta">finding something to play next…</Text>
           ) : (
             <Text color="gray">

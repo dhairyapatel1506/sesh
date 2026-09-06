@@ -819,6 +819,11 @@ type Room = {
   // Without this, three reports become three lookups and the room starts the
   // third one's answer.
   radioPending: boolean;
+  // The pick that has been announced with a countdown and is waiting it out
+  // on everyone's end screen. Held on the room, not per client, so the
+  // countdown is one shared thing: whoever cancels or skips it does so for
+  // the room, and a tab that joins mid-count sees the same clock.
+  pendingNext: { pick: RadioPick; startsAt: number; timer: NodeJS.Timeout } | null;
   // What radio would play after the current video, decided when the video
   // *starts* rather than when it ends — so clients can show "up next" the way
   // YouTube does, and the end-of-video handoff doesn't wait on a lookup. The
@@ -867,6 +872,7 @@ function getOrCreateRoom(roomId: string): Room {
       autoplay: true,
       played: [],
       radioPending: false,
+      pendingNext: null,
       upnext: null,
     };
     rooms.set(roomId, room);
@@ -989,8 +995,50 @@ function recordHistory(roomId: string, room: Room, videoId: string) {
   });
 }
 
+// How long the end screen counts down before autoplay starts the next video.
+// YouTube's own "Up next" waits about this long, and the point of the wait is
+// the same: a moment to see what was chosen and stop it.
+const AUTOPLAY_COUNTDOWN_MS = 5000;
+
+// Drop a countdown that is no longer going to happen. `announce` is false
+// only when the very next thing this tick does is start a video, which tells
+// every client the same thing more loudly.
+function cancelPendingNext(roomId: string, room: Room, announce = true) {
+  if (!room.pendingNext) return;
+  clearTimeout(room.pendingNext.timer);
+  room.pendingNext = null;
+  if (announce) io.to(roomId).emit("radio:countdown", null);
+}
+
+// Autoplay's handoff. A music mix goes straight into the next track — that is
+// what a mix IS, and a countdown between songs would be an interruption
+// nobody asked for. Anything else gets YouTube's treatment: name the video,
+// count down, and let anyone in the room cancel it or skip the wait.
+function scheduleNext(roomId: string, room: Room, pick: RadioPick) {
+  cancelPendingNext(roomId, room, false);
+  if (pick.source === "mix") {
+    io.to(roomId).emit("radio:picked", { videoId: pick.videoId, title: pick.title });
+    startVideoForRoom(roomId, room, pick.videoId);
+    return;
+  }
+  const startsAt = Date.now() + AUTOPLAY_COUNTDOWN_MS;
+  room.pendingNext = {
+    pick,
+    startsAt,
+    timer: setTimeout(() => {
+      if (rooms.get(roomId) !== room || !room.pendingNext) return;
+      room.pendingNext = null;
+      io.to(roomId).emit("radio:picked", { videoId: pick.videoId, title: pick.title });
+      startVideoForRoom(roomId, room, pick.videoId);
+    }, AUTOPLAY_COUNTDOWN_MS),
+  };
+  io.to(roomId).emit("radio:countdown", { ...pick, startsAt });
+}
+
 function startVideoForRoom(roomId: string, room: Room, videoId: string) {
   cancelPendingStart(room);
+  // Whatever was counting down, this video is what the room is playing now.
+  cancelPendingNext(roomId, room, false);
   rememberPlayed(room, videoId);
   recordHistory(roomId, room, videoId);
   room.state = { videoId, isPlaying: false, time: 0, updatedAt: Date.now() };
@@ -1102,6 +1150,13 @@ io.on("connection", (socket) => {
       socket.emit("radio:state", { autoplay: room.autoplay, available: radioAvailable() });
       // Broadcast only on change, so an arrival has to be told what's up next.
       socket.emit("radio:upnext", room.upnext?.pick ?? null);
+      // A countdown already running is part of the room's state, or someone
+      // arriving in the last seconds of it would see the video change with
+      // no explanation.
+      socket.emit(
+        "radio:countdown",
+        room.pendingNext ? { ...room.pendingNext.pick, startsAt: room.pendingNext.startsAt } : null,
+      );
       io.to(roomId).emit("room:users", userList(room));
     },
   );
@@ -1109,8 +1164,10 @@ io.on("connection", (socket) => {
   socket.on("video:load", ({ videoId }: { videoId: string }) => {
     const room = currentRoom(socket);
     if (!room) return;
-    // A user picking a video overrides any synchronized start in flight.
+    // A user picking a video overrides any synchronized start in flight —
+    // and any countdown, which is autoplay's suggestion, not their choice.
     cancelPendingStart(room);
+    cancelPendingNext(socket.data.roomId, room, false);
     // The loader's own click reliably starts playback right away (it's a
     // real gesture, so autoplay isn't blocked). Mark the room as playing
     // immediately rather than waiting for a separate video:play event —
@@ -1231,8 +1288,7 @@ io.on("connection", (socket) => {
     // keeps the promise and skips the lookup — the handoff is instant.
     const ready = room.upnext && room.upnext.seed === videoId ? room.upnext.pick : null;
     if (ready) {
-      io.to(roomId).emit("radio:picked", { videoId: ready.videoId, title: ready.title });
-      startVideoForRoom(roomId, room, ready.videoId);
+      scheduleNext(roomId, room, ready);
       return;
     }
 
@@ -1246,8 +1302,7 @@ io.on("connection", (socket) => {
         if (rooms.get(roomId) !== room) return;
         if (!room.autoplay || room.state.videoId !== videoId || room.state.isPlaying) return;
         if (!pick) return io.to(roomId).emit("radio:dry");
-        io.to(roomId).emit("radio:picked", { videoId: pick.videoId, title: pick.title });
-        startVideoForRoom(roomId, room, pick.videoId);
+        scheduleNext(roomId, room, pick);
       })
       .catch(() => {
         room.radioPending = false;
@@ -1260,6 +1315,9 @@ io.on("connection", (socket) => {
     const room = currentRoom(socket);
     if (!room) return;
     room.autoplay = Boolean(on);
+    // Turning autoplay off with the next video already counting down means
+    // "not that one either".
+    if (!room.autoplay) cancelPendingNext(socket.data.roomId, room);
     // The same shape as the one sent on join. Dropping `available` here made
     // the field mean two things — "off" and "not mentioned this time" — and a
     // client that believed it would hide the control the moment anyone used it.
@@ -1275,6 +1333,27 @@ io.on("connection", (socket) => {
     }
   });
 
+  // "Play now" — stop waiting and start the announced video. Anyone in the
+  // room can, the same as anyone can press play.
+  socket.on("radio:next-now", () => {
+    const room = currentRoom(socket);
+    const pending = room?.pendingNext;
+    if (!room || !pending) return;
+    const roomId = socket.data.roomId as string;
+    cancelPendingNext(roomId, room, false);
+    io.to(roomId).emit("radio:picked", { videoId: pending.pick.videoId, title: pending.pick.title });
+    startVideoForRoom(roomId, room, pending.pick.videoId);
+  });
+
+  // "Cancel" — don't play it. The room stays on the end screen with its
+  // recommendations; autoplay itself stays on, so the next video that ends
+  // gets the same offer, which is what YouTube's cancel does too.
+  socket.on("radio:next-cancel", () => {
+    const room = currentRoom(socket);
+    if (!room) return;
+    cancelPendingNext(socket.data.roomId as string, room);
+  });
+
   socket.on("queue:add", ({ videoId, title }: { videoId: string; title?: string | null }) => {
     const room = currentRoom(socket);
     const clientId = socket.data.clientId as string | undefined;
@@ -1284,6 +1363,13 @@ io.on("connection", (socket) => {
     // that call itself so the click's autoplay permission isn't wasted, but
     // cover the race where the room went idle in between).
     if (!room.state.videoId) {
+      startVideoForRoom(socket.data.roomId, room, videoId);
+      return;
+    }
+    // The room is sitting on the end screen watching autoplay count down and
+    // someone picked something: a person's choice beats the machine's, and
+    // waiting out the rest of the countdown to play it would be silly.
+    if (room.pendingNext) {
       startVideoForRoom(socket.data.roomId, room, videoId);
       return;
     }
@@ -1422,6 +1508,7 @@ io.on("connection", (socket) => {
 
     if (room.users.size === 0) {
       cancelPendingStart(room);
+      cancelPendingNext(roomId, room, false);
       rooms.delete(roomId);
     } else {
       io.to(roomId).emit("room:users", userList(room));

@@ -35,6 +35,8 @@ export const COMMANDS: readonly Command[] = [
   { name: "skip", desc: "jump to the next queued track" },
   { name: "remove", args: "<n>", desc: "remove queue item n", hint: "the number in the queue" },
   { name: "autoplay", args: "[on|off]", desc: "keep the room going when the queue empties" },
+  { name: "next", desc: "start autoplay's pick now", hint: "only while it's counting down" },
+  { name: "cancel", desc: "call off autoplay's countdown", hint: "only while it's counting down" },
   { name: "vol", args: "<0-130>", desc: "local volume (only affects you)", hint: "e.g. /vol 80" },
   { name: "emoji", args: "[query]", desc: "browse/search emoji + their :names:" },
   {
