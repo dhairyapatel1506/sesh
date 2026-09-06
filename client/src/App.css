@@ -276,6 +276,9 @@ button:disabled {
   margin: 0 auto;
   width: 100%;
   max-width: 640px;
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
 }
 
 /* Anchors the unmute nudge over the video rather than the page. */
@@ -309,12 +312,16 @@ button:disabled {
 
 /* The YouTube API sets the iframe's width/height as HTML attributes (not
    CSS), so it ignores the wrapper's responsive sizing unless overridden
-   here directly. */
+   here directly. The iframe is made taller than the container and offset
+   upward so YouTube's top/bottom chrome (title bar, Share, etc.) falls
+   outside the overflow clip. YouTube letterboxes the video to fit, so the
+   video still lands exactly in the visible area. */
 #yt-player iframe {
-  display: block;
+  position: absolute;
+  top: -40%;
+  left: 0;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  height: auto;
+  height: 180%;
   border-radius: 12px;
 }
 
@@ -349,7 +356,8 @@ button:disabled {
 
 .player-frame.is-fullscreen #yt-player iframe {
   width: 100% !important;
-  height: 100% !important;
+  height: 180% !important;
+  top: -40% !important;
   aspect-ratio: auto !important;
   border-radius: 0;
 }
@@ -762,7 +770,7 @@ button:disabled {
   margin-left: 0.15rem;
   -webkit-appearance: none;
   appearance: none;
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
   background: linear-gradient(
     to right,
@@ -777,24 +785,26 @@ button:disabled {
 
 .pbar-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
   cursor: pointer;
 }
 
 .pbar-slider::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
   cursor: pointer;
   border: none;
 }
 
 .pbar-slider::-moz-range-track {
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
   background: transparent;
 }
