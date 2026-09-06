@@ -1736,6 +1736,10 @@ function Room() {
   const [hudShown, setHudShown] = useState(true);
   const hudTimerRef = useRef<number | undefined>(undefined);
   const [localPlaying, setLocalPlaying] = useState(false);
+  // YouTube's paused overlay lingers ~3.6s after resuming — keep covers up
+  // through that window so the chrome is never exposed.
+  const [overlaySuppressed, setOverlaySuppressed] = useState(false);
+  const overlayTimerRef = useRef<number | undefined>(undefined);
   // Where the scrubber is being dragged to, in seconds. Non-null only while
   // a drag is in progress, so the ticking position doesn't fight the thumb.
   const [scrub, setScrub] = useState<number | null>(null);
@@ -1753,6 +1757,9 @@ function Room() {
   const [ccTracks, setCcTracks] = useState(0);
   const [ccOn, setCcOn] = useState(false);
   const trackRef = useRef<HTMLDivElement | null>(null);
+  // Ignore sub-pixel pointer jitter — only restart the HUD hide timer when
+  // the mouse has actually moved a meaningful distance.
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
 
   const showHud = (sticky: boolean) => {
     window.clearTimeout(hudTimerRef.current);
@@ -1772,6 +1779,22 @@ function Room() {
     if (!localPlaying) showHud(true);
     else showHud(false);
     return () => window.clearTimeout(hudTimerRef.current);
+  }, [localPlaying]);
+
+  // YouTube's paused overlay lingers ~3.6s after resuming. Keep cover bands
+  // up through that window so the chrome is never exposed.
+  useEffect(() => {
+    if (localPlaying) {
+      setOverlaySuppressed(true);
+      overlayTimerRef.current = window.setTimeout(
+        () => setOverlaySuppressed(false),
+        4500,
+      );
+    } else {
+      setOverlaySuppressed(false);
+      window.clearTimeout(overlayTimerRef.current);
+    }
+    return () => window.clearTimeout(overlayTimerRef.current);
   }, [localPlaying]);
 
   // Numbers for the bar, only while the bar is on screen. estimatedPosition
@@ -2523,8 +2546,16 @@ function Room() {
                   .filter(Boolean)
                   .join(" ")}
                 ref={playerFrameRef}
-                onPointerMove={() => showHud(localPlaying)}
+                onPointerMove={(e) => {
+                  const prev = lastPointerRef.current;
+                  const dx = prev ? e.clientX - prev.x : 0;
+                  const dy = prev ? e.clientY - prev.y : 0;
+                  lastPointerRef.current = { x: e.clientX, y: e.clientY };
+                  if (prev && Math.abs(dx) + Math.abs(dy) < 3) return;
+                  showHud(localPlaying);
+                }}
                 onPointerLeave={() => {
+                  lastPointerRef.current = null;
                   // Never while paused: YouTube's own paused overlay is
                   // underneath ours, and our bar (with the covers below) is
                   // what hides it.
@@ -2532,13 +2563,16 @@ function Room() {
                 }}
               >
                 <div id="yt-player" ref={playerContainerRef} />
-                {/* Our own title band — YouTube's top chrome is clipped by
-                    the iframe overflow, but this stays for the video title. */}
+                {/* Our title band + a bottom cover hide YouTube's paused
+                    overlay. The topbar is always shown when paused; the
+                    botcover stays up for 4.5s after resume while YouTube's
+                    own chrome fades. */}
                 <div
-                  className={`player-topbar${hudShown || !localPlaying ? " is-shown" : ""}`}
+                  className={`player-topbar${hudShown || !localPlaying || overlaySuppressed ? " is-shown" : ""}`}
                 >
                   <span className="player-topbar-title">{videoTitle ?? ""}</span>
                 </div>
+                {(!localPlaying || overlaySuppressed) && <div className="player-botcover" aria-hidden />}
                 {/* The click layer: our own play/pause on the picture, and
                     double-click for fullscreen. It sits over the iframe,
                     which with controls=0 has nothing of its own to click. */}
@@ -2604,17 +2638,30 @@ function Room() {
                           </svg>
                         )}
                       </button>
-                      <input
+                      <div
                         className="pbar-slider"
-                        type="range"
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={silent ? 0 : volume}
+                        role="slider"
+                        tabIndex={-1}
                         aria-label="Volume"
-                        style={{ "--vol": `${silent ? 0 : volume}%` } as React.CSSProperties}
-                        onChange={(e) => changeVolume(Number(e.target.value))}
-                      />
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={silent ? 0 : volume}
+                        onPointerDown={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const pct = Math.round(((e.clientX - rect.left) / rect.width) * 100);
+                          changeVolume(Math.max(0, Math.min(100, pct)));
+                          e.currentTarget.setPointerCapture(e.pointerId);
+                        }}
+                        onPointerMove={(e) => {
+                          if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const pct = Math.round(((e.clientX - rect.left) / rect.width) * 100);
+                          changeVolume(Math.max(0, Math.min(100, pct)));
+                        }}
+                      >
+                        <div className="pbar-slider-fill" style={{ width: `${silent ? 0 : volume}%` }} />
+                        <div className="pbar-slider-thumb" style={{ left: `${silent ? 0 : volume}%` }} />
+                      </div>
                     </div>
                     <span className="pbar-time">
                       {clockTime(shownPosition)} <span className="pbar-dim">/ {clockTime(clip.duration)}</span>

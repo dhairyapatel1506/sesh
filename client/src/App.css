@@ -276,9 +276,6 @@ button:disabled {
   margin: 0 auto;
   width: 100%;
   max-width: 640px;
-  position: relative;
-  overflow: hidden;
-  aspect-ratio: 16 / 9;
 }
 
 /* Anchors the unmute nudge over the video rather than the page. */
@@ -312,16 +309,12 @@ button:disabled {
 
 /* The YouTube API sets the iframe's width/height as HTML attributes (not
    CSS), so it ignores the wrapper's responsive sizing unless overridden
-   here directly. The iframe is made taller than the container and offset
-   upward so YouTube's top/bottom chrome (title bar, Share, etc.) falls
-   outside the overflow clip. YouTube letterboxes the video to fit, so the
-   video still lands exactly in the visible area. */
+   here directly. */
 #yt-player iframe {
-  position: absolute;
-  top: -40%;
-  left: 0;
+  display: block;
   width: 100%;
-  height: 180%;
+  aspect-ratio: 16 / 9;
+  height: auto;
   border-radius: 12px;
 }
 
@@ -356,8 +349,7 @@ button:disabled {
 
 .player-frame.is-fullscreen #yt-player iframe {
   width: 100% !important;
-  height: 180% !important;
-  top: -40% !important;
+  height: 100% !important;
   aspect-ratio: auto !important;
   border-radius: 0;
 }
@@ -766,47 +758,42 @@ button:disabled {
    click at the left end sets the volume to zero, and YouTube remembers that
    for every later video in that browser. */
 .pbar-slider {
+  position: relative;
   width: 64px;
+  height: 3px;
   margin-left: 0.15rem;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 3px;
+  background: rgba(255, 255, 255, 0.2);
   border-radius: 2px;
-  background: linear-gradient(
-    to right,
-    var(--accent, #8b5cf6) 0%,
-    var(--accent, #8b5cf6) var(--vol, 100%),
-    rgba(255, 255, 255, 0.2) var(--vol, 100%),
-    rgba(255, 255, 255, 0.2) 100%
-  );
-  outline: none;
   cursor: pointer;
+  touch-action: none;
 }
 
-.pbar-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
+.pbar-slider-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--accent, #8b5cf6);
+  border-radius: 2px;
+}
+
+.pbar-slider-thumb {
+  position: absolute;
+  top: 50%;
   width: 10px;
   height: 10px;
-  border-radius: 50%;
+  margin-left: -5px;
+  margin-top: -5px;
   background: #fff;
+  border-radius: 50%;
   box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
-  cursor: pointer;
+  pointer-events: none;
 }
 
-.pbar-slider::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
-  cursor: pointer;
-  border: none;
-}
-
-.pbar-slider::-moz-range-track {
-  height: 3px;
-  border-radius: 2px;
-  background: transparent;
+@media (max-width: 460px) {
+  .pbar-slider {
+    display: none;
+  }
 }
 
 @media (max-width: 460px) {
