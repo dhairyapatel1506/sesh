@@ -3327,3 +3327,21 @@ button:disabled {
   color: var(--accent);
   filter: none;
 }
+
+/* Wide enough that a name, its code chip and the row's buttons share a line
+   without the name being squeezed to a letter. */
+.friends-popover {
+  min-width: 23rem;
+}
+
+.friend-who .friend-name {
+  flex: 0 1 auto;
+  min-width: 3rem;
+}
+
+@media (max-width: 30rem) {
+  .friends-popover {
+    min-width: 0;
+    width: calc(100vw - 2rem);
+  }
+}
