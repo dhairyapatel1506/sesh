@@ -2286,7 +2286,10 @@ function Room() {
       // while the ❤️ tab is the symbols one — so the tab with a heart on it
       // had no heart in it. Hearts move to the front of that tab.
       const isHeart = (e: { slug: string }) => /heart/.test(e.slug) && !/face|eyes|cat|hand|hug/.test(e.slug);
-      const hearts = groups.flatMap((g) => (g.slug === "smileys_emotion" ? g.emojis.filter(isHeart) : []));
+      const hearts = groups
+        .flatMap((g) => (g.slug === "smileys_emotion" ? g.emojis.filter(isHeart) : []))
+        // The red heart is the one everybody means; it leads.
+        .sort((a, b) => Number(b.slug === "red_heart") - Number(a.slug === "red_heart"));
       const heartChars = new Set(hearts.map((h) => h.emoji));
       setEmojiData(
         groups
