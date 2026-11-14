@@ -2054,9 +2054,11 @@ const HUD_IDLE_MS = 2500;
           const data = player.getVideoData?.() as { video_quality?: string } | undefined;
           const hasModule = (player.getOptions?.() as string[] | undefined)?.includes("captions");
           const started = Boolean(data?.video_quality) || [1, 2, 3].includes(player.getPlayerState());
-          if (started && !hasModule) {
+          if (started) {
+            // No module at all is a quick no; a module with an empty list may
+            // just be slow to fill, so it gets longer.
             noneSince ||= Date.now();
-            if (Date.now() - noneSince > 1200) {
+            if (Date.now() - noneSince > (hasModule ? 2500 : 1200)) {
               setCcStatus("none");
               return;
             }
