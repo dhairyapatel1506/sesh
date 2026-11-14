@@ -292,17 +292,11 @@ export function FriendsPanel({
                   <span className="sr-only">{presenceLabel(presence)}</span>
                 </span>
                 <span className="friend-name">{friend.name}</span>
+                {friend.friendCode && <CodeChip label="Friend code" code={friend.friendCode} small />}
                 {!here && presence === "in-room" && (
                   <span className="friend-where">in a room</span>
                 )}
                 </span>
-                {/* Under the name, on its own line: the chip opens wider when
-                    hovered, and beside the name it shoved everything else. */}
-                {friend.friendCode && (
-                  <span className="friend-code-row">
-                    <CodeChip label="Code" code={friend.friendCode} small />
-                  </span>
-                )}
               </span>
               <span className="friend-actions">
                 {/* The one way into a conversation: nothing else on the row
@@ -465,7 +459,7 @@ function Conversation({ friend, onBack }: { friend: Friend; onBack: () => void }
           <span className="sr-only">{presenceLabel(presence)}</span>
         </span>
         <span className="dm-with">{friend.name}</span>
-        {friend.friendCode && <CodeChip label="Code" code={friend.friendCode} small />}
+        {friend.friendCode && <CodeChip label="Friend code" code={friend.friendCode} small />}
         {presence === "in-room" && <span className="friend-where">in a room</span>}
       </div>
 

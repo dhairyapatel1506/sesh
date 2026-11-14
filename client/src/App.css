@@ -3333,7 +3333,7 @@ button:disabled {
 /* Wide enough that a name, its code chip and the row's buttons share a line
    without the name being squeezed to a letter. */
 .friends-popover {
-  min-width: 22rem;
+  min-width: 29rem;
 }
 
 .friend-who .friend-name {
