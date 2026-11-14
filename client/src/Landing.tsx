@@ -69,7 +69,7 @@ function Landing() {
       )}
 
       <footer className="app-footer">
-        <ReportBug />
+        <ReportBug placement="above" />
       </footer>
     </div>
   );

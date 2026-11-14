@@ -81,9 +81,26 @@ const asSize = (bytes: number) =>
  * The way in: a quiet link that opens the form. Renders nothing at all when the
  * server has no database to file reports in.
  */
-export function ReportBug({ roomId }: { roomId?: string }) {
+export function ReportBug({
+  roomId,
+  name,
+  placement = "below",
+}: {
+  roomId?: string;
+  // The name this person goes by in the room, so a report says who sent it.
+  name?: string;
+  // "above" opens the panel upward and centred on the chip (the landing page,
+  // where the chip sits at the bottom of the screen).
+  placement?: "below" | "above";
+}) {
   const [limits, setLimits] = useState<Limits | null>(null);
   const [open, setOpen] = useState(false);
+  // Hover opens it; a click inside keeps it open until a click somewhere else
+  // (or the X / Escape). Otherwise the thank-you after sending — which makes
+  // the panel shrink out from under a pointer that's already left — is never
+  // seen.
+  const pinnedRef = useRef(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   // The panel closes when the pointer leaves, always — it's a hover menu like
   // the others. What survives is the draft: whatever was typed is kept for
   // the session, so wandering off costs nothing and coming back resumes.
@@ -92,7 +109,20 @@ export function ReportBug({ roomId }: { roomId?: string }) {
   // and a closure recreated each time would restart the dialog's timers with
   // it — the thank-you would never get to the end of its two and a half
   // seconds, so the form would sit there having already been sent.
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => {
+    pinnedRef.current = false;
+    setOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => {
+      if (menuRef.current?.contains(event.target as Node)) pinnedRef.current = true;
+      else close();
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [open, close]);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,23 +136,28 @@ export function ReportBug({ roomId }: { roomId?: string }) {
 
   return (
     <div
-      className="feedback-menu hover-menu"
+      ref={menuRef}
+      className={`feedback-menu hover-menu${placement === "above" ? " is-above" : ""}`}
       onPointerEnter={(event) => {
         // Hover opens it, the same as Friends and Invite. Touch has no hover,
         // so a tap still does.
         if (event.pointerType !== "touch") setOpen(true);
       }}
       onPointerLeave={(event) => {
-        if (event.pointerType === "touch") return;
+        if (event.pointerType === "touch" || pinnedRef.current) return;
         setOpen(false);
       }}
     >
-      <button className="meta-chip report-link" onClick={() => setOpen(true)} aria-expanded={open}>
+      <button className="meta-chip report-link" onClick={() => {
+          pinnedRef.current = true;
+          setOpen(true);
+        }}
+        aria-expanded={open}>
         <span className="meta-label">Feedback</span>
       </button>
       {open && (
         <div className="feedback-popover">
-          <ReportDialog limits={limits} roomId={roomId} onClose={close} />
+          <ReportDialog limits={limits} roomId={roomId} name={name} onClose={close} />
         </div>
       )}
     </div>
@@ -132,30 +167,58 @@ export function ReportBug({ roomId }: { roomId?: string }) {
 function ReportDialog({
   limits,
   roomId,
+  name,
   onClose,
 }: {
-
   limits: Limits;
   roomId?: string;
+  name?: string;
   onClose: () => void;
 }) {
-  const DRAFT_KEY = "sesh-feedback-draft";
-  const [text, setText] = useState(() => {
+  // One draft per kind, and the kind itself is remembered too: an idea
+  // written under "Idea for a feature" must not turn up under "Something's
+  // broken", and the panel reopens on whichever one was last in use.
+  const KIND_KEY = "sesh-feedback-kind";
+  const draftKey = (k: "bug" | "idea") => `sesh-feedback-draft-${k}`;
+  const readDraft = (k: "bug" | "idea") => {
     try {
-      return sessionStorage.getItem(DRAFT_KEY) ?? "";
+      return sessionStorage.getItem(draftKey(k)) ?? "";
     } catch {
       return "";
     }
+  };
+  const [kind, setKindState] = useState<"bug" | "idea">(() => {
+    try {
+      return sessionStorage.getItem(KIND_KEY) === "idea" ? "idea" : "bug";
+    } catch {
+      return "bug";
+    }
   });
+  const [drafts, setDrafts] = useState({ bug: readDraft("bug"), idea: readDraft("idea") });
+  const text = drafts[kind];
+  const setKind = (k: "bug" | "idea") => {
+    setKindState(k);
+    try {
+      sessionStorage.setItem(KIND_KEY, k);
+    } catch {
+      // A private window keeps nothing; the form still works.
+    }
+    textRef.current?.focus();
+  };
+  const setText = (value: string) => {
+    setDrafts((was) => ({ ...was, [kind]: value }));
+    try {
+      sessionStorage.setItem(draftKey(kind), value);
+    } catch {
+      // A private window keeps nothing; the form still works.
+    }
+  };
   const [image, setImage] = useState<{ dataUrl: string; bytes: number } | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [sent, setSent] = useState(false);
-  // The same form takes both kinds of message; what it is rides along at the
-  // top of the text, so a report reads as what it is wherever it lands.
-  const [kind, setKind] = useState<"bug" | "idea">("bug");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -234,6 +297,7 @@ function ReportDialog({
           text: text.trim(),
           kind,
           client: "web",
+          ...(name ? { name } : {}),
           ...(roomId ? { roomId } : {}),
           ...(image ? { image: image.dataUrl } : {}),
         }),
@@ -247,8 +311,9 @@ function ReportDialog({
         return;
       }
       setSent(true);
+      setDrafts((was) => ({ ...was, [kind]: "" }));
       try {
-        sessionStorage.removeItem(DRAFT_KEY);
+        sessionStorage.removeItem(draftKey(kind));
       } catch {
         // Nothing to clear in a window that kept nothing.
       }
@@ -295,7 +360,14 @@ function ReportDialog({
           </>
         ) : (
           <>
-            <h2 className="report-title">Send feedback</h2>
+            <div className="report-head">
+              <h2 className="report-title">Send feedback</h2>
+              <button className="report-x" onClick={onClose} aria-label="Close" title="Close">
+                <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+                  <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
             <div className="report-kind" role="radiogroup" aria-label="What kind of feedback">
               <button
                 className={kind === "bug" ? "is-on" : ""}
@@ -325,14 +397,7 @@ function ReportDialog({
               ref={textRef}
               className="report-text"
               value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                try {
-                  sessionStorage.setItem(DRAFT_KEY, e.target.value);
-                } catch {
-                  // A private window keeps nothing; the form still works.
-                }
-              }}
+              onChange={(e) => setText(e.target.value)}
               maxLength={limits.maxLength}
               rows={5}
               placeholder={
@@ -387,15 +452,9 @@ function ReportDialog({
               <button
                 className="report-cancel"
                 onClick={() => {
-                  // Cancel means "forget it" — the draft goes with it. Just
-                  // moving the pointer away keeps everything.
+                  // Cancel means "forget it" — this kind's draft goes with it.
                   setText("");
                   setImage(null);
-                  try {
-                    sessionStorage.removeItem(DRAFT_KEY);
-                  } catch {
-                    // Nothing to clear in a window that kept nothing.
-                  }
                   onClose();
                 }}
               >

@@ -406,7 +406,14 @@ app.post("/api/report", async (req, res) => {
 
   try {
     const roomId = typeof req.body?.roomId === "string" ? req.body.roomId.slice(0, 12) : null;
+    const kind: "bug" | "idea" = req.body?.kind === "idea" ? "idea" : "bug";
+    // The name they go by in the room — client-supplied, so it's trimmed and
+    // kept short, and only ever shown as text.
+    const displayName =
+      typeof req.body?.name === "string" ? req.body.name.replace(/\s+/g, " ").trim().slice(0, 40) || null : null;
     const id = await saveReport({
+      kind,
+      displayName,
       text,
       client: req.body?.client === "cli" ? "cli" : "web",
       ipHash,
@@ -425,14 +432,16 @@ app.post("/api/report", async (req, res) => {
     // log at all — which cost an afternoon to work out.
     if (!mailEnabled()) console.log(`report ${id} stored; mail is not configured on this deploy`);
     if (mailEnabled()) {
-      const reporter = req.userId ? ((await getUser(req.userId).catch(() => null))?.name ?? null) : null;
+      const account = req.userId ? await getUser(req.userId).catch(() => null) : null;
       void sendReportMail({
         id,
         text,
-        kind: req.body?.kind === "idea" ? "idea" : "bug",
+        kind,
         client: req.body?.client === "cli" ? "cli" : "web",
         roomId,
-        reporter,
+        reporter: account?.name ?? null,
+        email: account?.email ?? null,
+        displayName,
         userAgent: (req.headers["user-agent"] as string | undefined) ?? null,
         image,
         dashboardUrl: statsToken() ? `${publicOrigin(req)}/admin?token=${statsToken()}` : null,
@@ -531,8 +540,14 @@ app.get("/admin", async (req, res) => {
     const rows = reports
       .map((report) => {
         const when = new Date(report.at).toISOString().replace("T", " ").slice(0, 16);
+        const who = [
+          report.displayName,
+          report.reporter && report.reporter !== report.displayName ? report.reporter : null,
+          report.email ? `<${report.email}>` : null,
+        ].filter(Boolean);
         const meta = [
-          report.reporter ? escapeHtml(report.reporter) : "signed out",
+          report.kind === "idea" ? "💡 idea" : "🐞 bug",
+          who.length ? escapeHtml(who.join(" ")) : "signed out",
           escapeHtml(report.client),
           report.roomId ? `room ${escapeHtml(report.roomId)}` : "no room",
           when,

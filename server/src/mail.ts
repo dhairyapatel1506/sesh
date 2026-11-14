@@ -51,6 +51,8 @@ type ReportMail = {
   client: string;
   roomId: string | null;
   reporter: string | null;
+  email?: string | null;
+  displayName?: string | null;
   userAgent: string | null;
   image: { data: Buffer; mime: string } | null;
   dashboardUrl: string | null;
@@ -106,7 +108,14 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
 
     const where = report.roomId ? `room ${report.roomId}` : "no room";
     const kind = report.kind === "idea" ? "feature request" : "bug report";
-    const who = report.reporter ?? "someone signed out";
+    // Room nickname first, then the account behind it (name and address, so
+    // there's a way to write back). Neither: genuinely anonymous.
+    const parts = [
+      report.displayName,
+      report.reporter && report.reporter !== report.displayName ? report.reporter : null,
+      report.email ? `<${report.email}>` : null,
+    ].filter(Boolean);
+    const who = parts.length ? parts.join(" ") : "someone signed out";
     const lines = [
       report.text,
       "",

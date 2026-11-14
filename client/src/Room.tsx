@@ -279,6 +279,10 @@ function Room() {
     () => localStorage.getItem(CHAT_MUTE_STORAGE_KEY) === "1",
   );
   const [emojiOpen, setEmojiOpen] = useState(false);
+  // Opened by hover, but a click inside makes it stay until someone clicks
+  // somewhere else (or presses Escape / sends) — a panel that vanishes when
+  // the pointer drifts is no good for picking several.
+  const emojiPinnedRef = useRef(false);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
   const fsChatInputRef = useRef<HTMLInputElement | null>(null);
   // Mirror for the socket handler, which is registered once and would
@@ -1854,7 +1858,7 @@ function Room() {
   // somebody chose is left alone.
   const volumeChosenRef = useRef(false);
   const silent = muted || volume === 0;
-  const [ccTracks, setCcTracks] = useState(0);
+  const [, setCcTracks] = useState(0);
   const [ccOn, setCcOn] = useState(false);
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Ignore sub-pixel pointer jitter — only restart the HUD hide timer when
@@ -1965,26 +1969,47 @@ function Room() {
         setCcOn(false);
         return;
       }
-      // Ask again here rather than trusting the probe on load: the track list
-      // can arrive late, and a button that's dead because we looked too early
-      // is worse than no button.
+      // The track list isn't there the instant the module loads — asking once
+      // and giving up was why the first click often did nothing at all. Say
+      // "on" straight away (so the press is felt), then keep asking for a few
+      // seconds, and only call it a failure if YouTube never produces one.
       player.loadModule?.("captions");
-      const list = player.getOption?.("captions", "tracklist");
-      setCcTracks(Array.isArray(list) ? list.length : 0);
-      if (!Array.isArray(list) || list.length === 0) return;
-      const tracks = (Array.isArray(list) ? list : []) as { languageCode?: string }[];
-      // The viewer's own language if the video has it, English if not, and
-      // whatever is first only as a last resort — tracklist order is
-      // YouTube's, and its first entry is regularly some language nobody in
-      // the room reads.
+      setCcOn(true);
       const mine = navigator.language?.slice(0, 2).toLowerCase();
-      const chosen =
+      const choose = (tracks: { languageCode?: string }[]) =>
+        // The viewer's language if the video has it, English if not, and
+        // whatever is first only as a last resort.
         tracks.find((t) => t.languageCode?.toLowerCase().startsWith(mine ?? "")) ??
         tracks.find((t) => t.languageCode?.toLowerCase().startsWith("en")) ??
         tracks[0];
-      player.setOption?.("captions", "track", chosen ?? { languageCode: "en" });
-      setCcOn(true);
+      let tries = 0;
+      const attempt = () => {
+        const list = player.getOption?.("captions", "tracklist");
+        const tracks = (Array.isArray(list) ? list : []) as { languageCode?: string }[];
+        if (tracks.length > 0) {
+          setCcTracks(tracks.length);
+          player.setOption?.("captions", "track", choose(tracks));
+          return;
+        }
+        if (++tries < 12) {
+          window.setTimeout(attempt, 250);
+          return;
+        }
+        // Nothing listed after three seconds. Try English blind — some videos
+        // serve captions without ever listing them — and if that was a miss
+        // the button falls back to off.
+        player.setOption?.("captions", "track", { languageCode: mine || "en" });
+        window.setTimeout(() => {
+          const now = player.getOption?.("captions", "track") as { languageCode?: string } | undefined;
+          if (!now?.languageCode) {
+            setCcOn(false);
+            setCcTracks(0);
+          }
+        }, 800);
+      };
+      attempt();
     } catch {
+      setCcOn(false);
       setCcTracks(0);
     }
   };
@@ -2257,8 +2282,21 @@ function Room() {
       // country flags that nobody scrolls a picker for. About 1,300 rather
       // than 1,900, and no boxes-with-a-cross on older devices.
       const KEEP_FLAGS = new Set(["🏁", "🚩", "🏳️", "🏴", "🏳️‍🌈", "🏴‍☠️", "🎌"]);
+      // Unicode files the hearts under "Smileys & Emotion", forty rows down,
+      // while the ❤️ tab is the symbols one — so the tab with a heart on it
+      // had no heart in it. Hearts move to the front of that tab.
+      const isHeart = (e: { slug: string }) => /heart/.test(e.slug) && !/face|eyes|cat|hand|hug/.test(e.slug);
+      const hearts = groups.flatMap((g) => (g.slug === "smileys_emotion" ? g.emojis.filter(isHeart) : []));
+      const heartChars = new Set(hearts.map((h) => h.emoji));
       setEmojiData(
         groups
+          .map((g) =>
+            g.slug === "smileys_emotion"
+              ? { ...g, emojis: g.emojis.filter((e) => !heartChars.has(e.emoji)) }
+              : g.slug === "symbols"
+                ? { ...g, emojis: [...hearts, ...g.emojis] }
+                : g,
+          )
           .map((group) => ({
             slug: group.slug,
             name: group.name,
@@ -2278,6 +2316,23 @@ function Room() {
       cancelled = true;
     };
   }, [emojiOpen, emojiWanted, emojiData.length]);
+
+  useEffect(() => {
+    if (!emojiOpen) {
+      emojiPinnedRef.current = false;
+      return;
+    }
+    const onDown = (e: PointerEvent) => {
+      const inside = (e.target as Element | null)?.closest?.(".emoji-panel, .emoji-toggle");
+      if (inside) emojiPinnedRef.current = true;
+      else {
+        emojiPinnedRef.current = false;
+        setEmojiOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [emojiOpen]);
 
   const rememberEmoji = (char: string) => {
     setRecentEmoji((was) => {
@@ -2373,7 +2428,10 @@ function Room() {
       onPointerEnter={(e) => {
         if (e.pointerType !== "touch") setEmojiOpen(true);
       }}
-      onClick={() => setEmojiOpen((open) => !open)}
+      onClick={() => {
+        emojiPinnedRef.current = true;
+        setEmojiOpen(true);
+      }}
       aria-label="Emoji picker"
       aria-expanded={emojiOpen}
     >
@@ -2737,7 +2795,7 @@ function Room() {
           )}
           {/* Up here where it can be found, rather than at the bottom of the
               page past everything. The room code goes with the report. */}
-          <ReportBug roomId={roomId} />
+          <ReportBug roomId={roomId} name={nickname || undefined} />
           <span
             className={`conn is-${connection}`}
             title={
@@ -3122,12 +3180,10 @@ function Room() {
                     )}
                     {videoId && (
                       <button
-                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}${ccTracks === 0 ? " is-empty" : ""}`}
+                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}`}
                         onClick={toggleCaptions}
                         title={
-                          ccTracks === 0
-                            ? "Subtitles — none found for this video"
-                            : ccOn
+                          ccOn
                               ? "Turn off subtitles"
                               : "Turn on subtitles"
                         }
@@ -3279,7 +3335,7 @@ function Room() {
                     <div
                       className="fs-emoji-wrap"
                       onPointerLeave={(e) => {
-                        if (e.pointerType !== "touch") setEmojiOpen(false);
+                        if (e.pointerType !== "touch" && !emojiPinnedRef.current) setEmojiOpen(false);
                       }}
                     >
                       {renderEmojiPanel(fsChatInputRef)}
@@ -3496,7 +3552,7 @@ function Room() {
             <div
               className="chat-bar-wrap"
               onPointerLeave={(e) => {
-                if (e.pointerType !== "touch") setEmojiOpen(false);
+                if (e.pointerType !== "touch" && !emojiPinnedRef.current) setEmojiOpen(false);
               }}
             >
               {renderEmojiPanel(chatInputRef)}

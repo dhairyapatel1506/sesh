@@ -1392,12 +1392,14 @@ button:disabled {
   margin-bottom: 0.4rem;
   padding-bottom: 0.3rem;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
+  /* All the tabs fit across the panel; nothing scrolls sideways. */
+  overflow: hidden;
 }
 
 .emoji-tabs button {
-  flex: none;
-  padding: 0.25rem 0.35rem;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.25rem 0;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -1516,8 +1518,13 @@ button:disabled {
   position: absolute;
   inset: 0;
   z-index: 3;
-  overflow-y: auto;
-  padding: 1rem;
+  /* Everything fits inside the picture: no scrollbar, the tiles share
+     whatever height is left after the heading. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 0.75rem 1rem 1rem;
   border-radius: 12px;
   background: rgba(10, 10, 14, 0.97);
   color: #fff;
@@ -1529,13 +1536,15 @@ button:disabled {
 }
 
 .end-overlay-head {
-  margin: 0.5rem 0 0.25rem;
+  flex: none;
+  margin: 0.3rem 0 0.2rem;
   font-size: 1.05rem;
   font-weight: 700;
 }
 
 .end-overlay-sub {
-  margin: 0 0 0.9rem;
+  flex: none;
+  margin: 0 0 0.6rem;
   font-size: 0.85rem;
   opacity: 0.8;
 }
@@ -1629,10 +1638,18 @@ button:disabled {
 
 .end-overlay-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 0.75rem;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  /* Two rows share the height; anything past them collapses to nothing
+     rather than pushing the page into a scrollbar. */
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 0;
+  gap: 0.6rem;
   max-width: 56rem;
   margin: 0 auto;
+  overflow: hidden;
 }
 
 .end-tile {
@@ -1647,6 +1664,8 @@ button:disabled {
   font: inherit;
   text-align: left;
   cursor: pointer;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .end-tile:hover {
@@ -1655,7 +1674,8 @@ button:disabled {
 
 .end-tile img {
   width: 100%;
-  aspect-ratio: 16 / 9;
+  flex: 1 1 0;
+  min-height: 0;
   object-fit: cover;
   border-radius: 6px;
 }
@@ -2443,6 +2463,7 @@ button:disabled {
   gap: 0.1rem;
   max-height: 11rem;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Someone typing: their nametag over a bubble of three breathing dots — the
@@ -3129,4 +3150,61 @@ button:disabled {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   pointer-events: none;
+}
+
+
+/* ---- feedback: close button, and the landing page's upward panel ---- */
+
+.report-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.report-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  line-height: 0;
+}
+
+.report-x:hover {
+  background: var(--accent-bg);
+  filter: none;
+}
+
+/* On the landing page the chip sits low and centred, so the panel opens
+   upward from it, centred on it, covering what's above on purpose. */
+.feedback-menu.is-above {
+  display: inline-flex;
+  padding-bottom: 0;
+  margin-bottom: 0;
+  padding-top: 0.5rem;
+  margin-top: -0.5rem;
+}
+
+.feedback-menu.is-above .feedback-popover {
+  top: auto;
+  bottom: 100%;
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  animation: menu-in-up 130ms ease-out;
+}
+
+.feedback-menu.is-above .feedback-popover::before {
+  bottom: auto;
+  top: 100%;
+}
+
+@keyframes menu-in-up {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to { opacity: 1; transform: translateX(-50%); }
 }
