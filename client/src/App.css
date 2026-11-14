@@ -3505,3 +3505,27 @@ button:disabled {
   bottom: 0.4rem;
   font-size: 0.58rem;
 }
+
+/* The optional reply address, for people who aren't signed in. */
+.report-email {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.report-email input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: inherit;
+}
+
+.report-email-bad {
+  color: #d9534f;
+}

@@ -48,6 +48,7 @@ import {
   reportImage,
   MAX_IMAGES,
   describeBrowser,
+  cleanContactEmail,
   REPORT_RETENTION_DAYS,
   saveReport,
   vetReport,
@@ -426,9 +427,13 @@ app.post("/api/report", async (req, res) => {
     // kept short, and only ever shown as text.
     const displayName =
       typeof req.body?.name === "string" ? req.body.name.replace(/\s+/g, " ").trim().slice(0, 40) || null : null;
+    // Only for people with no account: a signed-in reporter's own address is
+    // already known and takes precedence.
+    const contactEmail = req.userId ? null : cleanContactEmail(req.body?.contactEmail);
     const id = await saveReport({
       kind,
       displayName,
+      contactEmail,
       text,
       client: req.body?.client === "cli" ? "cli" : "web",
       ipHash,
@@ -455,7 +460,8 @@ app.post("/api/report", async (req, res) => {
         client: req.body?.client === "cli" ? "cli" : "web",
         roomId,
         reporter: account?.name ?? null,
-        email: account?.email ?? null,
+        email: account?.email ?? contactEmail,
+        emailGiven: !account && Boolean(contactEmail),
         displayName,
         userAgent: (req.headers["user-agent"] as string | undefined) ?? null,
         images,
@@ -563,7 +569,7 @@ app.get("/admin", async (req, res) => {
         const meta = [
           report.kind === "idea" ? "💡 idea" : "🐞 bug",
           who.length ? escapeHtml(who.join(" ")) : "signed out",
-          report.email ? escapeHtml(report.email) : null,
+          report.email ? escapeHtml(report.email) : report.contactEmail ? escapeHtml(`${report.contactEmail} (given)`) : null,
           escapeHtml(report.client),
           report.roomId ? `room ${escapeHtml(report.roomId)}` : "no room",
           when,

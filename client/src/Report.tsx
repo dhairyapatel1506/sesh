@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE } from "./socket";
+import { useAuth } from "./auth";
 
 type Limits = {
   enabled: boolean;
@@ -214,6 +215,17 @@ function ReportDialog({
       // A private window keeps nothing; the form still works.
     }
   };
+  const { user } = useAuth();
+  // Signed out, a reply address is the only way to reach someone back — so
+  // it's offered, and optional. Kept for the session like the draft.
+  const [contact, setContact] = useState(() => {
+    try {
+      return sessionStorage.getItem("sesh-feedback-email") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const contactOk = contact.trim() === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.trim());
   const [images, setImages] = useState<{ dataUrl: string; bytes: number }[]>([]);
   const maxImages = limits.maxImages ?? 1;
   const [imageError, setImageError] = useState<string | null>(null);
@@ -224,7 +236,7 @@ function ReportDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
-  const canSend = text.trim().length >= limits.minLength && !busy;
+  const canSend = text.trim().length >= limits.minLength && contactOk && !busy;
 
   useEffect(() => {
     textRef.current?.focus();
@@ -312,6 +324,7 @@ function ReportDialog({
           kind,
           client: "web",
           ...(name ? { name } : {}),
+          ...(!user && contact.trim() ? { contactEmail: contact.trim() } : {}),
           ...(roomId ? { roomId } : {}),
           ...(images.length > 0 ? { images: images.map((i) => i.dataUrl) } : {}),
         }),
@@ -426,6 +439,27 @@ function ReportDialog({
                 : `${text.trim().length} / ${limits.maxLength}`}
             </p>
 
+            {!user && (
+              <label className="report-email">
+                <span>Your email, if you'd like a reply (optional)</span>
+                <input
+                  type="email"
+                  value={contact}
+                  maxLength={120}
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  onChange={(e) => {
+                    setContact(e.target.value);
+                    try {
+                      sessionStorage.setItem("sesh-feedback-email", e.target.value);
+                    } catch {
+                      // A private window keeps nothing; the form still works.
+                    }
+                  }}
+                />
+                {!contactOk && <span className="report-email-bad">That doesn't look like an email address.</span>}
+              </label>
+            )}
             {images.length > 0 && (
               <div className="report-thumbs">
                 {images.map((image, n) => (

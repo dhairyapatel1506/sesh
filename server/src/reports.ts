@@ -91,6 +91,7 @@ export type ReportInput = {
   images?: { data: Buffer; mime: string }[];
   kind?: "bug" | "idea";
   displayName?: string | null;
+  contactEmail?: string | null;
 };
 
 /** Everything that can be checked without touching the database. */
@@ -192,8 +193,8 @@ export async function saveReport(input: ReportInput): Promise<string> {
   const id = crypto.randomUUID();
   await query(
     `insert into bug_reports
-       (id, user_id, room_id, client, body, user_agent, ip_hash, kind, display_name)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       (id, user_id, room_id, client, body, user_agent, ip_hash, kind, display_name, contact_email)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       id,
       input.userId ?? null,
@@ -204,6 +205,7 @@ export async function saveReport(input: ReportInput): Promise<string> {
       input.ipHash,
       input.kind === "idea" ? "idea" : "bug",
       input.displayName?.slice(0, 40) ?? null,
+      input.contactEmail ?? null,
     ],
   );
   for (const [idx, image] of (input.images ?? []).entries()) {
@@ -225,6 +227,7 @@ export type StoredReport = {
   userAgent: string | null;
   reporter: string | null;
   email: string | null;
+  contactEmail: string | null;
   displayName: string | null;
   kind: "bug" | "idea";
   ipHash: string | null;
@@ -241,13 +244,14 @@ export async function listReports(limit = 50): Promise<StoredReport[]> {
     user_agent: string | null;
     name: string | null;
     email: string | null;
+    contact_email: string | null;
     display_name: string | null;
     kind: string;
     ip_hash: string | null;
     image_count: number;
   }>(
     `select r.id, r.created_at, r.client, r.room_id, r.body, r.user_agent,
-            u.name, u.email, r.display_name, r.kind, r.ip_hash, ((r.image is not null)::int + (select count(*) from bug_report_images i where i.report_id = r.id))::int as image_count
+            u.name, u.email, r.contact_email, r.display_name, r.kind, r.ip_hash, ((r.image is not null)::int + (select count(*) from bug_report_images i where i.report_id = r.id))::int as image_count
        from bug_reports r
        left join users u on u.id = r.user_id
       order by r.created_at desc
@@ -263,6 +267,7 @@ export async function listReports(limit = 50): Promise<StoredReport[]> {
     userAgent: row.user_agent,
     reporter: row.name,
     email: row.email,
+    contactEmail: row.contact_email,
     displayName: row.display_name,
     kind: row.kind === "idea" ? "idea" : "bug",
     ipHash: row.ip_hash,
@@ -351,4 +356,13 @@ export function describeBrowser(ua: string | null | undefined): string | null {
               ? "Linux"
               : null;
   return system ? `${browser} on ${system}` : browser;
+}
+
+/** A plausible address, or null. Deliberately loose: it only has to be
+ *  something a person could reply to, and the form has already said it's
+ *  optional. */
+export function cleanContactEmail(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const email = value.trim().slice(0, 120);
+  return /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(email) ? email : null;
 }

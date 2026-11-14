@@ -53,6 +53,9 @@ type ReportMail = {
   roomId: string | null;
   reporter: string | null;
   email?: string | null;
+  // True when the address was typed into the form rather than read off an
+  // account, so it's worth saying so.
+  emailGiven?: boolean;
   displayName?: string | null;
   userAgent: string | null;
   images: { data: Buffer; mime: string }[];
@@ -145,7 +148,7 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
       // Its own line and without angle brackets: the mail provider treats
       // <anything> in the body as an HTML tag and drops it, which is how the
       // address kept going missing.
-      report.email ? `email:   ${report.email}` : null,
+      report.email ? `email:   ${report.email}${report.emailGiven ? "  (typed in by the sender, not verified)" : ""}` : null,
       report.userAgent ? `browser: ${describeBrowser(report.userAgent)}` : null,
       left > 0 ? `screenshots: ${left} more too large to attach — they're stored with the report` : null,
       report.dashboardUrl ? `all reports: ${report.dashboardUrl}` : null,
