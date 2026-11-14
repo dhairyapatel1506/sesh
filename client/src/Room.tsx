@@ -3435,7 +3435,7 @@ const HUD_IDLE_MS = 2500;
                         someone who wants the last frame, or YouTube's own
                         controls, shouldn't have to load another video to get
                         at them. It comes back with the next video that ends. */}
-                    {(countdown || endSettled) && (
+                    {!countdown && endSettled && (
                     <button
                       className="end-overlay-close"
                       onClick={() => setEnded(false)}
