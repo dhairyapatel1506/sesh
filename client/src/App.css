@@ -3446,3 +3446,24 @@ button:disabled {
 .friends-popover {
   min-width: 28rem;
 }
+
+/* The ✕ lives in the menu's corner and takes no row of its own. */
+.friends-popover .friends {
+  position: relative;
+  margin-top: 0;
+}
+
+.friends-popover .friends-head {
+  position: absolute;
+  top: -0.25rem;
+  right: -0.25rem;
+  z-index: 4;
+}
+
+.friends-popover .friends-head h2 {
+  display: none;
+}
+
+.friends-popover .friends-code {
+  padding-right: 2rem;
+}
