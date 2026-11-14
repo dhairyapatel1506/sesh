@@ -2440,6 +2440,35 @@ button:disabled {
   box-shadow: var(--shadow);
 }
 
+.emoji-top {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.4rem;
+}
+
+.emoji-top .emoji-search {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  margin-bottom: 0;
+}
+
+.emoji-panel .emoji-x {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  color: var(--text);
+}
+
+.fs-chat .emoji-panel .emoji-x {
+  color: #fff;
+}
+
 .emoji-search {
   width: 100%;
   /* The global input rule adds padding and a border, which a plain 100%
@@ -3207,4 +3236,12 @@ button:disabled {
 @keyframes menu-in-up {
   from { opacity: 0; transform: translateX(-50%) translateY(4px); }
   to { opacity: 1; transform: translateX(-50%); }
+}
+
+/* Captions are drawn by YouTube near the bottom of its frame, which the clip
+   normally crops away — so with them on, the clip shrinks until they sit
+   inside the picture. The cost is that YouTube's own title and paused strip
+   can show at the edges while captions are on. */
+#yt-player.cc-on {
+  --yt-clip: 8px;
 }

@@ -2373,13 +2373,20 @@ function Room() {
   const renderEmojiPanel = (target: React.RefObject<HTMLInputElement | null>) =>
     emojiOpen && (
       <div className="emoji-panel">
-        <input
-          className="emoji-search"
-          value={emojiQuery}
-          onChange={(e) => setEmojiQuery(e.target.value)}
-          placeholder="Search emoji…"
-          autoFocus
-        />
+        <div className="emoji-top">
+          <input
+            className="emoji-search"
+            value={emojiQuery}
+            onChange={(e) => setEmojiQuery(e.target.value)}
+            placeholder="Search emoji…"
+            autoFocus
+          />
+          <button className="emoji-x" onClick={() => setEmojiOpen(false)} aria-label="Close" title="Close">
+            <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
         {/* Categories, the way every other picker does it — and Recent first,
             because the emoji someone just used is the one they want again.
             The full set (about 1,900) is a dynamic import, so it costs
@@ -3043,7 +3050,7 @@ function Room() {
                   if (!scrubRef.current) hideHud();
                 }}
               >
-                <div id="yt-player" ref={playerContainerRef} />
+                <div id="yt-player" ref={playerContainerRef} className={ccOn ? "cc-on" : undefined} />
                 {/* What's playing, where a player puts it. Comes and goes with
                     the controls, over a gradient rather than a band — there is
                     nothing of YouTube's left up there to hide. */}
