@@ -544,15 +544,15 @@ app.get("/admin", async (req, res) => {
         const who = [
           report.displayName,
           report.reporter && report.reporter !== report.displayName ? report.reporter : null,
-          report.email ? `<${report.email}>` : null,
         ].filter(Boolean);
         const meta = [
           report.kind === "idea" ? "💡 idea" : "🐞 bug",
           who.length ? escapeHtml(who.join(" ")) : "signed out",
+          report.email ? escapeHtml(report.email) : null,
           escapeHtml(report.client),
           report.roomId ? `room ${escapeHtml(report.roomId)}` : "no room",
           when,
-        ].join(" · ");
+        ].filter(Boolean).join(" · ");
         return `<article>
   <p class="meta">${meta}</p>
   <p class="body">${escapeHtml(report.body)}</p>

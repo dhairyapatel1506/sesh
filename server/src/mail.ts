@@ -64,7 +64,15 @@ type ReportMail = {
 
 type Attachment = { name: string; content: string };
 
+// Staging sends real mail to the same inbox as production, so every message
+// says which one it came from, in the subject and again in the body.
+const isStaging = () => env("SESH_ENV") === "staging";
+
 async function post(subject: string, text: string, attachment?: Attachment[]): Promise<void> {
+  if (isStaging()) {
+    subject = `[STAGING] ${subject}`;
+    text = `*** STAGING — sent from sesh-staging, not the live site ***\n\n${text}`;
+  }
   const res = await fetch(BREVO_ENDPOINT, {
     method: "POST",
     headers: {
@@ -114,7 +122,6 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
     const parts = [
       report.displayName,
       report.reporter && report.reporter !== report.displayName ? report.reporter : null,
-      report.email ? `<${report.email}>` : null,
     ].filter(Boolean);
     const who = parts.length ? parts.join(" ") : "someone signed out";
     const lines = [
@@ -123,6 +130,10 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
       "—",
       `kind:    ${kind}`,
       `from:    ${who} (${report.client}, ${where})`,
+      // Its own line and without angle brackets: the mail provider treats
+      // <anything> in the body as an HTML tag and drops it, which is how the
+      // address kept going missing.
+      report.email ? `email:   ${report.email}` : null,
       report.userAgent ? `browser: ${describeBrowser(report.userAgent)}` : null,
       report.dashboardUrl ? `all reports: ${report.dashboardUrl}` : null,
     ].filter(Boolean);
