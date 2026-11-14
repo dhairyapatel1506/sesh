@@ -833,6 +833,9 @@ function Room() {
   const [friendsOpen, setFriendsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const friendsMenuRef = useRef<HTMLDivElement>(null);
+  // Hover opens the menu, a click inside keeps it open until a click
+  // somewhere else (or Escape).
+  const friendsPinnedRef = useRef(false);
   const { friends } = useFriends();
   // Around, not watching: anyone with Sesh open counts, whether or not they're
   // in a room. Counting only the latter meant a badge of zero while three
@@ -846,9 +849,13 @@ function Room() {
   const friendsUnread = totalUnread(friends);
 
   useEffect(() => {
-    if (!friendsOpen) return;
+    if (!friendsOpen) {
+      friendsPinnedRef.current = false;
+      return;
+    }
     const onPointerDown = (event: PointerEvent) => {
-      if (!friendsMenuRef.current?.contains(event.target as Node)) setFriendsOpen(false);
+      if (friendsMenuRef.current?.contains(event.target as Node)) friendsPinnedRef.current = true;
+      else setFriendsOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setFriendsOpen(false);
@@ -3032,13 +3039,16 @@ const HUD_IDLE_MS = 2500;
                 if (e.pointerType !== "touch") setFriendsOpen(true);
               }}
               onPointerLeave={(e) => {
-                if (e.pointerType !== "touch") setFriendsOpen(false);
+                if (e.pointerType !== "touch" && !friendsPinnedRef.current) setFriendsOpen(false);
               }}
             >
               <button
                 className="meta-chip friends-toggle"
                 aria-expanded={friendsOpen}
-                onClick={() => setFriendsOpen((open) => !open)}
+                onClick={() => {
+                  friendsPinnedRef.current = true;
+                  setFriendsOpen(true);
+                }}
               >
                 Friends
                 {friendsOnline > 0 && (

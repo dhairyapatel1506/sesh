@@ -3274,3 +3274,56 @@ button:disabled {
     opacity: 0.5;
   }
 }
+
+
+/* ---- friends: code chips and the message button ---- */
+
+/* The room code's chip, wherever a friend code is shown. */
+.friends-code {
+  display: flex;
+  margin-bottom: 0.6rem;
+}
+
+.meta-chip.code-chip.is-small {
+  min-height: 1.45rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.68rem;
+}
+
+.friend-who {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.friend-who .friend-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.friend-actions button.friend-msg {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  width: auto;
+  min-width: 1.9rem;
+  height: 1.9rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-h);
+}
+
+.friend-actions button.friend-msg:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+  filter: none;
+}

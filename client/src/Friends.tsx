@@ -12,6 +12,7 @@ export type Friend = {
   /** Sesh is open somewhere — a tab or a terminal — but not in a room. */
   online: boolean;
   roomId: string | null;
+  friendCode?: string;
   unread: number;
   lastMessage: { text: string; at: number; mine: boolean } | null;
 };
@@ -138,6 +139,37 @@ export function useFriends() {
   return { friends, refresh, loaded };
 }
 
+
+// A friend code in the same chip as the room code in a room's header: the
+// label is all that shows until you hover, when the code opens out of it, and
+// a click copies it with the same green flash and lap round the border.
+function CodeChip({ label, code, small }: { label: string; code: string; small?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className={`meta-chip code-chip${small ? " is-small" : ""}${copied ? " is-copied" : ""}`}
+      title={`${label} ${code} — click to copy`}
+      onClick={() => {
+        // Confirm on the press, not on the clipboard promise.
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1000);
+        void navigator.clipboard?.writeText(code).catch(() => {});
+      }}
+    >
+      <span className="meta-inner">
+        <span className="meta-label">{copied ? "Copied" : label}</span>
+        <span className="meta-value">{code}</span>
+      </span>
+      {copied && (
+        <svg className="chip-lap" aria-hidden>
+          <rect pathLength={100} />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 export function FriendsPanel({
   mode,
   roomId,
@@ -153,7 +185,6 @@ export function FriendsPanel({
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [talkingTo, setTalkingTo] = useState<string | null>(null);
 
   if (!user) return null;
@@ -179,13 +210,6 @@ export function FriendsPanel({
     }, "Request sent.");
   };
 
-  const copyCode = () => {
-    void navigator.clipboard.writeText(user.friendCode).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
-  };
-
   const accepted = friends
     .filter((f) => f.status === "accepted")
     // Whoever you could do something with, first. Alphabetical inside each
@@ -209,12 +233,9 @@ export function FriendsPanel({
     <div className="friends">
       <h2>Friends</h2>
 
-      <p className="friends-code">
-        Your code: <code>{user.friendCode}</code>{" "}
-        <button className="link-button" onClick={copyCode}>
-          {copied ? "copied" : "copy"}
-        </button>
-      </p>
+      <div className="friends-code">
+        <CodeChip label="Your code" code={user.friendCode} />
+      </div>
 
       <div className="load-bar">
         <input
@@ -260,14 +281,7 @@ export function FriendsPanel({
           const here = mode === "room" && friend.roomId === roomId;
           return (
             <li key={friend.id} className={`friend-row ${presence}`}>
-              {/* The whole name is the way into a conversation: a separate
-                  "message" button on every row would triple the width of a
-                  list whose rows are mostly a name. */}
-              <button
-                className="friend-open"
-                title={`Message ${friend.name}`}
-                onClick={() => setTalkingTo(friend.id)}
-              >
+              <span className="friend-who">
                 {/* The dot and the row's dimming already carry online /
                     offline, so spelling it out beside them was the same fact
                     three times. "in a room" stays: that one is an invitation
@@ -277,12 +291,26 @@ export function FriendsPanel({
                   <span className="sr-only">{presenceLabel(presence)}</span>
                 </span>
                 <span className="friend-name">{friend.name}</span>
+                {friend.friendCode && <CodeChip label="Code" code={friend.friendCode} small />}
                 {!here && presence === "in-room" && (
                   <span className="friend-where">in a room</span>
                 )}
-                {friend.unread > 0 && <span className="friend-unread">{friend.unread}</span>}
-              </button>
+              </span>
               <span className="friend-actions">
+                {/* The one way into a conversation: nothing else on the row
+                    is a button for it, so a stray click never opens one. */}
+                <button
+                  className="friend-msg"
+                  title={`Message ${friend.name}`}
+                  aria-label={`Message ${friend.name}`}
+                  onClick={() => setTalkingTo(friend.id)}
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
+                    <rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M4 7.5l8 6 8-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  {friend.unread > 0 && <span className="friend-unread">{friend.unread}</span>}
+                </button>
                 {/* In a room: offer to pull them here. On the landing page:
                     offer to go where they are. Only one of the two ever makes
                     sense at a time — and neither makes sense for someone
@@ -429,6 +457,7 @@ function Conversation({ friend, onBack }: { friend: Friend; onBack: () => void }
           <span className="sr-only">{presenceLabel(presence)}</span>
         </span>
         <span className="dm-with">{friend.name}</span>
+        {friend.friendCode && <CodeChip label="Code" code={friend.friendCode} small />}
         {presence === "in-room" && <span className="friend-where">in a room</span>}
       </div>
 

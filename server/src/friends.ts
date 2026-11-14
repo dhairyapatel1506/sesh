@@ -11,6 +11,8 @@ export type Friend = {
   // Which room they're in right now, if any. Filled in by the caller from
   // live presence, which lives in memory rather than the database.
   roomId?: string | null;
+  // Shown only for settled friends — a pending request reveals nothing.
+  friendCode?: string;
 };
 
 // The pair is stored sorted, so every read and write has to sort the same way
@@ -25,8 +27,9 @@ export async function listFriends(userId: string): Promise<Friend[]> {
     avatar_url: string | null;
     status: string;
     requested_by: string;
+    friend_code: string;
   }>(
-    `select u.id, u.name, u.avatar_url, f.status, f.requested_by
+    `select u.id, u.name, u.avatar_url, u.friend_code, f.status, f.requested_by
        from friendships f
        join users u
          on u.id = case when f.user_a_id = $1 then f.user_b_id else f.user_a_id end
@@ -39,6 +42,7 @@ export async function listFriends(userId: string): Promise<Friend[]> {
     id: row.id,
     name: row.name,
     avatarUrl: row.avatar_url,
+    ...(row.status === "accepted" ? { friendCode: row.friend_code } : {}),
     status:
       row.status === "accepted"
         ? "accepted"
