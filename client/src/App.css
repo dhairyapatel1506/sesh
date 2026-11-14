@@ -3191,6 +3191,9 @@ button:disabled {
 }
 
 .report-x {
+  /* The box centre matches the title's, but the title's letters sit visually
+     higher than its line box; lifted so the ✕ lines up with what you see. */
+  transform: translateY(-2px);
   display: flex;
   align-items: center;
   justify-content: center;
