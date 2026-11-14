@@ -374,6 +374,7 @@ button:disabled {
    while paused. */
 #yt-player {
   --yt-clip: clamp(64px, 14%, 150px);
+  background: #000;
   position: relative;
   overflow: hidden;
   aspect-ratio: 16 / 9;
