@@ -3431,3 +3431,18 @@ button:disabled {
 .friends-popover {
   min-width: 26rem;
 }
+
+/* Opaque even when hovered, so what it opens over doesn't show through. */
+.code-slot > .code-chip:not(.code-ghost) {
+  background-color: var(--bg);
+}
+
+.code-slot > .code-chip:not(.code-ghost):hover:not(.is-copied),
+.code-slot > .code-chip:not(.code-ghost):focus-visible:not(.is-copied) {
+  background-color: var(--bg);
+  background-image: linear-gradient(var(--accent-bg), var(--accent-bg));
+}
+
+.friends-popover {
+  min-width: 28rem;
+}
