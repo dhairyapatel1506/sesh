@@ -1163,8 +1163,11 @@ button:disabled {
   opacity: 0.75;
 }
 
-.pbar-cc.is-empty {
-  opacity: 0.42;
+.pbar-cc.is-empty,
+.pbar-cc:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: line-through;
 }
 
 .pbar-cc.is-on {

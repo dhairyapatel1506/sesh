@@ -546,6 +546,7 @@ function Room() {
       setRate(1);
       positionSampleRef.current = null;
       applyRemote(() => player.seekTo(target, true), true);
+      noteSeek();
       return;
     }
     nudgingRef.current = true;
@@ -587,6 +588,7 @@ function Room() {
       advanced < -SEEK_JUMP_SECONDS ||
       advanced > elapsed * playbackRateRef.current + SEEK_JUMP_SECONDS;
     if (!jumped) return;
+    noteSeek();
 
     // Mid-scrub the player passes through BUFFERING, where "is it playing?"
     // has no honest answer — and guessing wrong here would pause or resume
@@ -739,6 +741,7 @@ function Room() {
       if (state.isPlaying) {
         // Lead the seek by this tab's expected play-start delay, so playback
         // begins on time rather than that far behind everyone else.
+        noteSeek();
         playerRef.current!.seekTo(target + playStartLagRef.current, true);
         if (!autoplayGrantedRef.current) {
           // Browsers block unmuted autoplay without a user gesture; start
@@ -751,6 +754,7 @@ function Room() {
         playRequestedAtRef.current = performance.now();
         playerRef.current!.playVideo();
       } else {
+        noteSeek();
         playerRef.current!.seekTo(target, true);
         playerRef.current!.pauseVideo();
       }
@@ -1076,6 +1080,7 @@ function Room() {
             // it started so sync can leave an in-flight change alone.
             bufferingSinceRef.current =
               event.data === PlayerState.BUFFERING ? performance.now() : null;
+            setYtState(event.data);
             // A finished video must be reported, or the server keeps
             // extrapolating "playing" time past the end forever and every
             // resync tries to resume — which restarts an ended video from 0.
@@ -1859,7 +1864,16 @@ const HUD_IDLE_MS = 2500;
   // somebody chose is left alone.
   const volumeChosenRef = useRef(false);
   const silent = muted || volume === 0;
-  const [, setCcTracks] = useState(0);
+  // Whether this video has subtitles at all: unknown while we look, then yes
+  // or no. A video with none gets a disabled button, as on YouTube.
+  const [ccStatus, setCcStatus] = useState<"checking" | "has" | "none">("checking");
+  const ccChosenRef = useRef<{ languageCode?: string } | null>(null);
+  const ccOnRef = useRef(false);
+  const ccReprobedRef = useRef(false);
+  const [ccProbe, setCcProbe] = useState(0);
+  const [ytState, setYtState] = useState<number>(-1);
+  const [seekTick, setSeekTick] = useState(0);
+  const noteSeek = () => setSeekTick((t) => t + 1);
   const [ccOn, setCcOn] = useState(false);
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Ignore sub-pixel pointer jitter — only restart the HUD hide timer when
@@ -1930,71 +1944,118 @@ const HUD_IDLE_MS = 2500;
     return () => window.clearInterval(timer);
   }, [videoId, hudShown]);
 
+  useEffect(() => {
+    ccOnRef.current = ccOn;
+  }, [ccOn]);
+
   // Captions are the one thing worth keeping from YouTube's own menu, and
-  // the iframe API can drive them — undocumented, so ask politely and only
-  // show the button if a track list comes back.
+  // the iframe API can drive them — undocumented, so ask politely. The track
+  // list shows up late (and sometimes only once the video plays), so keep
+  // asking for ten seconds before deciding the video has none.
   useEffect(() => {
     if (!videoId) return;
-    setCcTracks(0);
+    setCcStatus("checking");
     setCcOn(false);
+    ccChosenRef.current = null;
     let cancelled = false;
-    const ask = window.setTimeout(() => {
+    let timer = 0;
+    let tries = 0;
+    let loaded = false;
+    const poll = () => {
+      if (cancelled) return;
       const player = readyPlayer();
-      if (!player || cancelled) return;
-      try {
-        player.loadModule?.("captions");
-        window.setTimeout(() => {
-          if (cancelled) return;
+      if (player) {
+        try {
+          if (!loaded) {
+            player.loadModule?.("captions");
+            loaded = true;
+          }
           const list = player.getOption?.("captions", "tracklist");
-          setCcTracks(Array.isArray(list) ? list.length : 0);
-          // Loading the module also switches captions on, and asking whether
-          // a video has any is not the same as wanting them. Put them back.
-          player.setOption?.("captions", "track", {});
-        }, 1200);
-      } catch {
-        // No captions module on this video: the button simply doesn't appear.
+          if (Array.isArray(list) && list.length > 0) {
+            setCcStatus("has");
+            // Loading the module also switches captions on, and asking
+            // whether a video has any is not the same as wanting them.
+            if (!ccOnRef.current) player.setOption?.("captions", "track", {});
+            return;
+          }
+        } catch {
+          // Fall through to "none" once the tries run out.
+        }
       }
-    }, 1500);
+      if (++tries < 14) timer = window.setTimeout(poll, 700);
+      else setCcStatus("none");
+    };
+    timer = window.setTimeout(poll, 1500);
     return () => {
       cancelled = true;
-      window.clearTimeout(ask);
+      window.clearTimeout(timer);
     };
+  }, [videoId, ccProbe]);
+
+  // A video that was paused from the start may only list its tracks once it
+  // plays: look once more the first time it does.
+  useEffect(() => {
+    if (ccStatus !== "none" || ytState !== PlayerState.PLAYING || ccReprobedRef.current) return;
+    ccReprobedRef.current = true;
+    setCcProbe((n) => n + 1);
+  }, [ccStatus, ytState]);
+  useEffect(() => {
+    ccReprobedRef.current = false;
   }, [videoId]);
 
+  // Captions sometimes drop out from under the button (after a seek, or when
+  // the frame is resized): if it says on and YouTube has no track selected,
+  // select it again rather than leaving the viewer to toggle.
+  useEffect(() => {
+    if (!ccOn) return;
+    const timer = window.setInterval(() => {
+      const player = readyPlayer();
+      if (!player) return;
+      try {
+        const now = player.getOption?.("captions", "track") as { languageCode?: string } | undefined;
+        if (now?.languageCode) return;
+        const chosen = ccChosenRef.current;
+        if (chosen) player.setOption?.("captions", "track", chosen);
+      } catch {
+        // Next tick tries again.
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [ccOn]);
+
   // Captions sit inside YouTube's bottom chrome strip, which the clip crops
-  // off. So the clip only opens up while captions are on AND the video is
-  // actually playing (YouTube's own chrome is asleep then), and closes the
-  // instant it pauses — the paused strip never gets a chance to show. A
-  // short wait after resuming lets the paused strip fade before it opens.
+  // off. So the clip only opens up while captions are on AND the video has
+  // been steadily playing (YouTube's own chrome is asleep then). Pausing,
+  // buffering or any seek closes it at once and restarts the wait — YouTube
+  // shows its overlay through all of those and lets it fade ~3.6s later.
   const [ccLift, setCcLift] = useState(false);
   useEffect(() => {
-    if (!(ccOn && localPlaying)) {
+    if (!(ccOn && localPlaying && ytState === PlayerState.PLAYING)) {
       setCcLift(false);
       return;
     }
+    setCcLift(false);
     const timer = window.setTimeout(() => setCcLift(true), CC_LIFT_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [ccOn, localPlaying]);
+  }, [ccOn, localPlaying, ytState, seekTick]);
 
   const toggleCaptions = () => {
     const player = readyPlayer();
-    if (!player) return;
+    if (!player || ccStatus === "none") return;
     try {
       if (ccOn) {
         player.setOption?.("captions", "track", {});
+        ccChosenRef.current = null;
         setCcOn(false);
         return;
       }
-      // The track list isn't there the instant the module loads — asking once
-      // and giving up was why the first click often did nothing at all. Say
-      // "on" straight away (so the press is felt), then keep asking for a few
-      // seconds, and only call it a failure if YouTube never produces one.
+      // Say "on" straight away so the press is felt, then keep asking for the
+      // track list for a few seconds; only if YouTube never produces one is
+      // the video marked as having none (and the button disabled).
       player.loadModule?.("captions");
       setCcOn(true);
       const mine = navigator.language?.slice(0, 2).toLowerCase();
       const choose = (tracks: { languageCode?: string }[]) =>
-        // The viewer's language if the video has it, English if not, and
-        // whatever is first only as a last resort.
         tracks.find((t) => t.languageCode?.toLowerCase().startsWith(mine ?? "")) ??
         tracks.find((t) => t.languageCode?.toLowerCase().startsWith("en")) ??
         tracks[0];
@@ -2003,30 +2064,23 @@ const HUD_IDLE_MS = 2500;
         const list = player.getOption?.("captions", "tracklist");
         const tracks = (Array.isArray(list) ? list : []) as { languageCode?: string }[];
         if (tracks.length > 0) {
-          setCcTracks(tracks.length);
-          player.setOption?.("captions", "track", choose(tracks));
+          setCcStatus("has");
+          const chosen = choose(tracks);
+          ccChosenRef.current = chosen;
+          player.setOption?.("captions", "track", chosen);
           return;
         }
         if (++tries < 12) {
           window.setTimeout(attempt, 250);
           return;
         }
-        // Nothing listed after three seconds. Try English blind — some videos
-        // serve captions without ever listing them — and if that was a miss
-        // the button falls back to off.
-        player.setOption?.("captions", "track", { languageCode: mine || "en" });
-        window.setTimeout(() => {
-          const now = player.getOption?.("captions", "track") as { languageCode?: string } | undefined;
-          if (!now?.languageCode) {
-            setCcOn(false);
-            setCcTracks(0);
-          }
-        }, 800);
+        setCcOn(false);
+        setCcStatus("none");
       };
       attempt();
     } catch {
       setCcOn(false);
-      setCcTracks(0);
+      setCcStatus("none");
     }
   };
 
@@ -3206,10 +3260,13 @@ const HUD_IDLE_MS = 2500;
                     )}
                     {videoId && (
                       <button
-                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}`}
+                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}${ccStatus === "none" ? " is-empty" : ""}`}
                         onClick={toggleCaptions}
+                        disabled={ccStatus === "none"}
                         title={
-                          ccOn
+                          ccStatus === "none"
+                            ? "No subtitles for this video"
+                            : ccOn
                               ? "Turn off subtitles"
                               : "Turn on subtitles"
                         }
