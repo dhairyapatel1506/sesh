@@ -23,6 +23,8 @@ export interface YTPlayer {
   // shown when something does.
   loadModule?(module: string): void;
   getOption?(module: string, option: string): unknown;
+  getOptions?(): unknown;
+  getVideoData?(): unknown;
   setOption?(module: string, option: string, value: unknown): void;
   setVolume(volume: number): void;
   loadVideoById(videoId: string, startSeconds?: number): void;

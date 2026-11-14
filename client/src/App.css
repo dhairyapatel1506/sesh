@@ -418,9 +418,13 @@ button:disabled {
 #yt-player iframe {
   display: block;
   position: absolute;
+  /* Centred, and as wide as the video's own shape (--yt-fw, 1 for 16:9): see
+     frameWidth in Room.tsx — a wider frame zooms narrower videos in. */
   left: 0;
+  right: 0;
+  margin: 0 auto;
   top: calc(-1 * var(--yt-clip));
-  width: 100%;
+  width: calc(100% * var(--yt-fw, 1));
   height: calc(100% + 2 * var(--yt-clip));
   border: 0;
   border-radius: 0;
@@ -458,7 +462,7 @@ button:disabled {
 }
 
 .player-frame.is-fullscreen #yt-player iframe {
-  width: 100% !important;
+  width: calc(100% * var(--yt-fw, 1)) !important;
   height: calc(100% + 2 * var(--yt-clip)) !important;
   aspect-ratio: auto !important;
   border-radius: 0;
@@ -3251,4 +3255,21 @@ button:disabled {
 /* (Only while playing — see ccLift in Room.tsx.) */
 #yt-player.cc-on {
   --yt-clip: 0px;
+}
+
+/* While the video is still being looked at for subtitles. */
+.pbar-cc.is-checking:not(.is-on) {
+  animation: cc-check 1s ease-in-out infinite;
+}
+
+@keyframes cc-check {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pbar-cc.is-checking:not(.is-on) {
+    animation: none;
+    opacity: 0.5;
+  }
 }

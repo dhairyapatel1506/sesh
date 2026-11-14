@@ -1867,6 +1867,69 @@ const HUD_IDLE_MS = 2500;
   const silent = muted || volume === 0;
   // Whether this video has subtitles at all: unknown while we look, then yes
   // or no. A video with none gets a disabled button, as on YouTube.
+  // How wide the picture is relative to a 16:9 window (1 = fills it). The
+  // clip trick only fits videos that are exactly 16:9: a 4:3 video would be
+  // scaled to the frame's width and cropped top and bottom (zoomed in). The
+  // video's shape isn't available from the player, but YouTube's own
+  // thumbnail (hqdefault) is 4:3 with black bars baked in around whatever the
+  // video's shape is — so the bars say how wide the video is, and the frame
+  // is narrowed to match so the whole picture fits.
+  const [frameWidth, setFrameWidth] = useState(1);
+  useEffect(() => {
+    setFrameWidth(1);
+    if (!videoId) return;
+    let cancelled = false;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const w = 96;
+        const h = 72;
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, w, h);
+        const data = ctx.getImageData(0, 0, w, h).data;
+        const dark = (x: number, y: number) => {
+          const i = (y * w + x) * 4;
+          return Math.max(data[i], data[i + 1], data[i + 2]) <= 14;
+        };
+        const rowDark = (y: number) => {
+          for (let x = 0; x < w; x++) if (!dark(x, y)) return false;
+          return true;
+        };
+        const colDark = (x: number) => {
+          for (let y = 0; y < h; y++) if (!dark(x, y)) return false;
+          return true;
+        };
+        let top = 0;
+        while (top < h / 2 && rowDark(top)) top++;
+        let bottom = 0;
+        while (bottom < h / 2 && rowDark(h - 1 - bottom)) bottom++;
+        let left = 0;
+        while (left < w / 2 && colDark(left)) left++;
+        let right = 0;
+        while (right < w / 2 && colDark(w - 1 - right)) right++;
+        // Baked bars are symmetric; a dark edge on one side only is content.
+        const bars = (a: number, b: number) => (Math.abs(a - b) <= 2 ? Math.min(a, b) : 0);
+        const tb = bars(top, bottom);
+        const lr = bars(left, right);
+        const aspect = (w - 2 * lr) / (h - 2 * tb);
+        // Narrower than 16:9 only: wide videos already letterbox correctly.
+        if (aspect < 1.7) setFrameWidth(Math.max(0.2, (aspect * 9) / 16));
+      } catch {
+        // No pixels (CORS, blocked image): leave the frame as it was.
+      }
+    };
+    img.src = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    return () => {
+      cancelled = true;
+    };
+  }, [videoId]);
+
   const [ccStatus, setCcStatus] = useState<"checking" | "has" | "none">("checking");
   const ccChosenRef = useRef<{ languageCode?: string } | null>(null);
   const ccOnRef = useRef(false);
@@ -1965,6 +2028,7 @@ const HUD_IDLE_MS = 2500;
     let timer = 0;
     let tries = 0;
     let loaded = false;
+    let noneSince = 0;
     const poll = () => {
       if (cancelled) return;
       const player = readyPlayer();
@@ -1982,14 +2046,28 @@ const HUD_IDLE_MS = 2500;
             if (!ccOnRef.current) player.setOption?.("captions", "track", {});
             return;
           }
+          // The player lists "captions" among its modules as soon as it has
+          // read the video's details — if it has, and there's still no
+          // module a moment later, there are no subtitles.
+          const data = player.getVideoData?.() as { video_quality?: string } | undefined;
+          const hasModule = (player.getOptions?.() as string[] | undefined)?.includes("captions");
+          if (data?.video_quality && !hasModule) {
+            noneSince ||= Date.now();
+            if (Date.now() - noneSince > 1200) {
+              setCcStatus("none");
+              return;
+            }
+          } else {
+            noneSince = 0;
+          }
         } catch {
-          // Fall through to "none" once the tries run out.
+          // Keep trying until the limit.
         }
       }
-      if (++tries < 14) timer = window.setTimeout(poll, 700);
+      if (++tries < 32) timer = window.setTimeout(poll, 250);
       else setCcStatus("none");
     };
-    timer = window.setTimeout(poll, 1500);
+    timer = window.setTimeout(poll, 300);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -3125,7 +3203,12 @@ const HUD_IDLE_MS = 2500;
                   if (!scrubRef.current) hideHud();
                 }}
               >
-                <div id="yt-player" ref={playerContainerRef} className={ccLift ? "cc-on" : undefined} />
+                <div
+                  id="yt-player"
+                  ref={playerContainerRef}
+                  className={ccLift ? "cc-on" : undefined}
+                  style={{ "--yt-fw": frameWidth } as React.CSSProperties}
+                />
                 {/* What's playing, where a player puts it. Comes and goes with
                     the controls, over a gradient rather than a band — there is
                     nothing of YouTube's left up there to hide. */}
@@ -3265,13 +3348,15 @@ const HUD_IDLE_MS = 2500;
                     )}
                     {videoId && (
                       <button
-                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}${ccStatus === "none" ? " is-empty" : ""}`}
+                        className={`pbar-btn pbar-cc${ccOn ? " is-on" : ""}${ccStatus === "none" ? " is-empty" : ""}${ccStatus === "checking" ? " is-checking" : ""}`}
                         onClick={toggleCaptions}
                         disabled={ccStatus === "none"}
                         title={
                           ccStatus === "none"
                             ? "No subtitles for this video"
-                            : ccOn
+                            : ccStatus === "checking" && !ccOn
+                              ? "Checking for subtitles…"
+                              : ccOn
                               ? "Turn off subtitles"
                               : "Turn on subtitles"
                         }
