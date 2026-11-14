@@ -65,13 +65,12 @@ type ReportMail = {
 type Attachment = { name: string; content: string };
 
 // Staging sends real mail to the same inbox as production, so every message
-// says which one it came from, in the subject and again in the body.
+// says which one it came from, in the subject.
 const isStaging = () => env("SESH_ENV") === "staging";
 
 async function post(subject: string, text: string, attachment?: Attachment[]): Promise<void> {
   if (isStaging()) {
     subject = `[STAGING] ${subject}`;
-    text = `*** STAGING — sent from sesh-staging, not the live site ***\n\n${text}`;
   }
   const res = await fetch(BREVO_ENDPOINT, {
     method: "POST",
