@@ -3292,8 +3292,10 @@ button:disabled {
 
 .friend-who {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  row-gap: 0.3rem;
+  column-gap: 0.5rem;
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -3331,7 +3333,7 @@ button:disabled {
 /* Wide enough that a name, its code chip and the row's buttons share a line
    without the name being squeezed to a letter. */
 .friends-popover {
-  min-width: 23rem;
+  min-width: 19rem;
 }
 
 .friend-who .friend-name {
@@ -3344,4 +3346,10 @@ button:disabled {
     min-width: 0;
     width: calc(100vw - 2rem);
   }
+}
+
+.friend-code-row {
+  flex-basis: 100%;
+  display: flex;
+  padding-left: 1rem;
 }

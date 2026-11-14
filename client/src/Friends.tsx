@@ -291,9 +291,15 @@ export function FriendsPanel({
                   <span className="sr-only">{presenceLabel(presence)}</span>
                 </span>
                 <span className="friend-name">{friend.name}</span>
-                {friend.friendCode && <CodeChip label="Code" code={friend.friendCode} small />}
                 {!here && presence === "in-room" && (
                   <span className="friend-where">in a room</span>
+                )}
+                {/* Under the name, on its own line: the chip opens wider when
+                    hovered, and beside the name it shoved everything else. */}
+                {friend.friendCode && (
+                  <span className="friend-code-row">
+                    <CodeChip label="Code" code={friend.friendCode} small />
+                  </span>
                 )}
               </span>
               <span className="friend-actions">
