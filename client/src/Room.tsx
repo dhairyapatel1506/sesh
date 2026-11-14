@@ -2053,7 +2053,8 @@ const HUD_IDLE_MS = 2500;
           // module a moment later, there are no subtitles.
           const data = player.getVideoData?.() as { video_quality?: string } | undefined;
           const hasModule = (player.getOptions?.() as string[] | undefined)?.includes("captions");
-          if (data?.video_quality && !hasModule) {
+          const started = Boolean(data?.video_quality) || [1, 2, 3].includes(player.getPlayerState());
+          if (started && !hasModule) {
             noneSince ||= Date.now();
             if (Date.now() - noneSince > 1200) {
               setCcStatus("none");
