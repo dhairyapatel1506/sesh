@@ -1053,7 +1053,9 @@ function Room() {
               iframe.style.position = "absolute";
               iframe.style.left = "0";
               iframe.style.top = "calc(-1 * var(--yt-clip))";
-              iframe.style.width = "100%";
+              iframe.style.width = "calc(100% * var(--yt-fw, 1))";
+              iframe.style.right = "0";
+              iframe.style.margin = "0 auto";
               iframe.style.height = "calc(100% + 2 * var(--yt-clip))";
               iframe.style.aspectRatio = "auto";
             }

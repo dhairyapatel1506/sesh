@@ -424,7 +424,7 @@ button:disabled {
   right: 0;
   margin: 0 auto;
   top: calc(-1 * var(--yt-clip));
-  width: calc(100% * var(--yt-fw, 1));
+  width: calc(100% * var(--yt-fw, 1)) !important;
   height: calc(100% + 2 * var(--yt-clip));
   border: 0;
   border-radius: 0;
