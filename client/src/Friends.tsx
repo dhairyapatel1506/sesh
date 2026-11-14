@@ -287,6 +287,7 @@ export function FriendsPanel({
                     three times. "in a room" stays: that one is an invitation
                     to go and join them, not a status. The word moves onto the
                     dot as its label so nothing is lost to a screen reader. */}
+                <span className="friend-line">
                 <span className={`friend-status ${presence}`} title={presenceLabel(presence)}>
                   <span className="sr-only">{presenceLabel(presence)}</span>
                 </span>
@@ -294,6 +295,7 @@ export function FriendsPanel({
                 {!here && presence === "in-room" && (
                   <span className="friend-where">in a room</span>
                 )}
+                </span>
                 {/* Under the name, on its own line: the chip opens wider when
                     hovered, and beside the name it shoved everything else. */}
                 {friend.friendCode && (
