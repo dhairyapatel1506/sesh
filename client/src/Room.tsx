@@ -1840,7 +1840,7 @@ function Room() {
   // them. Quality is absent because YouTube ignores setPlaybackQuality now.
   // Short enough that the bar disappears promptly when the mouse is idle,
   // but long enough that it doesn't flash away during active scrubbing.
-  const CC_LIFT_DELAY_MS = 2500;
+  const CC_LIFT_DELAY_MS = 4200;
 const HUD_IDLE_MS = 2500;
   const [hudShown, setHudShown] = useState(true);
   const hudTimerRef = useRef<number | undefined>(undefined);
