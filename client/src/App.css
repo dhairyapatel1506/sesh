@@ -3467,3 +3467,13 @@ button:disabled {
 .friends-popover .friends-code {
   padding-right: 2rem;
 }
+
+/* My opaque-background fix outranked the copied state, so the green fill was
+   lost and only the border stayed green. Copied wins again. */
+.code-slot > .code-chip.is-copied:not(.code-ghost),
+.code-slot > .code-chip.is-copied:not(.code-ghost):hover {
+  background-color: #22c55e;
+  background-image: none;
+  border-color: #22c55e;
+  color: #fff;
+}
