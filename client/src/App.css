@@ -3412,3 +3412,22 @@ button:disabled {
   background: var(--accent-bg);
   filter: none;
 }
+
+/* The opened chip sits above the row's buttons, not under them. */
+.friend-who {
+  position: relative;
+  z-index: 2;
+}
+
+.friend-actions {
+  position: relative;
+  z-index: 1;
+}
+
+.friends-head .panel-x {
+  margin-left: auto;
+}
+
+.friends-popover {
+  min-width: 26rem;
+}
