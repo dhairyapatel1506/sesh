@@ -1,4 +1,5 @@
 import { env } from "./db.js";
+import { describeBrowser } from "./reports.js";
 
 // Telling someone a bug report arrived.
 //
@@ -122,7 +123,7 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
       "—",
       `kind:    ${kind}`,
       `from:    ${who} (${report.client}, ${where})`,
-      report.userAgent ? `browser: ${report.userAgent}` : null,
+      report.userAgent ? `browser: ${describeBrowser(report.userAgent)}` : null,
       report.dashboardUrl ? `all reports: ${report.dashboardUrl}` : null,
     ].filter(Boolean);
 

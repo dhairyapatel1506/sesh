@@ -277,3 +277,46 @@ export async function pruneOldReports(): Promise<number> {
   );
   return rows.length;
 }
+
+/**
+ * "Edge 157 on Windows" instead of the 150-character user-agent string. Only
+ * the shape that matters when reading a bug report: which browser, which
+ * version, which system. The raw string stays in the database; anything this
+ * can't place is passed through unchanged rather than guessed at.
+ */
+export function describeBrowser(ua: string | null | undefined): string | null {
+  if (!ua) return null;
+  // Order matters: Edge, Opera and Samsung all say "Chrome", and Chrome says
+  // "Safari".
+  const rules: [RegExp, string][] = [
+    [/Edg(?:e|A|iOS)?\/(\d+)/, "Edge"],
+    [/OPR\/(\d+)/, "Opera"],
+    [/SamsungBrowser\/(\d+)/, "Samsung Internet"],
+    [/(?:Firefox|FxiOS)\/(\d+)/, "Firefox"],
+    [/(?:Chrome|CriOS)\/(\d+)/, "Chrome"],
+    [/Version\/(\d+)[^]*Safari/, "Safari"],
+  ];
+  let browser: string | null = null;
+  for (const [pattern, name] of rules) {
+    const match = ua.match(pattern);
+    if (match) {
+      browser = `${name} ${match[1]}`;
+      break;
+    }
+  }
+  if (!browser) return ua.slice(0, 80);
+  const system = /Windows/.test(ua)
+    ? "Windows"
+    : /Android/.test(ua)
+      ? "Android"
+      : /iPhone|iPad|iPod/.test(ua)
+        ? "iOS"
+        : /Mac OS X|Macintosh/.test(ua)
+          ? "macOS"
+          : /CrOS/.test(ua)
+            ? "ChromeOS"
+            : /Linux/.test(ua)
+              ? "Linux"
+              : null;
+  return system ? `${browser} on ${system}` : browser;
+}

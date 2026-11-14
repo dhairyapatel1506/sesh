@@ -46,6 +46,7 @@ import {
   REPORT_MAX_LENGTH,
   REPORT_MIN_LENGTH,
   reportImage,
+  describeBrowser,
   REPORT_RETENTION_DAYS,
   saveReport,
   vetReport,
@@ -556,7 +557,7 @@ app.get("/admin", async (req, res) => {
   <p class="meta">${meta}</p>
   <p class="body">${escapeHtml(report.body)}</p>
   ${report.hasImage ? `<a href="/api/reports/${encodeURIComponent(report.id)}/image?token=${token}"><img src="/api/reports/${encodeURIComponent(report.id)}/image?token=${token}" alt="screenshot"></a>` : ""}
-  <p class="ua">${escapeHtml(report.userAgent ?? "")}</p>
+  <p class="ua" title="${escapeHtml(report.userAgent ?? "")}">${escapeHtml(describeBrowser(report.userAgent) ?? "")}</p>
 </article>`;
       })
       .join("\n");
