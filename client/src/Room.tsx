@@ -1625,6 +1625,36 @@ function Room() {
     };
   }, []);
 
+  // When a video ends and the room is about to move on by itself (autoplay
+  // has a pick, or the queue has one), the server's answer — a countdown, or
+  // the next video — takes a moment to arrive. Our recommendations grid used
+  // to fill that moment, flashing up just before the countdown replaced it.
+  // So the grid waits: the overlay stays an empty dark cover until the server
+  // has spoken, or a short grace period runs out. A countdown that is then
+  // cancelled shows the grid at once (the wait is already over by then).
+  const [endSettled, setEndSettled] = useState(true);
+  const hadCountdownRef = useRef(false);
+  useEffect(() => {
+    if (!ended) {
+      setEndSettled(true);
+      hadCountdownRef.current = false;
+      return;
+    }
+    const goingOn = radio.available && radio.autoplay && (upnext !== null || queue.length > 0);
+    if (!goingOn || hadCountdownRef.current) {
+      setEndSettled(true);
+      return;
+    }
+    setEndSettled(false);
+    const timer = window.setTimeout(() => setEndSettled(true), 2500);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ended]);
+  useEffect(() => {
+    if (countdown) hadCountdownRef.current = true;
+    else if (hadCountdownRef.current) setEndSettled(true);
+  }, [countdown]);
+
   // The countdown itself. Only videos that came from YouTube's "up next" get
   // one — a music mix plays straight through, the way a mix does on YouTube.
   useEffect(() => {
@@ -3405,6 +3435,7 @@ const HUD_IDLE_MS = 2500;
                         someone who wants the last frame, or YouTube's own
                         controls, shouldn't have to load another video to get
                         at them. It comes back with the next video that ends. */}
+                    {(countdown || endSettled) && (
                     <button
                       className="end-overlay-close"
                       onClick={() => setEnded(false)}
@@ -3423,10 +3454,11 @@ const HUD_IDLE_MS = 2500;
                         />
                       </svg>
                     </button>
+                    )}
                     {/* Autoplay has chosen: name it, count down, and offer
                         both ways out — the way YouTube's own end screen does.
                         Music never gets here; a mix plays straight on. */}
-                    {countdown ? (
+                    {!countdown && !endSettled ? null : countdown ? (
                       <>
                         <p className="end-overlay-head">Up next</p>
                         <div className="end-next">
