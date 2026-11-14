@@ -33,7 +33,8 @@ const PER_SUBJECT_DAILY = 40;
 const GLOBAL_HOURLY = 120;
 // Screenshots are the part with a storage cost, so they get a tighter ceiling
 // of their own. Text is cheap; two megabytes at a time is not.
-const GLOBAL_IMAGE_HOURLY = 30;
+const GLOBAL_IMAGE_HOURLY = 60; // images, not reports — a report can carry up to five
+export const MAX_IMAGES = 5;
 
 export const IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -46,7 +47,7 @@ export const REPORT_RETENTION_DAYS = 90;
 // In memory, like every other rate limit here: it describes this process's
 // recent traffic, and a restart losing it costs an abuser one extra window at
 // worst while costing an honest reporter nothing.
-const recent: { at: number; subject: string; withImage: boolean }[] = [];
+const recent: { at: number; subject: string; images: number }[] = [];
 
 function prune(now: number): void {
   const cutoff = now - DAY_MS;
@@ -87,14 +88,14 @@ export type ReportInput = {
   userId?: string | null;
   roomId?: string | null;
   userAgent?: string | null;
-  image?: { data: Buffer; mime: string } | null;
+  images?: { data: Buffer; mime: string }[];
   kind?: "bug" | "idea";
   displayName?: string | null;
 };
 
 /** Everything that can be checked without touching the database. */
 export function vetReport(
-  input: Pick<ReportInput, "text" | "ipHash" | "image" | "userId">,
+  input: Pick<ReportInput, "text" | "ipHash" | "images" | "userId">,
 ): ReportRefusal | { ok: true } {
   const now = Date.now();
   prune(now);
@@ -111,12 +112,16 @@ export function vetReport(
     return { ok: false, status: 400, error: "That's longer than we can take — trim it a little." };
   }
 
-  if (input.image) {
-    if (!ALLOWED_IMAGE_TYPES.has(input.image.mime)) {
+  const images = input.images ?? [];
+  if (images.length > MAX_IMAGES) {
+    return { ok: false, status: 400, error: `At most ${MAX_IMAGES} screenshots per report.` };
+  }
+  for (const image of images) {
+    if (!ALLOWED_IMAGE_TYPES.has(image.mime)) {
       return { ok: false, status: 400, error: "Screenshots need to be a PNG, JPEG or WebP." };
     }
-    if (input.image.data.length > IMAGE_MAX_BYTES) {
-      return { ok: false, status: 413, error: "That image is over 2 MB — try a smaller one." };
+    if (image.data.length > IMAGE_MAX_BYTES) {
+      return { ok: false, status: 413, error: "One of those images is over 2 MB — try a smaller one." };
     }
   }
 
@@ -128,7 +133,10 @@ export function vetReport(
       error: "We're getting an unusual number of reports right now — please try again later.",
     };
   }
-  if (input.image && lastHour.filter((r) => r.withImage).length >= GLOBAL_IMAGE_HOURLY) {
+  if (
+    images.length > 0 &&
+    lastHour.reduce((sum, r) => sum + r.images, 0) + images.length > GLOBAL_IMAGE_HOURLY
+  ) {
     return {
       ok: false,
       status: 503,
@@ -157,8 +165,8 @@ export function vetReport(
 }
 
 /** Records that a report was accepted, for the limits above. */
-export function noteReport(subject: string, withImage: boolean): void {
-  recent.push({ at: Date.now(), subject, withImage });
+export function noteReport(subject: string, images: number): void {
+  recent.push({ at: Date.now(), subject, images });
 }
 
 /**
@@ -184,8 +192,8 @@ export async function saveReport(input: ReportInput): Promise<string> {
   const id = crypto.randomUUID();
   await query(
     `insert into bug_reports
-       (id, user_id, room_id, client, body, user_agent, image, image_mime, ip_hash, kind, display_name)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+       (id, user_id, room_id, client, body, user_agent, ip_hash, kind, display_name)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       id,
       input.userId ?? null,
@@ -193,14 +201,18 @@ export async function saveReport(input: ReportInput): Promise<string> {
       input.client,
       input.text.trim().slice(0, REPORT_MAX_LENGTH),
       input.userAgent?.slice(0, 300) ?? null,
-      input.image?.data ?? null,
-      input.image?.mime ?? null,
       input.ipHash,
       input.kind === "idea" ? "idea" : "bug",
       input.displayName?.slice(0, 40) ?? null,
     ],
   );
-  noteReport(subjectOf(input.ipHash, input.userId), Boolean(input.image));
+  for (const [idx, image] of (input.images ?? []).entries()) {
+    await query(
+      `insert into bug_report_images (report_id, idx, image, image_mime) values ($1, $2, $3, $4)`,
+      [id, idx, image.data, image.mime],
+    );
+  }
+  noteReport(subjectOf(input.ipHash, input.userId), (input.images ?? []).length);
   return id;
 }
 
@@ -216,7 +228,7 @@ export type StoredReport = {
   displayName: string | null;
   kind: "bug" | "idea";
   ipHash: string | null;
-  hasImage: boolean;
+  imageCount: number;
 };
 
 export async function listReports(limit = 50): Promise<StoredReport[]> {
@@ -232,10 +244,10 @@ export async function listReports(limit = 50): Promise<StoredReport[]> {
     display_name: string | null;
     kind: string;
     ip_hash: string | null;
-    has_image: boolean;
+    image_count: number;
   }>(
     `select r.id, r.created_at, r.client, r.room_id, r.body, r.user_agent,
-            u.name, u.email, r.display_name, r.kind, r.ip_hash, (r.image is not null) as has_image
+            u.name, u.email, r.display_name, r.kind, r.ip_hash, ((r.image is not null)::int + (select count(*) from bug_report_images i where i.report_id = r.id))::int as image_count
        from bug_reports r
        left join users u on u.id = r.user_id
       order by r.created_at desc
@@ -254,18 +266,38 @@ export async function listReports(limit = 50): Promise<StoredReport[]> {
     displayName: row.display_name,
     kind: row.kind === "idea" ? "idea" : "bug",
     ipHash: row.ip_hash,
-    hasImage: row.has_image,
+    imageCount: row.image_count,
   }));
 }
 
-export async function reportImage(id: string): Promise<{ data: Buffer; mime: string } | null> {
-  const rows = await query<{ image: Buffer | null; image_mime: string | null }>(
+// The n-th screenshot of a report: the old single image first if it has one,
+// then the ones in bug_report_images.
+export async function reportImage(
+  id: string,
+  n = 0,
+): Promise<{ data: Buffer; mime: string } | null> {
+  const legacy = await query<{ image: Buffer | null; image_mime: string | null }>(
     "select image, image_mime from bug_reports where id = $1",
     [id],
   );
-  const row = rows[0];
-  if (!row?.image) return null;
-  return { data: row.image, mime: row.image_mime ?? "application/octet-stream" };
+  const old = legacy[0]?.image ? [{ data: legacy[0].image, mime: legacy[0].image_mime ?? "image/png" }] : [];
+  if (n < old.length) return old[n];
+  const rows = await query<{ image: Buffer; image_mime: string }>(
+    "select image, image_mime from bug_report_images where report_id = $1 order by idx offset $2 limit 1",
+    [id, n - old.length],
+  );
+  return rows[0] ? { data: rows[0].image, mime: rows[0].image_mime } : null;
+}
+
+/** Every screenshot on a report, in order — for the email. */
+export async function reportImageList(id: string): Promise<{ data: Buffer; mime: string }[]> {
+  const out: { data: Buffer; mime: string }[] = [];
+  for (let n = 0; n < MAX_IMAGES + 1; n++) {
+    const image = await reportImage(id, n);
+    if (!image) break;
+    out.push(image);
+  }
+  return out;
 }
 
 export async function pruneOldReports(): Promise<number> {

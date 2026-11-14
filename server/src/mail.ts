@@ -55,7 +55,7 @@ type ReportMail = {
   email?: string | null;
   displayName?: string | null;
   userAgent: string | null;
-  image: { data: Buffer; mime: string } | null;
+  images: { data: Buffer; mime: string }[];
   dashboardUrl: string | null;
   // What the person said it was. A feature request arriving under "Sesh bug"
   // reads as a complaint, which is the opposite of what it is.
@@ -124,6 +124,19 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
       report.reporter && report.reporter !== report.displayName ? report.reporter : null,
     ].filter(Boolean);
     const who = parts.length ? parts.join(" ") : "someone signed out";
+    // The mail provider caps a message's attachments at about 4 MB, so they go
+    // in until that's used up and the rest are said to be waiting in the inbox.
+    const attachments: Attachment[] = [];
+    let used = 0;
+    for (const [n, image] of report.images.entries()) {
+      if (used + image.data.length > 3_500_000) break;
+      used += image.data.length;
+      attachments.push({
+        name: `screenshot-${n + 1}.${image.mime.split("/")[1] ?? "png"}`,
+        content: image.data.toString("base64"),
+      });
+    }
+    const left = report.images.length - attachments.length;
     const lines = [
       report.text,
       "",
@@ -135,6 +148,7 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
       // address kept going missing.
       report.email ? `email:   ${report.email}` : null,
       report.userAgent ? `browser: ${describeBrowser(report.userAgent)}` : null,
+      left > 0 ? `screenshots: ${left} more too large to attach — they're stored with the report` : null,
       report.dashboardUrl ? `all reports: ${report.dashboardUrl}` : null,
     ].filter(Boolean);
 
@@ -143,14 +157,7 @@ export async function sendReportMail(report: ReportMail): Promise<void> {
       // opening anything.
       `${report.kind === "idea" ? "Sesh idea" : "Sesh bug"}: ${report.text.replace(/\s+/g, " ").slice(0, 70)}`,
       lines.join("\n"),
-      report.image
-        ? [
-            {
-              name: `screenshot.${report.image.mime.split("/")[1] ?? "png"}`,
-              content: report.image.data.toString("base64"),
-            },
-          ]
-        : undefined,
+      attachments.length ? attachments : undefined,
     );
     console.log(`emailed report ${report.id}`);
   } catch (err) {

@@ -6,6 +6,7 @@ type Limits = {
   minLength: number;
   maxLength: number;
   imageMaxBytes: number;
+  maxImages?: number;
   retentionDays: number;
 };
 
@@ -213,7 +214,8 @@ function ReportDialog({
       // A private window keeps nothing; the form still works.
     }
   };
-  const [image, setImage] = useState<{ dataUrl: string; bytes: number } | null>(null);
+  const [images, setImages] = useState<{ dataUrl: string; bytes: number }[]>([]);
+  const maxImages = limits.maxImages ?? 1;
   const [imageError, setImageError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -222,8 +224,7 @@ function ReportDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
-  const tooLong = image !== null && image.bytes > limits.imageMaxBytes;
-  const canSend = text.trim().length >= limits.minLength && !tooLong && !busy;
+  const canSend = text.trim().length >= limits.minLength && !busy;
 
   useEffect(() => {
     textRef.current?.focus();
@@ -237,24 +238,37 @@ function ReportDialog({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const attach = async (blob: Blob) => {
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
+
+  // Adds as many as there's room for. An image that's still over the limit
+  // after shrinking is refused with the reason rather than added and left to
+  // block the send button.
+  const attach = async (blobs: Blob[]) => {
     setImageError(null);
-    try {
-      const dataUrl = await shrink(blob);
-      const bytes = dataUrlBytes(dataUrl);
-      setImage({ dataUrl, bytes });
-      // Even shrunk, a very large or very noisy screenshot can land over the
-      // limit. Saying so now is the whole point of checking here: the server
-      // would refuse it, and it would refuse it after the report was typed.
-      if (bytes > limits.imageMaxBytes) {
-        setImageError(
-          `That's still ${asSize(bytes)} after shrinking, over the ${asSize(limits.imageMaxBytes)} limit — try a crop of just the problem.`,
-        );
-      }
-    } catch (err) {
-      setImage(null);
-      setImageError((err as Error).message);
+    const room = maxImages - imagesRef.current.length;
+    if (room <= 0) {
+      setImageError(`That's the most we take — ${maxImages} screenshots per report.`);
+      return;
     }
+    if (blobs.length > room) setImageError(`Only ${room} more fit — the rest were left out.`);
+    const added: { dataUrl: string; bytes: number }[] = [];
+    for (const blob of blobs.slice(0, room)) {
+      try {
+        const dataUrl = await shrink(blob);
+        const bytes = dataUrlBytes(dataUrl);
+        if (bytes > limits.imageMaxBytes) {
+          setImageError(
+            `One is still ${asSize(bytes)} after shrinking, over the ${asSize(limits.imageMaxBytes)} limit — try a crop of just the problem.`,
+          );
+          continue;
+        }
+        added.push({ dataUrl, bytes });
+      } catch (err) {
+        setImageError((err as Error).message);
+      }
+    }
+    if (added.length > 0) setImages((was) => [...was, ...added].slice(0, maxImages));
   };
 
   // Ctrl+V of a screenshot is how people actually attach one, so it's listened
@@ -263,13 +277,13 @@ function ReportDialog({
   // and fall straight through to the textarea.
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
-      const item = [...(event.clipboardData?.items ?? [])].find(
-        (entry) => entry.kind === "file" && entry.type.startsWith("image/"),
-      );
-      const file = item?.getAsFile();
-      if (!file) return;
+      const files = [...(event.clipboardData?.items ?? [])]
+        .filter((entry) => entry.kind === "file" && entry.type.startsWith("image/"))
+        .map((entry) => entry.getAsFile())
+        .filter((file): file is File => file !== null);
+      if (files.length === 0) return;
       event.preventDefault();
-      void attach(file);
+      void attach(files);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
@@ -299,7 +313,7 @@ function ReportDialog({
           client: "web",
           ...(name ? { name } : {}),
           ...(roomId ? { roomId } : {}),
-          ...(image ? { image: image.dataUrl } : {}),
+          ...(images.length > 0 ? { images: images.map((i) => i.dataUrl) } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -342,8 +356,8 @@ function ReportDialog({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          const file = event.dataTransfer.files[0];
-          if (file) void attach(file);
+          const files = [...event.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+          if (files.length > 0) void attach(files);
         }}
       >
         {sent ? (
@@ -412,24 +426,33 @@ function ReportDialog({
                 : `${text.trim().length} / ${limits.maxLength}`}
             </p>
 
-            {image ? (
-              <div className="report-thumb">
-                <img src={image.dataUrl} alt="Attached screenshot" />
-                <span className="report-thumb-meta">{asSize(image.bytes)}</span>
-                <button
-                  className="report-thumb-remove"
-                  aria-label="Remove the screenshot"
-                  onClick={() => {
-                    setImage(null);
-                    setImageError(null);
-                  }}
-                >
-                  ✕
-                </button>
+            {images.length > 0 && (
+              <div className="report-thumbs">
+                {images.map((image, n) => (
+                  <div className="report-thumb" key={n}>
+                    <img src={image.dataUrl} alt={`Attached screenshot ${n + 1}`} />
+                    <span className="report-thumb-meta">{asSize(image.bytes)}</span>
+                    <button
+                      className="report-thumb-remove"
+                      aria-label={`Remove screenshot ${n + 1}`}
+                      onClick={() => {
+                        setImages((was) => was.filter((_, i) => i !== n));
+                        setImageError(null);
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
-            ) : (
+            )}
+            {images.length < maxImages && (
               <button className="report-attach" onClick={() => fileInputRef.current?.click()}>
-                Attach a screenshot — or paste or drop one here
+                {images.length === 0
+                  ? maxImages > 1
+                    ? `Attach screenshots (up to ${maxImages}) — or paste or drop them here`
+                    : "Attach a screenshot — or paste or drop one here"
+                  : `Add another (${images.length} of ${maxImages})`}
               </button>
             )}
             <input
@@ -437,9 +460,10 @@ function ReportDialog({
               className="report-file"
               type="file"
               accept="image/*"
+              multiple
               onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void attach(file);
+                const files = [...(e.target.files ?? [])];
+                if (files.length > 0) void attach(files);
                 // Cleared so picking the same file twice in a row still fires.
                 e.target.value = "";
               }}
@@ -454,7 +478,7 @@ function ReportDialog({
                 onClick={() => {
                   // Cancel means "forget it" — this kind's draft goes with it.
                   setText("");
-                  setImage(null);
+                  setImages([]);
                   onClose();
                 }}
               >

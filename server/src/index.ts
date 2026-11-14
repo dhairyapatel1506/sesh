@@ -46,6 +46,7 @@ import {
   REPORT_MAX_LENGTH,
   REPORT_MIN_LENGTH,
   reportImage,
+  MAX_IMAGES,
   describeBrowser,
   REPORT_RETENTION_DAYS,
   saveReport,
@@ -103,7 +104,8 @@ app.use(cookieParser());
 // screenshot. Raising the limit globally would hand every other route a 4 MB
 // budget it has no use for, which is a free way to make the server work hard.
 const smallBody = express.json({ limit: "100kb" });
-const reportBody = express.json({ limit: "4mb" });
+// Up to five screenshots of 2 MB, base64'd (a third bigger), plus the text.
+const reportBody = express.json({ limit: "15mb" });
 app.use((req, res, next) =>
   (req.path === "/api/report" ? reportBody : smallBody)(req, res, next),
 );
@@ -397,12 +399,24 @@ app.post("/api/report", async (req, res) => {
   const ipHash = hashIp(forwarded || req.socket.remoteAddress || "unknown");
 
   const text = String(req.body?.text ?? "");
-  const image = decodeDataUrl(req.body?.image);
-  if (req.body?.image && !image) {
-    return res.status(400).json({ error: "That attachment didn't look like an image." });
+  // `images` is the list; `image` is the single-screenshot shape older
+  // clients (the terminal) still send.
+  const rawImages: unknown[] = Array.isArray(req.body?.images)
+    ? req.body.images
+    : req.body?.image
+      ? [req.body.image]
+      : [];
+  if (rawImages.length > MAX_IMAGES) {
+    return res.status(400).json({ error: `At most ${MAX_IMAGES} screenshots per report.` });
+  }
+  const images: { data: Buffer; mime: string }[] = [];
+  for (const raw of rawImages) {
+    const decoded = decodeDataUrl(raw);
+    if (!decoded) return res.status(400).json({ error: "That attachment didn't look like an image." });
+    images.push(decoded);
   }
 
-  const verdict = vetReport({ text, ipHash, image, userId: req.userId ?? null });
+  const verdict = vetReport({ text, ipHash, images, userId: req.userId ?? null });
   if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.error });
 
   try {
@@ -421,7 +435,7 @@ app.post("/api/report", async (req, res) => {
       userId: req.userId ?? null,
       roomId,
       userAgent: req.headers["user-agent"] ?? null,
-      image,
+      images,
     });
     res.json({ ok: true });
 
@@ -444,7 +458,7 @@ app.post("/api/report", async (req, res) => {
         email: account?.email ?? null,
         displayName,
         userAgent: (req.headers["user-agent"] as string | undefined) ?? null,
-        image,
+        images,
         dashboardUrl: statsToken() ? `${publicOrigin(req)}/admin?token=${statsToken()}` : null,
       });
     }
@@ -462,6 +476,7 @@ app.get("/api/report/limits", (_req, res) => {
     minLength: REPORT_MIN_LENGTH,
     maxLength: REPORT_MAX_LENGTH,
     imageMaxBytes: 2 * 1024 * 1024,
+    maxImages: MAX_IMAGES,
     retentionDays: REPORT_RETENTION_DAYS,
   });
 });
@@ -507,7 +522,7 @@ app.get("/api/reports", async (req, res) => {
 app.get("/api/reports/:id/image", async (req, res) => {
   if (!withStatsToken(req, res)) return;
   try {
-    const image = await reportImage(String(req.params.id));
+    const image = await reportImage(String(req.params.id), Number(req.query.n ?? 0) || 0);
     if (!image) return res.status(404).json({ error: "no image on that report" });
     res.type(image.mime).send(image.data);
   } catch (err) {
@@ -556,7 +571,7 @@ app.get("/admin", async (req, res) => {
         return `<article>
   <p class="meta">${meta}</p>
   <p class="body">${escapeHtml(report.body)}</p>
-  ${report.hasImage ? `<a href="/api/reports/${encodeURIComponent(report.id)}/image?token=${token}"><img src="/api/reports/${encodeURIComponent(report.id)}/image?token=${token}" alt="screenshot"></a>` : ""}
+  ${Array.from({ length: report.imageCount }, (_, n) => `<a href="/api/reports/${encodeURIComponent(report.id)}/image?n=${n}&token=${token}"><img src="/api/reports/${encodeURIComponent(report.id)}/image?n=${n}&token=${token}" alt="screenshot ${n + 1}"></a>`).join("")}
   <p class="ua" title="${escapeHtml(report.userAgent ?? "")}">${escapeHtml(describeBrowser(report.userAgent) ?? "")}</p>
 </article>`;
       })
