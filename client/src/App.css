@@ -3245,6 +3245,7 @@ button:disabled {
    normally crops away — so with them on, the clip shrinks until they sit
    inside the picture. The cost is that YouTube's own title and paused strip
    can show at the edges while captions are on. */
+/* (Only while playing — see ccLift in Room.tsx.) */
 #yt-player.cc-on {
-  --yt-clip: 8px;
+  --yt-clip: 0px;
 }

@@ -1840,7 +1840,8 @@ function Room() {
   // them. Quality is absent because YouTube ignores setPlaybackQuality now.
   // Short enough that the bar disappears promptly when the mouse is idle,
   // but long enough that it doesn't flash away during active scrubbing.
-  const HUD_IDLE_MS = 2500;
+  const CC_LIFT_DELAY_MS = 2500;
+const HUD_IDLE_MS = 2500;
   const [hudShown, setHudShown] = useState(true);
   const hudTimerRef = useRef<number | undefined>(undefined);
   const [localPlaying, setLocalPlaying] = useState(false);
@@ -1959,6 +1960,21 @@ function Room() {
       window.clearTimeout(ask);
     };
   }, [videoId]);
+
+  // Captions sit inside YouTube's bottom chrome strip, which the clip crops
+  // off. So the clip only opens up while captions are on AND the video is
+  // actually playing (YouTube's own chrome is asleep then), and closes the
+  // instant it pauses — the paused strip never gets a chance to show. A
+  // short wait after resuming lets the paused strip fade before it opens.
+  const [ccLift, setCcLift] = useState(false);
+  useEffect(() => {
+    if (!(ccOn && localPlaying)) {
+      setCcLift(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setCcLift(true), CC_LIFT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [ccOn, localPlaying]);
 
   const toggleCaptions = () => {
     const player = readyPlayer();
@@ -3050,7 +3066,7 @@ function Room() {
                   if (!scrubRef.current) hideHud();
                 }}
               >
-                <div id="yt-player" ref={playerContainerRef} className={ccOn ? "cc-on" : undefined} />
+                <div id="yt-player" ref={playerContainerRef} className={ccLift ? "cc-on" : undefined} />
                 {/* What's playing, where a player puts it. Comes and goes with
                     the controls, over a gradient rather than a band — there is
                     nothing of YouTube's left up there to hide. */}
