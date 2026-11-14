@@ -1757,6 +1757,7 @@ function Room() {
         case "ArrowRight": {
           if (!player) return;
           const delta = e.key === "ArrowLeft" ? -5 : 5;
+          noteSeek();
           player.seekTo(Math.max(0, player.getCurrentTime() + delta), true);
           break;
         }
@@ -1873,7 +1874,10 @@ const HUD_IDLE_MS = 2500;
   const [ccProbe, setCcProbe] = useState(0);
   const [ytState, setYtState] = useState<number>(-1);
   const [seekTick, setSeekTick] = useState(0);
-  const noteSeek = () => setSeekTick((t) => t + 1);
+  const noteSeek = () => {
+    setCcLift(false);
+    setSeekTick((t) => t + 1);
+  };
   const [ccOn, setCcOn] = useState(false);
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Ignore sub-pixel pointer jitter — only restart the HUD hide timer when
@@ -2164,6 +2168,7 @@ const HUD_IDLE_MS = 2500;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     if (at === null) return;
     positionSampleRef.current = null;
+    noteSeek();
     readyPlayer()?.seekTo(at, true);
     setClip((c) => ({ ...c, position: at }));
     showHud(localPlaying ? false : true);
