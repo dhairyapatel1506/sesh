@@ -3065,7 +3065,7 @@ const HUD_IDLE_MS = 2500;
               </button>
               {friendsOpen && (
                 <div className="friends-popover">
-                  <FriendsPanel mode="room" roomId={roomId} />
+                  <FriendsPanel mode="room" roomId={roomId} onClose={() => setFriendsOpen(false)} />
                 </div>
               )}
             </div>

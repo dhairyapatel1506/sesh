@@ -3333,7 +3333,7 @@ button:disabled {
 /* Wide enough that a name, its code chip and the row's buttons share a line
    without the name being squeezed to a letter. */
 .friends-popover {
-  min-width: 33rem;
+  min-width: 25rem;
 }
 
 .friend-who .friend-name {
@@ -3360,4 +3360,55 @@ button:disabled {
   gap: 0.5rem;
   min-width: 0;
   flex-wrap: nowrap;
+}
+
+.code-slot {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.code-ghost {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.code-slot > .code-chip:not(.code-ghost) {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+}
+
+.friends-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.friends-head h2 {
+  margin-bottom: 0.5rem;
+}
+
+.dm-close {
+  margin-left: auto;
+}
+
+.panel-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  line-height: 0;
+}
+
+.panel-x:hover {
+  background: var(--accent-bg);
+  filter: none;
 }

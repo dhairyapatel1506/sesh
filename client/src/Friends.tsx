@@ -145,7 +145,7 @@ export function useFriends() {
 // a click copies it with the same green flash and lap round the border.
 function CodeChip({ label, code, small }: { label: string; code: string; small?: boolean }) {
   const [copied, setCopied] = useState(false);
-  return (
+  const chip = (
     <button
       type="button"
       className={`meta-chip code-chip${small ? " is-small" : ""}${copied ? " is-copied" : ""}`}
@@ -168,12 +168,40 @@ function CodeChip({ label, code, small }: { label: string; code: string; small?:
       )}
     </button>
   );
+  if (!small) return chip;
+  // In a row, the chip opens over whatever is next to it rather than pushing
+  // it along: an invisible copy of the closed chip holds the space, and the
+  // real one sits on top and grows out of it. Otherwise the row — and the
+  // whole menu — would have to be wide enough for the opened chip.
+  return (
+    <span className="code-slot">
+      <span className="meta-chip code-chip is-small code-ghost" aria-hidden>
+        <span className="meta-inner">
+          <span className="meta-label">{label}</span>
+        </span>
+      </span>
+      {chip}
+    </span>
+  );
+}
+
+function CloseX({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="panel-x" onClick={onClick} aria-label="Close" title="Close">
+      <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+        <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+      </svg>
+    </button>
+  );
 }
 
 export function FriendsPanel({
   mode,
   roomId,
+  onClose,
 }: {
+  /** Set when the panel lives in a menu that can be closed. */
+  onClose?: () => void;
   mode: "landing" | "room";
   /** The room this panel is being shown inside, so friends already here can be
       recognised rather than invited to where they're standing. */
@@ -226,12 +254,15 @@ export function FriendsPanel({
   // the friendship ends closes itself rather than talking into a 403.
   const open = accepted.find((f) => f.id === talkingTo);
   if (talkingTo && open) {
-    return <Conversation friend={open} onBack={() => setTalkingTo(null)} />;
+    return <Conversation friend={open} onBack={() => setTalkingTo(null)} onClose={onClose} />;
   }
 
   return (
     <div className="friends">
-      <h2>Friends</h2>
+      <div className="friends-head">
+        <h2>Friends</h2>
+        {onClose && <CloseX onClick={onClose} />}
+      </div>
 
       <div className="friends-code">
         <CodeChip label="Your code" code={user.friendCode} />
@@ -367,7 +398,15 @@ export function FriendsPanel({
 // One conversation, in the same panel the list was in. Deliberately not a
 // second popover or a window of its own: the friends list is already a small
 // surface in a corner, and messaging someone is what you opened it for.
-function Conversation({ friend, onBack }: { friend: Friend; onBack: () => void }) {
+function Conversation({
+  friend,
+  onBack,
+  onClose,
+}: {
+  friend: Friend;
+  onBack: () => void;
+  onClose?: () => void;
+}) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [retentionDays, setRetentionDays] = useState<number | null>(null);
@@ -461,6 +500,11 @@ function Conversation({ friend, onBack }: { friend: Friend; onBack: () => void }
         <span className="dm-with">{friend.name}</span>
         {friend.friendCode && <CodeChip label="Friend code" code={friend.friendCode} small />}
         {presence === "in-room" && <span className="friend-where">in a room</span>}
+        {onClose && (
+          <span className="dm-close">
+            <CloseX onClick={onClose} />
+          </span>
+        )}
       </div>
 
       {/* Said up front rather than in a footer nobody scrolls to: how long
